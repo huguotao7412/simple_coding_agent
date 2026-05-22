@@ -37,3 +37,29 @@ class TestReadTool:
     def test_read_escapes_workspace(self, ws):
         r = asyncio.run(ReadTool().execute(file_path="/etc/passwd", workspace_dir=ws))
         assert not r.success
+
+
+from core.tools.write import WriteTool
+
+
+class TestWriteTool:
+    def test_write_new_file(self, ws):
+        p = os.path.join(ws, "new.txt")
+        r = asyncio.run(WriteTool().execute(file_path=p, content="hello world", workspace_dir=ws))
+        assert r.success
+        assert os.path.exists(p)
+        with open(p) as f:
+            assert f.read() == "hello world"
+
+    def test_write_overwrites(self, ws):
+        p = os.path.join(ws, "f.txt")
+        with open(p, "w") as f:
+            f.write("old")
+        r = asyncio.run(WriteTool().execute(file_path=p, content="new", workspace_dir=ws))
+        assert r.success
+        with open(p) as f:
+            assert f.read() == "new"
+
+    def test_write_escapes_workspace(self, ws):
+        r = asyncio.run(WriteTool().execute(file_path="/etc/hacked", content="x", workspace_dir=ws))
+        assert not r.success
