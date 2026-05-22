@@ -1,0 +1,19 @@
+[project]
+name = "simple-coding-agent"
+version = "0.1.0"
+description = "A pure-ReAct local coding assistant agent"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28",
+    "rich>=13",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+sca = "cli.main:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.25",
+]
