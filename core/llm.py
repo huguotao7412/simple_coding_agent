@@ -71,6 +71,7 @@ class LLMClient:
         on_token: Callable[[str], None] | None,
     ) -> dict:
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_calls: list[dict] = []
         tool_call_buf: dict[int, dict] = {}
 
@@ -89,6 +90,10 @@ class LLMClient:
 
             choice = chunk.get("choices", [{}])[0]
             delta = choice.get("delta", {})
+
+            # Reasoning content delta (DeepSeek thinking mode)
+            if "reasoning_content" in delta and delta["reasoning_content"]:
+                reasoning_parts.append(delta["reasoning_content"])
 
             # Content delta
             if "content" in delta and delta["content"]:
@@ -121,6 +126,8 @@ class LLMClient:
             "role": "assistant",
             "content": "".join(content_parts) or None,
         }
+        if reasoning_parts:
+            result["reasoning_content"] = "".join(reasoning_parts)
         if tool_calls:
             result["tool_calls"] = tool_calls
 

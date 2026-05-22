@@ -23,8 +23,15 @@ class ContextManager:
     def add_user_message(self, content: str) -> None:
         self.messages.append({"role": "user", "content": content})
 
-    def add_assistant_message(self, content: str | None, tool_calls: list[dict] | None = None) -> None:
+    def add_assistant_message(
+        self,
+        content: str | None,
+        tool_calls: list[dict] | None = None,
+        reasoning_content: str | None = None,
+    ) -> None:
         msg: dict = {"role": "assistant", "content": content}
+        if reasoning_content:
+            msg["reasoning_content"] = reasoning_content
         if tool_calls:
             msg["tool_calls"] = tool_calls
         self.messages.append(msg)

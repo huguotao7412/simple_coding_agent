@@ -46,13 +46,17 @@ class Agent:
 
             if not tool_calls:
                 # Final response -- no more tool calls
-                self.ctx.add_assistant_message(content=response.get("content"))
+                self.ctx.add_assistant_message(
+                    content=response.get("content"),
+                    reasoning_content=response.get("reasoning_content"),
+                )
                 return response.get("content") or ""
 
             # Record assistant message with tool calls
             self.ctx.add_assistant_message(
                 content=response.get("content"),
                 tool_calls=tool_calls,
+                reasoning_content=response.get("reasoning_content"),
             )
 
             # Execute each tool call
