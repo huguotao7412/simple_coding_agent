@@ -5,12 +5,22 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.live import Live
 
+SCA_LOGO = r"""
+  [cyan] ▄██████▄    ▄██████▄     ▄██▄    [/]
+  [cyan]██▀    ▀██  ██▀    ▀██   ██▀▀██   [/]
+  [cyan]██          ██          ██▄  ▄██  [/]
+  [cyan] ▀██████▄   ██          ████████  [/]
+  [cyan]       ▀██  ██          ██▀  ▀██  [/]
+  [cyan]██▄    ▄██  ██▄    ▄██  ██    ██  [/]
+  [cyan] ▀██████▀    ▀██████▀   ██    ██  [/]
+"""
+
 
 class UI:
     """Terminal rendering using Rich."""
 
     def __init__(self):
-        self.console = Console()
+        self.console = Console(force_terminal=True)
 
     def render_markdown(self, text: str) -> None:
         if text.strip():
@@ -36,6 +46,7 @@ class UI:
 
     def render_welcome(self) -> None:
         self.console.print()
+        self.console.print(SCA_LOGO)
         self.console.print(
             Panel.fit(
                 "Simple Coding Agent — type your request or [bold]exit[/bold] to quit",
