@@ -111,3 +111,27 @@ class TestEditTool:
     def test_edit_escapes_workspace(self, ws):
         r = asyncio.run(EditTool().execute(file_path="/etc/hosts", old_string="x", new_string="y", workspace_dir=ws))
         assert not r.success
+
+
+from core.tools.bash import BashTool
+
+
+class TestBashTool:
+    def test_simple_command(self, ws):
+        r = asyncio.run(BashTool().execute(command="echo hello", workspace_dir=ws))
+        assert r.success
+        assert "hello" in r.content
+
+    def test_failing_command(self, ws):
+        r = asyncio.run(BashTool().execute(command="nonexistent_command_xyz", workspace_dir=ws))
+        assert not r.success
+        assert r.error is not None
+
+    def test_blacklisted_command_rm_rf_root(self, ws):
+        r = asyncio.run(BashTool().execute(command="rm -rf /", workspace_dir=ws))
+        assert not r.success
+        assert "security" in r.error.lower() or "blocked" in r.error.lower()
+
+    def test_blacklisted_sudo(self, ws):
+        r = asyncio.run(BashTool().execute(command="sudo ls", workspace_dir=ws))
+        assert not r.success
