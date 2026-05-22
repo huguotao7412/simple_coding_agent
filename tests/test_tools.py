@@ -63,3 +63,51 @@ class TestWriteTool:
     def test_write_escapes_workspace(self, ws):
         r = asyncio.run(WriteTool().execute(file_path="/etc/hacked", content="x", workspace_dir=ws))
         assert not r.success
+
+
+from core.tools.edit import EditTool
+
+
+class TestEditTool:
+    def test_search_replace_single(self, ws):
+        p = os.path.join(ws, "f.py")
+        with open(p, "w") as f:
+            f.write("def foo():\n    pass\n")
+        r = asyncio.run(EditTool().execute(file_path=p, old_string="pass", new_string="return 1", workspace_dir=ws))
+        assert r.success
+        with open(p) as f:
+            assert "return 1" in f.read()
+
+    def test_search_replace_multiple_without_flag_fails(self, ws):
+        p = os.path.join(ws, "f.py")
+        with open(p, "w") as f:
+            f.write("x = 1\nx = 2\n")
+        r = asyncio.run(EditTool().execute(file_path=p, old_string="x =", new_string="y =", workspace_dir=ws))
+        assert not r.success
+
+    def test_search_replace_all(self, ws):
+        p = os.path.join(ws, "f.py")
+        with open(p, "w") as f:
+            f.write("x = 1\nx = 2\n")
+        r = asyncio.run(EditTool().execute(file_path=p, old_string="x =", new_string="y =", replace_all=True, workspace_dir=ws))
+        assert r.success
+        with open(p) as f:
+            content = f.read()
+            assert "x =" not in content
+            assert content.count("y =") == 2
+
+    def test_line_range_replace(self, ws):
+        p = os.path.join(ws, "f.py")
+        with open(p, "w") as f:
+            f.write("line0\nline1\nline2\nline3\n")
+        r = asyncio.run(EditTool().execute(file_path=p, start_line=1, end_line=2, new_string="replaced\n", workspace_dir=ws))
+        assert r.success
+        with open(p) as f:
+            lines = f.readlines()
+            assert lines[0] == "line0\n"
+            assert lines[1] == "replaced\n"
+            assert lines[2] == "line3\n"
+
+    def test_edit_escapes_workspace(self, ws):
+        r = asyncio.run(EditTool().execute(file_path="/etc/hosts", old_string="x", new_string="y", workspace_dir=ws))
+        assert not r.success
