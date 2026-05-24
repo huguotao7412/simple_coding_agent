@@ -8,6 +8,7 @@ Simple Coding Agent (SCA) 是一个基于纯净 ReAct 架构的本地终端编�
 - 🛠️ **四大原子工具**：仅提供 `read` (读)、`write` (写)、`edit` (局部精准修改)、`bash` (终端执行) 四个底层能力。
 - 🛡️ **原生错误反刍 (Error Feeding)**：当代码运行报错或 Bash 脚本抛出异常时，SCA 不会崩溃，而是将 `stderr` 原封不动喂给模型，实现**自我纠错**。
 - 📦 **物理隔离设计**：`core/` (大脑逻辑) 与 `cli/` (Rich 终端皮肤) 严格解耦，核心代码零 `print`，随时可接入 Web 或其他 UI 端。
+- 🌐 **Web 可视化界面**：新增 Streamlit Web 端，提供侧边栏文件树、流式对话面板、项目多开切换、Diff 着色等 IDE 级体验。
 - 🧠 **长文本记忆压缩**：内置 Token 监控，逼近上下文上限时自动触发旧对话摘要压缩，防止爆显存。
 
 ## 🚀 快速开始
@@ -33,10 +34,11 @@ Simple Coding Agent (SCA) 是一个基于纯净 ReAct 架构的本地终端编�
    - 创建 `.env` 文件，添加你的模型 API Key：
    ```bash
    SCA_API_KEY=sk-your-api-key-here
-   SCA_API_BASE=[https://api.deepseek.com](https://api.deepseek.com)
+   SCA_API_BASE=https://api.deepseek.com
    SCA_MODEL=deepseek-v4-pro
    SCA_MAX_TOKENS=128000
-    ```
+   SCA_WORKSPACE=./workspaces
+   ```
 4. **运行 SCA**
    ```bash
    # 在当前目录下启动 Agent
@@ -59,19 +61,43 @@ Simple Coding Agent (SCA) 是一个基于纯净 ReAct 架构的本地终端编�
    "运行一下 pytest，如果报错了你就自己看报错信息修复它，直到测试全绿为止。"
    
    输入 exit 或 quit 即可退出。
+
+4. **启动 Web 可视化界面**
+   ```bash
+   # 启动 Streamlit Web 端
+   sca-web
+   ```
+   Web 端提供：
+   - 侧边栏项目切换器（自动扫描 SCA_WORKSPACE 下子目录）
+   - 文件树浏览器（点击预览文件内容）
+   - 流式对话面板（实时展示 Agent 思考过程）
+   - 工具调用可视化（执行状态卡片 + 成功/失败着色）
+   - 页面刷新后自动恢复会话
+
+   CLI 和 Web 端可以随时切换使用，共享同一套 core 引擎。
+
 5. **目录结构说明**
    ```bash
    simple_coding_agent/
    ├── pyproject.toml              # 项目依赖配置
    ├── core/                       # 🧠 【大脑层】纯逻辑处理
-   │   ├── agent.py                # ReAct 核心执行大循环
+   │   ├── agent.py                # ReAct 核心执行大循环 + run_stream() 流式生成器
    │   ├── context.py              # 对话历史与 Token 压缩
    │   ├── llm.py                  # 异步流式 API 客户端
    │   └── tools/                  # 🛠️ 基础工具实现 (bash, edit, read, write)
-   └── cli/                        # 🖥️ 【皮肤层】终端交互
-       ├── main.py                 # CLI 入口
-       ├── ui.py                   # 基于 Rich 的 UI 渲染
-       └── bridge.py               # 连接大脑与终端流的桥接器
+   ├── cli/                        # 🖥️ 【皮肤层】终端交互
+   │   ├── main.py                 # CLI 入口
+   │   ├── ui.py                   # 基于 Rich 的 UI 渲染
+   │   └── bridge.py               # 连接大脑与终端流的桥接器
+   ├── web/                        # 🌐 【皮肤层】Streamlit Web 端
+   │   ├── main.py                 # Streamlit 页面入口
+   │   ├── cli.py                  # sca-web 命令入口
+   │   ├── bridge.py               # Agent generator → st.session_state 桥接
+   │   └── components/
+   │       ├── sidebar.py          # 侧边栏：项目切换 + 文件树
+   │       ├── chat.py             # 对话面板：思考流 + 工具执行状态
+   │       └── diff.py             # Diff 可视化（绿红着色）
+   └── tests/                      # 🧪 测试 (pytest + pytest-asyncio)
    ```
 
 6. **安全警告**
