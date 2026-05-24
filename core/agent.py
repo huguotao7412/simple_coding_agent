@@ -1,11 +1,23 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
+from dataclasses import dataclass
 
 from .llm import LLMClient
 from .context import ContextManager
 from .tools.base import BaseTool, ToolResult
+
+
+@dataclass
+class AgentEvent:
+    type: str
+    # "thought" / "tool_call" / "tool_result" / "compaction" / "done"
+    content: str = ""
+    tool_name: str | None = None
+    tool_args: dict | None = None
+    tool_result: ToolResult | None = None
+    token: str = ""
 
 
 class Agent:
@@ -92,3 +104,86 @@ class Agent:
                         observation += f"\nPartial output: {result.content}"
 
                 self.ctx.add_tool_result(tc["id"], observation)
+
+    async def run_stream(
+        self,
+        user_input: str,
+    ) -> AsyncGenerator[AgentEvent, None]:
+        self.ctx.add_user_message(user_input)
+        tool_schemas = [t.schema for t in self.tools_by_name.values()]
+
+        while True:
+            if self.ctx.needs_compression():
+                await self.ctx.compress(self.llm)
+                yield AgentEvent(type="compaction")
+
+            tokens: list[str] = []
+
+            def on_token(t: str) -> None:
+                tokens.append(t)
+
+            response = await self.llm.chat(
+                messages=self.ctx.messages,
+                tools=tool_schemas if tool_schemas else None,
+                on_token=on_token,
+            )
+
+            for token in tokens:
+                yield AgentEvent(type="thought", token=token, content=token)
+
+            tool_calls = response.get("tool_calls")
+
+            if not tool_calls:
+                self.ctx.add_assistant_message(
+                    content=response.get("content"),
+                    reasoning_content=response.get("reasoning_content"),
+                )
+                yield AgentEvent(type="done", content=response.get("content") or "")
+                return
+
+            self.ctx.add_assistant_message(
+                content=response.get("content"),
+                tool_calls=tool_calls,
+                reasoning_content=response.get("reasoning_content"),
+            )
+
+            for tc in tool_calls:
+                tool_name = tc["function"]["name"]
+                yield AgentEvent(
+                    type="tool_call",
+                    tool_name=tool_name,
+                    tool_args=json.loads(tc["function"]["arguments"]),
+                )
+
+                tool = self.tools_by_name.get(tool_name)
+
+                if tool is None:
+                    result = ToolResult.fail(
+                        f"unknown tool '{tool_name}'. Available: {list(self.tools_by_name.keys())}"
+                    )
+                else:
+                    try:
+                        args = json.loads(tc["function"]["arguments"])
+                    except json.JSONDecodeError as e:
+                        result = ToolResult.fail(f"invalid JSON arguments: {e}")
+                    else:
+                        if tool_name in ("read", "write", "edit", "bash"):
+                            args["workspace_dir"] = self.workspace_dir
+                        try:
+                            result = await tool.execute(**args)
+                        except Exception as e:
+                            result = ToolResult.fail(str(e))
+
+                observation = (
+                    result.content
+                    if result.success
+                    else f"ERROR: {result.error}\nPartial output: {result.content}" if result.content
+                    else f"ERROR: {result.error}"
+                )
+                self.ctx.add_tool_result(tc["id"], observation)
+
+                yield AgentEvent(
+                    type="tool_result",
+                    tool_name=tool_name,
+                    tool_result=result,
+                )
