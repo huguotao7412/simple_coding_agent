@@ -7,10 +7,12 @@ dependencies = [
     "httpx>=0.28",
     "rich>=13",
     "python-dotenv>=1.0",
+    "streamlit>=1.40",
 ]
 
 [project.scripts]
 sca = "cli.main:main"
+sca-web = "web.main:main"
 
 [project.optional-dependencies]
 dev = [
@@ -19,4 +21,4 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["cli*", "core*"]
+include = ["cli*", "core*", "web*"]
