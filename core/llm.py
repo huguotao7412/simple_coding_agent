@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -82,13 +84,19 @@ class LLMClient:
             if data == "[DONE]":
                 break
 
-            import json
             try:
                 chunk = json.loads(data)
             except json.JSONDecodeError:
+                logging.getLogger(__name__).debug(
+                    "Failed to parse SSE data line: %s", data[:200]
+                )
                 continue
 
-            choice = chunk.get("choices", [{}])[0]
+            choices = chunk.get("choices")
+            if not choices:
+                continue
+            choice = choices[0] if isinstance(choices, list) else choices
+
             delta = choice.get("delta", {})
 
             # Reasoning content delta (DeepSeek thinking mode)
