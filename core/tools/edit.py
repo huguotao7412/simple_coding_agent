@@ -1,4 +1,5 @@
 from __future__ import annotations
+import difflib
 import os
 from .base import BaseTool, ToolResult
 
@@ -52,7 +53,14 @@ class EditTool(BaseTool):
             new_content = content.replace(search_block, replace_block, 1)
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
-            return ToolResult.ok(f"Exact match replaced in {file_path}")
+            diff = difflib.unified_diff(
+                content.splitlines(keepends=True),
+                new_content.splitlines(keepends=True),
+                fromfile=file_path,
+                tofile=file_path,
+            )
+            diff_text = "".join(diff)
+            return ToolResult.ok(diff_text if diff_text else "No changes made.")
 
         if count > 1:
             return ToolResult.fail(
@@ -122,6 +130,11 @@ class EditTool(BaseTool):
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(new_content)
 
-        return ToolResult.ok(
-            f"Fuzzy match replaced lines [{start_idx}:{end_idx}] in {file_path}"
+        diff = difflib.unified_diff(
+            content.splitlines(keepends=True),
+            new_content.splitlines(keepends=True),
+            fromfile=file_path,
+            tofile=file_path,
         )
+        diff_text = "".join(diff)
+        return ToolResult.ok(diff_text if diff_text else "No changes made.")
