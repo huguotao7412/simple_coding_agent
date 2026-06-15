@@ -52,7 +52,7 @@ class BashTool(BaseTool):
 
             if proc.returncode != 0:
                 detail = stderr_str or stdout_str or f"exit code {proc.returncode}"
-                return ToolResult.fail(detail, content=stdout_str)
+                return ToolResult.fail(detail, content=truncate_long_output(stdout_str) if stdout_str else stdout_str)
 
             return ToolResult.ok(truncate_long_output(stdout_str or "(no output)"))
         except asyncio.TimeoutError:
