@@ -10,13 +10,24 @@ from collections import deque
 from .base import BaseTool, ToolResult, truncate_long_output
 
 BLACKLIST = [
-    r"rm\s+-rf\s+/",
-    r"sudo\b",
-    r"chmod\s+777\s+/",
-    r"mkfs\b",
-    r"dd\s+if=",
+    # Recursive force delete: rm -r /, rm -rf /, rm -rfa /, rm -rf ~, etc.
+    r"rm\s+-r\S*\s+[/~]",
+    # Force delete with long flag: rm --force /
+    r"rm\s+--force\S*\s+[/~]",
+    # Privilege escalation
+    r"\bsudo\b",
+    # Permissive chmod on root/home
+    r"chmod\s+[-R]*\s*777\s+[/~]",
+    # Filesystem formatting
+    r"\bmkfs\b",
+    # Raw disk writes
+    r"\bdd\s+if=",
+    # Fork bomb
     r":\(\)\s*\{\s*:\|\:&\s*\}\s*;",
-    r">\s*/dev/sda",
+    # Overwrite block devices
+    r">\s*/dev/sd[a-z]",
+    # Windows: format drive
+    r"\bformat\s+[A-Za-z]:",
 ]
 
 # =====================================================================
