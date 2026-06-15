@@ -73,22 +73,27 @@ class SearchCodebaseTool(BaseTool):
                 full_path = os.path.join(dirpath, fname)
                 rel_path = os.path.relpath(full_path, root)
 
-                # --- .py files: use AST parsing ---
-                if fname.endswith(".py"):
+                # 1. 初始预判：是否尝试使用 AST
+                use_ast = fname.endswith(".py")
+                tree = None
+                source = ""
+
+                if use_ast:
                     try:
                         with open(full_path, "r", encoding="utf-8") as f:
                             source = f.read()
-                    except Exception:
-                        continue
-
-                    try:
                         tree = ast.parse(source)
-                    except SyntaxError:
-                        continue
+                    except Exception:
+                        # 核心修复点：遇到 SyntaxError 或解码失败，不抛出也不 continue
+                        # 而是将 use_ast 置为 False，平滑降级到下方的正则搜索
+                        use_ast = False
 
+                        # 2. 根据预判结果分流
+                if use_ast and tree is not None:
+                    # --- .py files (语法正确): 走原生 AST 解析 ---
                     for node in ast.walk(tree):
                         if not isinstance(
-                            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                                node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
                         ):
                             continue
 
@@ -108,7 +113,7 @@ class SearchCodebaseTool(BaseTool):
                             f"[{rel_path}] L{node.lineno}-L{node.end_lineno}: {signature}{doc_summary}"
                         )
                 else:
-                    # --- Non-.py files: regex-based class/function matching ---
+                    # --- Non-.py files (或存在语法错误的 .py 文件): 走纯正则匹配 ---
                     try:
                         with open(full_path, "r", encoding="utf-8") as f:
                             source_lines = f.readlines()
@@ -123,7 +128,7 @@ class SearchCodebaseTool(BaseTool):
                     for i, line in enumerate(source_lines):
                         if symbol_pattern.search(line):
                             results.append(
-                                f"[{rel_path}] L{i+1}: {line.strip()[:120]}"
+                                f"[{rel_path}] L{i + 1}: {line.strip()[:120]}"
                             )
 
         if not results:

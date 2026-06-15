@@ -28,15 +28,26 @@ class Bridge:
                 self.ui.render_info("Goodbye.")
                 break
 
-            # Stream the response
-            with self.ui.stream_markdown() as stream:
-                result = await self.agent.run(
-                    user_input,
-                    on_token=stream.add_token,
-                )
-
-            # If result came back with content but streaming didn't fire
-            # (e.g., model returned full content without streaming deltas),
-            # render it now.
-            if result and not stream._buffer.strip():
-                self.ui.render_markdown(result)
+            stream = None
+            try:
+                async for event in self.agent.run_stream(user_input):
+                    if event.type == "thought":
+                        if stream is None:
+                            stream = self.ui.stream_markdown()
+                            stream.__enter__()  # 开启 Markdown 流式渲染
+                        stream.add_token(event.token)
+                    elif event.type == "tool_call":
+                        if stream:
+                            stream.__exit__(None, None, None)
+                            stream = None
+                        # 触发黄色 running 状态
+                        self.ui.render_tool_status(event.tool_name or "tool", "running")
+                    elif event.type == "tool_result":
+                        status = "done" if event.tool_result and event.tool_result.success else "failed"
+                        # 触发绿色/红色完成状态
+                        self.ui.render_tool_status(event.tool_name or "tool", status)
+                    elif event.type == "compaction":
+                        self.ui.render_info("\n[System: Context compressed]")
+            finally:
+                if stream:
+                    stream.__exit__(None, None, None)

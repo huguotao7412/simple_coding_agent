@@ -112,18 +112,19 @@ class ContextManager:
         MAX_PROMPT_CHARS = 64000
         per_msg_limit = 500
 
-        serialized = "\n".join(
-            f"[{m['role']}]: {(m.get('content') or '')[:per_msg_limit]}"
-            for m in messages_to_summarize
-        )
+        def _format_msg(m: dict, limit: int) -> str:
+            content = m.get("content") or ""
+            if m.get("tool_calls"):
+                calls = [tc.get("function", {}).get("name", "unknown") for tc in m["tool_calls"]]
+                content += f" [Action: Executed tools {calls}]"
+            return f"[{m['role']}]: {content[:limit]}"
+
+        serialized = "\n".join(_format_msg(m, per_msg_limit) for m in messages_to_summarize)
 
         # If total exceeds max, reduce per-message limit and retry
         if len(serialized) > MAX_PROMPT_CHARS:
             per_msg_limit = 200
-            serialized = "\n".join(
-                f"[{m['role']}]: {(m.get('content') or '')[:per_msg_limit]}"
-                for m in messages_to_summarize
-            )
+            serialized = "\n".join(_format_msg(m, per_msg_limit) for m in messages_to_summarize)
 
         # Final safety cap — hard truncate if still too large
         if len(serialized) > MAX_PROMPT_CHARS:
