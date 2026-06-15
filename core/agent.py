@@ -14,6 +14,7 @@ from .llm import LLMClient
 from .context import ContextManager
 from .tools.base import BaseTool, ToolResult
 from .system_prompt import SYSTEM_PROMPT
+from .exceptions import LLMAPIError
 
 
 @dataclass
@@ -147,6 +148,77 @@ class Agent:
             return True
         return False
 
+    async def _execute_single_tool(
+        self,
+        tc: dict,
+    ) -> tuple[str, dict, ToolResult, str, bool]:
+        """Execute a single tool call. Shared by run() and run_stream().
+
+        Handles: JSON parsing, markdown stripping, workspace injection,
+        circuit breaker, tool lookup, execution, and history recording.
+
+        Returns:
+            (tool_name, tool_args, result, observation, circuit_broken)
+        """
+        tool_name = tc["function"]["name"]
+
+        # 1. Parse arguments
+        try:
+            raw_args = tc["function"]["arguments"].strip()
+            raw_args = re.sub(r"^```json\s*", "", raw_args, flags=re.IGNORECASE)
+            raw_args = re.sub(r"\s*```$", "", raw_args).strip()
+            args = json.loads(raw_args)
+        except json.JSONDecodeError as e:
+            self.ctx.add_tool_result(tc["id"], f"Error: invalid JSON arguments: {e}")
+            self.action_history.append(self._hash_action(tool_name, {}))
+            return (
+                tool_name, {},
+                ToolResult.fail(f"invalid JSON arguments: {e}"),
+                f"Error: invalid JSON arguments: {e}",
+                False,
+            )
+
+        # 2. Inject workspace_dir
+        if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
+            args["workspace_dir"] = self.workspace_dir
+
+        # 3. Circuit breaker check
+        if self._check_circuit_breaker(tc["id"], tool_name, args):
+            intervention = (
+                "System Alert: Detected repeated failed tool calls. "
+                "STOP current action. Please reason about why it failed "
+                "and use read or search codebase to gather new context."
+            )
+            return (
+                tool_name, args,
+                ToolResult.fail(intervention),
+                intervention,
+                True,
+            )
+
+        # 4. Look up and execute tool
+        tool = self.tools_by_name.get(tool_name)
+        if tool is None:
+            observation = f"Error: unknown tool '{tool_name}'. Available: {list(self.tools_by_name.keys())}"
+            result = ToolResult.fail(f"unknown tool '{tool_name}'")
+        else:
+            try:
+                result = await tool.execute(**args)
+            except Exception as e:
+                result = ToolResult.fail(str(e))
+
+            if result.success:
+                observation = result.content
+            else:
+                observation = f"ERROR: {result.error}"
+                if result.content:
+                    observation += f"\nPartial output: {result.content}"
+
+        self.ctx.add_tool_result(tc["id"], observation)
+        self.action_history.append(self._hash_action(tool_name, args))
+
+        return tool_name, args, result, observation, False
+
     async def run(
         self,
         user_input: str,
@@ -183,46 +255,9 @@ class Agent:
                 reasoning_content=response.get("reasoning_content"),
             )
 
-            # Execute each tool call
+            # Execute each tool call via shared method
             for tc in tool_calls:
-                tool_name = tc["function"]["name"]
-                tool = self.tools_by_name.get(tool_name)
-
-                if tool is None:
-                    self.ctx.add_tool_result(
-                        tc["id"],
-                        f"Error: unknown tool '{tool_name}'. Available: {list(self.tools_by_name.keys())}",
-                    )
-                    continue
-
-                try:
-                    raw_args = tc["function"]["arguments"].strip()
-                    raw_args = re.sub(r"^```json\s*", "", raw_args, flags=re.IGNORECASE)
-                    raw_args = re.sub(r"\s*```$", "", raw_args).strip()
-                    args = json.loads(raw_args)
-                except json.JSONDecodeError as e:
-                    self.ctx.add_tool_result(tc["id"], f"Error: invalid JSON arguments: {e}")
-                    continue
-
-                # Inject workspace_dir into all tools first to ensure stable Action Hashing
-                if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
-                    args["workspace_dir"] = self.workspace_dir
-
-                if self._check_circuit_breaker(tc["id"], tool_name, args):
-                    continue
-
-                result: ToolResult = await tool.execute(**args)
-
-                # Build observation for the model
-                if result.success:
-                    observation = result.content
-                else:
-                    observation = f"ERROR: {result.error}"
-                    if result.content:
-                        observation += f"\nPartial output: {result.content}"
-
-                self.ctx.add_tool_result(tc["id"], observation)
-                self.action_history.append(self._hash_action(tool_name, args))
+                await self._execute_single_tool(tc)
 
     async def run_stream(
         self,
@@ -267,34 +302,15 @@ class Agent:
             )
 
             for tc in tool_calls:
+                # Parse args for the tool_call event (lightweight, before execution)
                 tool_name = tc["function"]["name"]
-
                 try:
                     raw_args = tc["function"]["arguments"].strip()
                     raw_args = re.sub(r"^```json\s*", "", raw_args, flags=re.IGNORECASE)
                     raw_args = re.sub(r"\s*```$", "", raw_args).strip()
                     tool_args = json.loads(raw_args)
-                except json.JSONDecodeError as e:
-                    yield AgentEvent(
-                        type="tool_call",
-                        tool_name=tool_name,
-                        tool_args={},
-                    )
-                    tool = self.tools_by_name.get(tool_name)
-                    result = ToolResult.fail(f"invalid JSON arguments: {e}")
-                    observation = (
-                        result.content
-                        if result.success
-                        else f"ERROR: {result.error}\nPartial output: {result.content}" if result.content
-                        else f"ERROR: {result.error}"
-                    )
-                    self.ctx.add_tool_result(tc["id"], observation)
-                    yield AgentEvent(
-                        type="tool_result",
-                        tool_name=tool_name,
-                        tool_result=result,
-                    )
-                    continue
+                except json.JSONDecodeError:
+                    tool_args = {}
 
                 yield AgentEvent(
                     type="tool_call",
@@ -302,42 +318,8 @@ class Agent:
                     tool_args=tool_args,
                 )
 
-                tool = self.tools_by_name.get(tool_name)
-
-                if tool is None:
-                    result = ToolResult.fail(
-                        f"unknown tool '{tool_name}'. Available: {list(self.tools_by_name.keys())}"
-                    )
-                else:
-                    if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
-                        tool_args["workspace_dir"] = self.workspace_dir
-
-                    if self._check_circuit_breaker(tc["id"], tool_name, tool_args):
-                        yield AgentEvent(
-                            type="tool_result",
-                            tool_name=tool_name,
-                            tool_result=ToolResult.fail(
-                                "System Alert: Detected repeated failed tool calls. "
-                                "STOP current action. Please reason about why it failed "
-                                "and use read or search codebase to gather new context."
-                            ),
-                        )
-                        continue
-
-                    try:
-                        result = await tool.execute(**tool_args)
-                    except Exception as e:
-                        result = ToolResult.fail(str(e))
-
-                    self.action_history.append(self._hash_action(tool_name, tool_args))
-
-                observation = (
-                    result.content
-                    if result.success
-                    else f"ERROR: {result.error}\nPartial output: {result.content}" if result.content
-                    else f"ERROR: {result.error}"
-                )
-                self.ctx.add_tool_result(tc["id"], observation)
+                # Execute via shared method
+                _, _, result, _, _ = await self._execute_single_tool(tc)
 
                 yield AgentEvent(
                     type="tool_result",
