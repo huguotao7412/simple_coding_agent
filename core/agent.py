@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from .llm import LLMClient
 from .context import ContextManager
 from .tools.base import BaseTool, ToolResult
+from .system_prompt import SYSTEM_PROMPT
 
 
 @dataclass
@@ -100,8 +101,6 @@ class Agent:
         self.workspace_dir = workspace_dir
 
         # Build dynamic system prompt with environment context
-        from .system_prompt import SYSTEM_PROMPT
-
         workspace_tree = get_workspace_tree(workspace_dir)
         runtime_env = get_runtime_env()
         dynamic_prompt = (
