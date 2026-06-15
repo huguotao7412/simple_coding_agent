@@ -67,6 +67,44 @@ class EditTool(BaseTool):
         file_lines = content.splitlines(keepends=True)
         total_lines = len(file_lines)
 
+        # --- Fuzzy adjustment: clip slightly out-of-range line numbers ---
+        MAX_DRIFT = 20
+        fuzzy_note = ""
+        if start_line > total_lines:
+            drift = start_line - total_lines
+            if drift <= MAX_DRIFT:
+                start_line = total_lines
+                fuzzy_note = f" (start_line adjusted from +{drift} to end of file)"
+            else:
+                return ToolResult.fail(
+                    f"start_line ({start_line}) is {drift} lines beyond file end "
+                    f"({total_lines} lines). File may have been modified since last read. "
+                    f"Please re-read the file before editing."
+                )
+        if start_line < 1:
+            if abs(start_line) <= MAX_DRIFT:
+                fuzzy_note = f" (start_line adjusted from {start_line} to 1)"
+                start_line = 1
+            else:
+                return ToolResult.fail(
+                    f"start_line ({start_line}) is invalid for file with {total_lines} lines."
+                )
+        if end_line > total_lines:
+            drift = end_line - total_lines
+            if drift <= MAX_DRIFT:
+                end_line = total_lines
+                suffix = f"end_line adjusted from +{drift})"
+                if fuzzy_note:
+                    fuzzy_note = fuzzy_note.rstrip(")") + f", {suffix}"
+                else:
+                    fuzzy_note = f" ({suffix}"
+            else:
+                return ToolResult.fail(
+                    f"end_line ({end_line}) is {drift} lines beyond file end "
+                    f"({total_lines} lines). File may have been modified since last read. "
+                    f"Please re-read the file before editing."
+                )
+
         # --- Handle pure insertion (end_line = start_line - 1) ---
         if end_line == start_line - 1:
             # Insert replace_block *before* start_line
@@ -122,4 +160,6 @@ class EditTool(BaseTool):
             tofile=file_path,
         )
         diff_text = "".join(diff)
+        if fuzzy_note:
+            diff_text = f"[Note: line numbers were auto-adjusted{fuzzy_note}]\n{diff_text}"
         return ToolResult.ok(diff_text if diff_text else "No changes made.")
