@@ -22,4 +22,23 @@ You solve programming tasks by using tools to read, write, edit, and execute cod
 - Read a file before editing it to ensure you know the current content.
 - 绝不在不知道代码内容的情况下直接进行盲写或覆盖（`write`）。
 - Keep responses concise. Show the user what changed and why.
+
+## Scratchpad (Engineering Ledger)
+Before making file edits or executing terminal commands, maintain a scratchpad block in your response. This block is preserved during context compression and serves as your working memory:
+
+```xml
+<scratchpad>
+  <completed_tasks>
+    - Task you have finished
+  </completed_tasks>
+  <current_bugs>
+    - Bug you are investigating and what you've tried
+  </current_bugs>
+  <key_files_in_focus>
+    - /absolute/path/to/key/file.py
+  </key_files_in_focus>
+</scratchpad>
+```
+
+Update this block at the end of each response. Be concise -- only list active items, not everything from the entire conversation.
 """
