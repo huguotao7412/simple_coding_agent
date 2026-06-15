@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import json
 import os
 import platform
@@ -195,17 +196,20 @@ class Agent:
                     continue
 
                 try:
-                    args = json.loads(tc["function"]["arguments"])
+                    raw_args = tc["function"]["arguments"].strip()
+                    raw_args = re.sub(r"^```json\s*", "", raw_args, flags=re.IGNORECASE)
+                    raw_args = re.sub(r"\s*```$", "", raw_args).strip()
+                    args = json.loads(raw_args)
                 except json.JSONDecodeError as e:
                     self.ctx.add_tool_result(tc["id"], f"Error: invalid JSON arguments: {e}")
                     continue
 
-                if self._check_circuit_breaker(tc["id"], tool_name, args):
-                    continue
-
-                # Inject workspace_dir into all tools
+                # Inject workspace_dir into all tools first to ensure stable Action Hashing
                 if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
                     args["workspace_dir"] = self.workspace_dir
+
+                if self._check_circuit_breaker(tc["id"], tool_name, args):
+                    continue
 
                 result: ToolResult = await tool.execute(**args)
 
@@ -266,7 +270,10 @@ class Agent:
                 tool_name = tc["function"]["name"]
 
                 try:
-                    tool_args = json.loads(tc["function"]["arguments"])
+                    raw_args = tc["function"]["arguments"].strip()
+                    raw_args = re.sub(r"^```json\s*", "", raw_args, flags=re.IGNORECASE)
+                    raw_args = re.sub(r"\s*```$", "", raw_args).strip()
+                    tool_args = json.loads(raw_args)
                 except json.JSONDecodeError as e:
                     yield AgentEvent(
                         type="tool_call",
@@ -302,6 +309,9 @@ class Agent:
                         f"unknown tool '{tool_name}'. Available: {list(self.tools_by_name.keys())}"
                     )
                 else:
+                    if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
+                        tool_args["workspace_dir"] = self.workspace_dir
+
                     if self._check_circuit_breaker(tc["id"], tool_name, tool_args):
                         yield AgentEvent(
                             type="tool_result",
@@ -314,8 +324,6 @@ class Agent:
                         )
                         continue
 
-                    if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
-                        tool_args["workspace_dir"] = self.workspace_dir
                     try:
                         result = await tool.execute(**tool_args)
                     except Exception as e:

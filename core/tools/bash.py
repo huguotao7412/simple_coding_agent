@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import platform
+import subprocess
 import asyncio
 import re
 import os
@@ -133,7 +135,10 @@ class BashTool(BaseTool):
             return ToolResult.ok(truncate_long_output(stdout_str or "(no output)"))
         except asyncio.TimeoutError:
             try:
-                proc.kill()
+                if platform.system() == "Windows":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+                else:
+                    proc.kill()
                 await proc.wait()
             except Exception:
                 pass
@@ -215,7 +220,10 @@ class BashTool(BaseTool):
             )
 
         try:
-            proc.kill()
+            if platform.system() == "Windows":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+            else:
+                proc.kill()
             await proc.wait()
         except ProcessLookupError:
             # Process already gone (race condition) — that's fine
