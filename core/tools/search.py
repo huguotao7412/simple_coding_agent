@@ -116,7 +116,15 @@ class SearchCodebaseTool(BaseTool):
         try:
             lines = source.splitlines()
             start_line = node.lineno - 1
-            end_line = node.body[0].lineno - 1 if hasattr(node, 'body') and node.body else node.end_lineno
+            if hasattr(node, 'body') and node.body:
+                body_start = node.body[0].lineno
+                if body_start <= node.lineno:
+                    # Single-line body: e.g. "def foo(): pass"
+                    end_line = body_start
+                else:
+                    end_line = body_start - 1
+            else:
+                end_line = node.end_lineno
             sig_lines = lines[start_line:end_line]
             return " ".join(line.strip() for line in sig_lines)
         except Exception:
