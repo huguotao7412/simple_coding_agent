@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
+import subprocess
+import sys
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 
@@ -20,6 +24,67 @@ class AgentEvent:
     token: str = ""
 
 
+def _walk_tree_pure_python(workspace_dir: str, max_depth: int = 2) -> str:
+    """Fallback: generate tree-like directory listing using os.scandir()."""
+    ignore_dirs = {".git", "__pycache__", ".venv", "node_modules", ".mypy_cache", ".pytest_cache"}
+
+    def _walk(dirpath: str, prefix: str = "", depth: int = 0) -> list[str]:
+        if depth >= max_depth:
+            return []
+        lines: list[str] = []
+        try:
+            entries = sorted(os.scandir(dirpath), key=lambda e: e.name.lower())
+        except (PermissionError, OSError):
+            return lines
+        dirs = [e for e in entries if e.is_dir(follow_symlinks=False) and e.name not in ignore_dirs]
+        files = [e for e in entries if e.is_file(follow_symlinks=False)]
+        items = dirs + files
+        for i, entry in enumerate(items):
+            is_last = i == len(items) - 1
+            connector = "└── " if is_last else "├── "
+            next_prefix = prefix + ("    " if is_last else "│   ")
+            if entry.is_dir(follow_symlinks=False):
+                lines.append(f"{prefix}{connector}{entry.name}/")
+                lines.extend(_walk(entry.path, next_prefix, depth + 1))
+            else:
+                lines.append(f"{prefix}{connector}{entry.name}")
+        return lines
+
+    root_name = os.path.basename(workspace_dir) or workspace_dir
+    lines = [root_name + "/"]
+    lines.extend(_walk(workspace_dir))
+    return "\n".join(lines)
+
+
+def get_workspace_tree(workspace_dir: str) -> str:
+    """Get directory structure of workspace. Tries `tree` command first, falls back to pure Python."""
+    try:
+        result = subprocess.run(
+            [
+                "tree", "-L", "2", "-I",
+                ".git|__pycache__|.venv|node_modules|.mypy_cache|.pytest_cache",
+                workspace_dir,
+            ],
+            capture_output=True,
+            timeout=10,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    return _walk_tree_pure_python(workspace_dir)
+
+
+def get_runtime_env() -> str:
+    """Get OS info and exact Python version using stdlib only."""
+    lines = [
+        f"Operating System: {platform.system()} {platform.release()} ({platform.machine()})",
+        f"Python Version: {sys.version}",
+    ]
+    return "\n".join(lines)
+
+
 class Agent:
     """Core ReAct agent. Runs the think->act->observe loop."""
 
@@ -31,9 +96,22 @@ class Agent:
         workspace_dir: str,
     ):
         self.llm = llm_client
-        self.ctx = context_manager
         self.tools_by_name = {t.name: t for t in tools}
         self.workspace_dir = workspace_dir
+
+        # Build dynamic system prompt with environment context
+        from .system_prompt import SYSTEM_PROMPT
+
+        workspace_tree = get_workspace_tree(workspace_dir)
+        runtime_env = get_runtime_env()
+        dynamic_prompt = (
+            SYSTEM_PROMPT
+            + f"\n\n<workspace_context>\n{workspace_tree}\n</workspace_context>"
+            + f"\n\n<environment_context>\n{runtime_env}\n</environment_context>"
+        )
+        # Override context_manager's system prompt with our dynamic version
+        context_manager.messages[0] = {"role": "system", "content": dynamic_prompt}
+        self.ctx = context_manager
 
     async def run(
         self,
