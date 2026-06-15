@@ -5,6 +5,7 @@ import os
 import platform
 import subprocess
 import sys
+from collections import deque
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 
@@ -100,6 +101,9 @@ class Agent:
         self.tools_by_name = {t.name: t for t in tools}
         self.workspace_dir = workspace_dir
 
+        # Circuit breaker: track recent tool calls to detect loops
+        self.action_history: deque[int] = deque(maxlen=5)
+
         # Build dynamic system prompt with environment context
         workspace_tree = get_workspace_tree(workspace_dir)
         runtime_env = get_runtime_env()
@@ -111,6 +115,14 @@ class Agent:
         # Override context_manager's system prompt with our dynamic version
         context_manager.messages[0] = {"role": "system", "content": dynamic_prompt}
         self.ctx = context_manager
+
+    def _hash_action(self, tool_name: str, args: dict) -> int:
+        """Create a deterministic hash for a tool_name + args combination."""
+        return hash(tool_name + json.dumps(args, sort_keys=True))
+
+    def detect_loop(self, action_hash: int) -> bool:
+        """Return True if action_hash appears >= 2 times in recent history."""
+        return sum(1 for h in self.action_history if h == action_hash) >= 2
 
     async def run(
         self,
@@ -166,6 +178,19 @@ class Agent:
                     self.ctx.add_tool_result(tc["id"], f"Error: invalid JSON arguments: {e}")
                     continue
 
+                # --- Circuit breaker: detect repeated failed tool calls ---
+                action_hash = self._hash_action(tool_name, args)
+                if self.detect_loop(action_hash):
+                    intervention = (
+                        "System Alert: Detected repeated failed tool calls. "
+                        "STOP current action. Please reason about why it failed "
+                        "and use read or search codebase to gather new context."
+                    )
+                    self.ctx.add_tool_result(tc["id"], intervention)
+                    self.action_history.append(action_hash)
+                    continue
+                # --- End circuit breaker ---
+
                 # Inject workspace_dir into all tools
                 if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
                     args["workspace_dir"] = self.workspace_dir
@@ -181,6 +206,7 @@ class Agent:
                         observation += f"\nPartial output: {result.content}"
 
                 self.ctx.add_tool_result(tc["id"], observation)
+                self.action_history.append(action_hash)
 
     async def run_stream(
         self,
@@ -244,12 +270,32 @@ class Agent:
                     except json.JSONDecodeError as e:
                         result = ToolResult.fail(f"invalid JSON arguments: {e}")
                     else:
+                        # --- Circuit breaker: detect repeated failed tool calls ---
+                        action_hash = self._hash_action(tool_name, args)
+                        if self.detect_loop(action_hash):
+                            intervention = (
+                                "System Alert: Detected repeated failed tool calls. "
+                                "STOP current action. Please reason about why it failed "
+                                "and use read or search codebase to gather new context."
+                            )
+                            self.ctx.add_tool_result(tc["id"], intervention)
+                            self.action_history.append(action_hash)
+                            yield AgentEvent(
+                                type="tool_result",
+                                tool_name=tool_name,
+                                tool_result=ToolResult.fail(intervention),
+                            )
+                            continue
+                        # --- End circuit breaker ---
+
                         if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
                             args["workspace_dir"] = self.workspace_dir
                         try:
                             result = await tool.execute(**args)
                         except Exception as e:
                             result = ToolResult.fail(str(e))
+
+                        self.action_history.append(action_hash)
 
                 observation = (
                     result.content
