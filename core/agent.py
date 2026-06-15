@@ -231,12 +231,16 @@ class Agent:
             # Check context and compress if needed
             if self.ctx.needs_compression():
                 await self.ctx.compress(self.llm)
-
-            response = await self.llm.chat(
-                messages=self.ctx.messages,
-                tools=tool_schemas if tool_schemas else None,
-                on_token=on_token,
-            )
+            try:
+                response = await self.llm.chat(
+                    messages=self.ctx.messages,
+                    tools=tool_schemas if tool_schemas else None,
+                    on_token=on_token,
+                )
+            except LLMAPIError as e:
+                error_msg = f"LLM API error: {e.status_code} - {e.message}"
+                self.ctx.add_assistant_message(content=error_msg)
+                return error_msg
 
             tool_calls = response.get("tool_calls")
 

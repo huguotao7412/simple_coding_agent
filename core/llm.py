@@ -68,61 +68,65 @@ class LLMClient:
                 raise LLMAPIError(0, str(e))
 
     async def _parse_stream(
-        self,
-        response: httpx.Response,
-        on_token: Callable[[str], None] | None,
+            self,
+            response: httpx.Response,
+            on_token: Callable[[str], None] | None,
     ) -> dict:
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_calls: list[dict] = []
         tool_call_buf: dict[int, dict] = {}
 
-        async for line in response.aiter_lines():
-            if not line.startswith("data: "):
-                continue
-            data = line[6:]
-            if data == "[DONE]":
-                break
+        import httpx  # 确保能捕获 httpx 异常
+        try:
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data == "[DONE]":
+                    break
 
-            try:
-                chunk = json.loads(data)
-            except json.JSONDecodeError:
-                logging.getLogger(__name__).debug(
-                    "Failed to parse SSE data line: %s", data[:200]
-                )
-                continue
+                import json
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
 
-            choices = chunk.get("choices")
-            if not choices:
-                continue
-            choice = choices[0] if isinstance(choices, list) else choices
+                choices = chunk.get("choices")
+                if not choices:
+                    continue
 
-            delta = choice.get("delta", {})
+                choice = choices[0] if isinstance(choices, list) else choices
+                delta = choice.get("delta", {})
 
-            # Reasoning content delta (DeepSeek thinking mode)
-            if "reasoning_content" in delta and delta["reasoning_content"]:
-                reasoning_parts.append(delta["reasoning_content"])
+                # Reasoning content delta (DeepSeek thinking mode)
+                if "reasoning_content" in delta and delta["reasoning_content"]:
+                    reasoning_parts.append(delta["reasoning_content"])
 
-            # Content delta
-            if "content" in delta and delta["content"]:
-                token = delta["content"]
-                content_parts.append(token)
-                if on_token:
-                    on_token(token)
+                # Content delta
+                if "content" in delta and delta["content"]:
+                    token = delta["content"]
+                    content_parts.append(token)
+                    if on_token:
+                        on_token(token)
 
-            # Tool call delta
-            if "tool_calls" in delta:
-                for tc in delta["tool_calls"]:
-                    idx = tc.get("index", 0)
-                    if idx not in tool_call_buf:
-                        tool_call_buf[idx] = {"id": "", "function": {"name": "", "arguments": ""}}
-                    if "id" in tc and tc["id"]:
-                        tool_call_buf[idx]["id"] = tc["id"]
-                    if "function" in tc:
-                        if "name" in tc["function"] and tc["function"]["name"]:
-                            tool_call_buf[idx]["function"]["name"] = tc["function"]["name"]
-                        if "arguments" in tc["function"]:
-                            tool_call_buf[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                # Tool call delta
+                if "tool_calls" in delta:
+                    for tc in delta["tool_calls"]:
+                        idx = tc.get("index", 0)
+                        if idx not in tool_call_buf:
+                            tool_call_buf[idx] = {"id": "", "function": {"name": "", "arguments": ""}}
+                        if "id" in tc and tc["id"]:
+                            tool_call_buf[idx]["id"] = tc["id"]
+                        if "function" in tc:
+                            if "name" in tc["function"] and tc["function"]["name"]:
+                                tool_call_buf[idx]["function"]["name"] = tc["function"]["name"]
+                            if "arguments" in tc["function"]:
+                                tool_call_buf[idx]["function"]["arguments"] += tc["function"]["arguments"]
+        except httpx.HTTPError:
+            # 极简防御：如果服务端异常掐断了流（如 RemoteProtocolError 或 Timeout）
+            # 我们优雅地吞掉异常，退出循环，直接保留并返回已经收集到的半截数据。
+            pass
 
         # Build tool_calls list from buffer
         for idx in sorted(tool_call_buf.keys()):
