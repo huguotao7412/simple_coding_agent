@@ -4,7 +4,7 @@ import asyncio
 import re
 import os
 
-from .base import BaseTool, ToolResult
+from .base import BaseTool, ToolResult, truncate_long_output
 
 BLACKLIST = [
     r"rm\s+-rf\s+/",
@@ -54,7 +54,7 @@ class BashTool(BaseTool):
                 detail = stderr_str or stdout_str or f"exit code {proc.returncode}"
                 return ToolResult.fail(detail, content=stdout_str)
 
-            return ToolResult.ok(stdout_str or "(no output)")
+            return ToolResult.ok(truncate_long_output(stdout_str or "(no output)"))
         except asyncio.TimeoutError:
             return ToolResult.fail("Command timed out after 120 seconds")
         except Exception as e:

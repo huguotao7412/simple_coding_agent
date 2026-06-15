@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os
-from .base import BaseTool, ToolResult
+from .base import BaseTool, ToolResult, truncate_long_output
 
 
 class ReadTool(BaseTool):
@@ -28,6 +28,6 @@ class ReadTool(BaseTool):
             if limit:
                 lines = lines[:limit]
             output = "".join(f"{i + offset + 1}\t{line}" for i, line in enumerate(lines))
-            return ToolResult.ok(output)
+            return ToolResult.ok(truncate_long_output(output))
         except Exception as e:
             return ToolResult.fail(str(e))
