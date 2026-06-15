@@ -54,3 +54,27 @@ class BaseTool(ABC):
                 f"Path '{file_path}' escapes workspace '{workspace_dir}'",
             )
         return resolved
+
+
+TRUNCATION_THRESHOLD = 8000
+
+
+def truncate_long_output(text: str, threshold: int = TRUNCATION_THRESHOLD) -> str:
+    """Truncate long text, keeping first 20% and last 30% of threshold chars.
+
+    Inserts a visible marker so the LLM knows content was omitted.
+    """
+    if len(text) <= threshold:
+        return text
+
+    keep_head = int(threshold * 0.2)
+    keep_tail = int(threshold * 0.3)
+    omitted = len(text) - keep_head - keep_tail
+
+    head = text[:keep_head]
+    tail = text[-keep_tail:]
+    return (
+        head
+        + f"\n... [Output truncated: {omitted} chars omitted for brevity] ...\n"
+        + tail
+    )
