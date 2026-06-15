@@ -90,7 +90,7 @@ class Agent:
                     continue
 
                 # Inject workspace_dir into all tools
-                if tool_name in ("read", "write", "edit", "bash"):
+                if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
                     args["workspace_dir"] = self.workspace_dir
 
                 result: ToolResult = await tool.execute(**args)
@@ -167,7 +167,7 @@ class Agent:
                     except json.JSONDecodeError as e:
                         result = ToolResult.fail(f"invalid JSON arguments: {e}")
                     else:
-                        if tool_name in ("read", "write", "edit", "bash"):
+                        if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
                             args["workspace_dir"] = self.workspace_dir
                         try:
                             result = await tool.execute(**args)

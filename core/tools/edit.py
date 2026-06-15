@@ -6,31 +6,32 @@ from .base import BaseTool, ToolResult
 class EditTool(BaseTool):
     name = "edit"
     description = (
-        "Make precise edits to a file. Two modes: "
-        "(1) search/replace: provide old_string and new_string. "
-        "Use replace_all=true to replace all occurrences. "
-        "(2) line-range: provide start_line, end_line, new_string to replace a line range."
+        "Make precise edits to a file using context-aware search/replace. "
+        "Provide a search_block (the exact code to find, including surrounding "
+        "context for uniqueness) and a replace_block (the new code to substitute). "
+        "The tool matches exactly first, then falls back to line-normalized fuzzy matching."
     )
     parameters = {
         "file_path": {"type": "string", "description": "Absolute path to the file."},
-        "old_string": {"type": "string", "description": "Text to search for (search/replace mode)."},
-        "new_string": {"type": "string", "description": "Replacement text."},
-        "start_line": {"type": "integer", "description": "Start line for line-range mode (0-indexed)."},
-        "end_line": {"type": "integer", "description": "End line for line-range mode (inclusive)."},
-        "replace_all": {"type": "boolean", "description": "Replace all matches. Default false."},
+        "search_block": {
+            "type": "string",
+            "description": "The exact block of code to search for, including context. Must be unique in the file.",
+        },
+        "replace_block": {
+            "type": "string",
+            "description": "The new block of code that will replace the search_block. Must include proper indentation.",
+        },
     }
-    required_params = ["file_path"]
+    required_params = ["file_path", "search_block", "replace_block"]
 
     async def execute(
         self,
         file_path: str,
+        search_block: str,
+        replace_block: str,
         workspace_dir: str = "",
-        old_string: str | None = None,
-        new_string: str | None = None,
-        start_line: int | None = None,
-        end_line: int | None = None,
-        replace_all: bool = False,
     ) -> ToolResult:
+        # --- Security & existence checks ---
         try:
             self.validate_path(file_path, workspace_dir)
         except Exception as e:
@@ -43,31 +44,84 @@ class EditTool(BaseTool):
         except Exception as e:
             return ToolResult.fail(str(e))
 
-        # Line-range mode
-        if start_line is not None and end_line is not None and new_string is not None:
-            lines = content.splitlines(keepends=True)
-            if start_line < 0 or end_line >= len(lines):
-                return ToolResult.fail(f"Line range [{start_line}:{end_line}] out of bounds (file has {len(lines)} lines)")
-            new_lines = lines[:start_line] + [new_string if new_string.endswith("\n") else new_string + "\n"] + lines[end_line + 1:]
-            new_content = "".join(new_lines)
+        # ================================================================
+        # Step 1 — Exact match
+        # ================================================================
+        count = content.count(search_block)
+        if count == 1:
+            new_content = content.replace(search_block, replace_block, 1)
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
-            return ToolResult.ok(f"Replaced lines [{start_line}:{end_line}] in {file_path}")
+            return ToolResult.ok(f"Exact match replaced in {file_path}")
 
-        # Search/replace mode
-        if old_string is not None and new_string is not None:
-            count = content.count(old_string)
-            if count == 0:
-                return ToolResult.fail(f"old_string not found in {file_path}")
-            if count > 1 and not replace_all:
-                return ToolResult.fail(
-                    f"Found {count} occurrences of old_string in {file_path}. "
-                    "Use replace_all=true to replace all, or provide a more specific old_string."
-                )
-            new_content = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
-            replaced = count if replace_all else 1
-            return ToolResult.ok(f"Replaced {replaced} occurrence(s) in {file_path}")
+        if count > 1:
+            return ToolResult.fail(
+                f"Found {count} occurrences of search_block in {file_path}. "
+                "Please include more surrounding context (unchanged lines above and below) "
+                "to make the match unique."
+            )
 
-        return ToolResult.fail("Must provide either (old_string + new_string) or (start_line + end_line + new_string)")
+        # ================================================================
+        # Step 2 — Line-normalized fuzzy fallback
+        # ================================================================
+        # Use keepends=True for reconstruction so newlines are preserved.
+        file_lines = content.splitlines(keepends=True)
+        # For normalisation we strip line-endings and whitespace.
+        search_lines = search_block.splitlines()
+
+        def normalise(lines: list[str]) -> list[str]:
+            """Strip whitespace and discard blank lines."""
+            return [ln.strip() for ln in lines if ln.strip()]
+
+        # Build a mapping: normalised-index → original-index (only for non-blank lines)
+        norm_to_orig: list[int] = []
+        norm_file: list[str] = []
+        for idx, line in enumerate(file_lines):
+            stripped = line.strip()
+            if stripped:
+                norm_to_orig.append(idx)
+                norm_file.append(stripped)
+
+        norm_search = normalise(search_lines)
+
+        if not norm_search:
+            return ToolResult.fail("search_block is empty after normalisation.")
+
+        # Sliding window over normalised file lines
+        matches: list[tuple[int, int]] = []  # (start_idx, end_idx) in original file_lines
+        w = len(norm_search)
+        for i in range(len(norm_file) - w + 1):
+            if norm_file[i : i + w] == norm_search:
+                start_orig = norm_to_orig[i]
+                end_orig = norm_to_orig[i + w - 1]
+                matches.append((start_orig, end_orig))
+
+        if len(matches) == 0:
+            return ToolResult.fail(
+                "search_block not found in the file (neither exact nor fuzzy match). "
+                "Please verify the content and try again with the exact code from the file, "
+                "including at least one line of unchanged context above and below."
+            )
+        if len(matches) > 1:
+            locs = ", ".join(f"[{s}:{e}]" for s, e in matches)
+            return ToolResult.fail(
+                f"search_block matched {len(matches)} locations (lines {locs}). "
+                "Please include more surrounding context to make the match unique."
+            )
+
+        start_idx, end_idx = matches[0]
+        replace_lines = replace_block.splitlines(keepends=True)
+
+        new_lines = (
+            file_lines[:start_idx]
+            + replace_lines
+            + file_lines[end_idx + 1 :]
+        )
+        new_content = "".join(new_lines)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        return ToolResult.ok(
+            f"Fuzzy match replaced lines [{start_idx}:{end_idx}] in {file_path}"
+        )
