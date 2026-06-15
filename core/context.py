@@ -114,7 +114,7 @@ class ContextManager:
             "preserving key decisions, file changes made, and unresolved tasks:\n\n"
         )
         summary_prompt += "\n".join(
-            f"[{m['role']}]: {m.get('content', '')[:500]}"
+            f"[{m['role']}]: {(m.get('content') or '')[:500]}"
             for m in messages_to_summarize
         )
 

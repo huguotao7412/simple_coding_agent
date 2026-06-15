@@ -334,3 +334,14 @@ class Agent:
                     tool_name=tool_name,
                     tool_result=result,
                 )
+
+    def refresh_system_prompt(self) -> None:
+        from .system_prompt import SYSTEM_PROMPT
+        workspace_tree = get_workspace_tree(self.workspace_dir)
+        runtime_env = get_runtime_env()
+        dynamic_prompt = (
+                SYSTEM_PROMPT
+                + f"\n\n<workspace_context>\n{workspace_tree}\n</workspace_context>"
+                + f"\n\n<environment_context>\n{runtime_env}\n</environment_context>"
+        )
+        self.ctx.messages[0] = {"role": "system", "content": dynamic_prompt}

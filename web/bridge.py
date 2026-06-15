@@ -45,6 +45,7 @@ class WebBridge:
         new_path = root / project_name
         new_path.mkdir(parents=True, exist_ok=True)
         self.agent.workspace_dir = str(new_path)
+        self.agent.refresh_system_prompt()
         self.agent.ctx.messages = [self.agent.ctx.messages[0]]
         st.session_state.messages = []
         st.session_state.events = []

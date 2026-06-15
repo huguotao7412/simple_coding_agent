@@ -118,6 +118,8 @@ class EditTool(BaseTool):
             )
 
         start_idx, end_idx = matches[0]
+        if replace_block and not replace_block.endswith("\n"):
+            replace_block += "\n"
         replace_lines = replace_block.splitlines(keepends=True)
 
         new_lines = (
