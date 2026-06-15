@@ -64,46 +64,67 @@ class SearchCodebaseTool(BaseTool):
             dirnames[:] = [d for d in dirnames if d not in self._IGNORED_DIRS]
 
             for fname in filenames:
-                if include_ext and not fname.endswith(include_ext):
-                    continue
-                if include_ext is None and not fname.endswith(".py"):
-                    continue  # symbol mode only handles .py by default
+                if include_ext:
+                    if not fname.endswith(include_ext):
+                        continue
+                elif not fname.endswith(".py"):
+                    continue  # symbol mode defaults to .py
 
                 full_path = os.path.join(dirpath, fname)
                 rel_path = os.path.relpath(full_path, root)
 
-                try:
-                    with open(full_path, "r", encoding="utf-8") as f:
-                        source = f.read()
-                except Exception:
-                    continue
-
-                try:
-                    tree = ast.parse(source)
-                except SyntaxError:
-                    continue
-
-                for node in ast.walk(tree):
-                    if not isinstance(
-                        node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-                    ):
+                # --- .py files: use AST parsing ---
+                if fname.endswith(".py"):
+                    try:
+                        with open(full_path, "r", encoding="utf-8") as f:
+                            source = f.read()
+                    except Exception:
                         continue
 
-                    if query_lower not in node.name.lower():
+                    try:
+                        tree = ast.parse(source)
+                    except SyntaxError:
                         continue
 
-                    # Build signature
-                    signature = self._build_signature(node, source)
+                    for node in ast.walk(tree):
+                        if not isinstance(
+                            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                        ):
+                            continue
 
-                    # Extract docstring
-                    doc = ast.get_docstring(node)
-                    doc_summary = ""
-                    if doc:
-                        doc_summary = " - " + doc.splitlines()[0].strip()
+                        if query_lower not in node.name.lower():
+                            continue
 
-                    results.append(
-                        f"[{rel_path}] L{node.lineno}-L{node.end_lineno}: {signature}{doc_summary}"
+                        # Build signature
+                        signature = self._build_signature(node, source)
+
+                        # Extract docstring
+                        doc = ast.get_docstring(node)
+                        doc_summary = ""
+                        if doc:
+                            doc_summary = " - " + doc.splitlines()[0].strip()
+
+                        results.append(
+                            f"[{rel_path}] L{node.lineno}-L{node.end_lineno}: {signature}{doc_summary}"
+                        )
+                else:
+                    # --- Non-.py files: regex-based class/function matching ---
+                    try:
+                        with open(full_path, "r", encoding="utf-8") as f:
+                            source_lines = f.readlines()
+                    except Exception:
+                        continue
+
+                    symbol_pattern = re.compile(
+                        r"^\s*(def|class|function|fn|async\s+def|async\s+function)\s+"
+                        + re.escape(query),
+                        re.IGNORECASE,
                     )
+                    for i, line in enumerate(source_lines):
+                        if symbol_pattern.search(line):
+                            results.append(
+                                f"[{rel_path}] L{i+1}: {line.strip()[:120]}"
+                            )
 
         if not results:
             return ToolResult.ok(
