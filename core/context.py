@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 
 class ContextManager:
     """Manages the conversation message list, token estimation, and compression."""
@@ -19,6 +21,24 @@ class ContextManager:
         self.messages: list[dict] = [
             {"role": "system", "content": system_prompt}
         ]
+
+    _SCRATCHPAD_RE = re.compile(r"<scratchpad>.*?</scratchpad>", re.DOTALL)
+
+    @classmethod
+    def _extract_last_scratchpad(cls, messages: list[dict]) -> str | None:
+        """Extract the last scratchpad block from a list of messages.
+
+        Scans in reverse order to find the most recent scratchpad.
+        Returns the full XML block string, or None if not found.
+        """
+        for msg in reversed(messages):
+            content = msg.get("content", "")
+            if not isinstance(content, str):
+                continue
+            matches = list(cls._SCRATCHPAD_RE.finditer(content))
+            if matches:
+                return matches[-1].group(0)
+        return None
 
     def add_user_message(self, content: str) -> None:
         self.messages.append({"role": "user", "content": content})
@@ -78,13 +98,17 @@ class ContextManager:
         return (1, end)
 
     async def compress(self, llm_client, compression_model: str | None = None) -> None:
-        """Summarize oldest messages using the LLM, replace them with a summary message."""
+        """Summarize oldest messages using the LLM, preserving scratchpad if present."""
         start, end = self.get_compressible_range()
         if start >= end:
             return
 
         messages_to_summarize = self.messages[start:end]
 
+        # --- Extract latest scratchpad before compression ---
+        saved_scratchpad = self._extract_last_scratchpad(messages_to_summarize)
+
+        # --- Existing summary logic ---
         summary_prompt = (
             "Summarize the following conversation history concisely, "
             "preserving key decisions, file changes made, and unresolved tasks:\n\n"
@@ -104,7 +128,19 @@ class ContextManager:
         except Exception:
             summary = "(Conversation history compressed due to context limit.)"
 
-        new_messages = self.messages[:start] + [
-            {"role": "system", "content": f"[Conversation summary]: {summary}"}
-        ] + self.messages[end:]
+        # --- Reassemble: system prompt -> scratchpad (if found) -> summary -> recent ---
+        tail = self.messages[end:]
+        new_messages = self.messages[:start]  # Keep system prompt
+
+        if saved_scratchpad:
+            new_messages.append({
+                "role": "system",
+                "content": f"[Engineering Scratchpad]:\n{saved_scratchpad}",
+            })
+
+        new_messages.append({
+            "role": "system",
+            "content": f"[Conversation summary]: {summary}",
+        })
+        new_messages.extend(tail)
         self.messages = new_messages
