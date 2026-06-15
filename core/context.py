@@ -108,15 +108,31 @@ class ContextManager:
         # --- Extract latest scratchpad before compression ---
         saved_scratchpad = self._extract_last_scratchpad(messages_to_summarize)
 
-        # --- Existing summary logic ---
+        # --- Build summary prompt with length protection ---
+        MAX_PROMPT_CHARS = 64000
+        per_msg_limit = 500
+
+        serialized = "\n".join(
+            f"[{m['role']}]: {(m.get('content') or '')[:per_msg_limit]}"
+            for m in messages_to_summarize
+        )
+
+        # If total exceeds max, reduce per-message limit and retry
+        if len(serialized) > MAX_PROMPT_CHARS:
+            per_msg_limit = 200
+            serialized = "\n".join(
+                f"[{m['role']}]: {(m.get('content') or '')[:per_msg_limit]}"
+                for m in messages_to_summarize
+            )
+
+        # Final safety cap — hard truncate if still too large
+        if len(serialized) > MAX_PROMPT_CHARS:
+            serialized = serialized[:MAX_PROMPT_CHARS] + "\n...[content truncated — too many messages to summarize]..."
+
         summary_prompt = (
             "Summarize the following conversation history concisely, "
             "preserving key decisions, file changes made, and unresolved tasks:\n\n"
-        )
-        summary_prompt += "\n".join(
-            f"[{m['role']}]: {(m.get('content') or '')[:500]}"
-            for m in messages_to_summarize
-        )
+        ) + serialized
 
         try:
             result = await llm_client.chat(
