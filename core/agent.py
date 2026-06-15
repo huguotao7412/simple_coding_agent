@@ -124,6 +124,26 @@ class Agent:
         """Return True if action_hash appears >= 2 times in recent history."""
         return sum(1 for h in self.action_history if h == action_hash) >= 2
 
+    def _check_circuit_breaker(
+        self, tool_call_id: str, tool_name: str, args: dict
+    ) -> bool:
+        """Check for repeated tool calls and intervene if a loop is detected.
+
+        Returns True if the circuit breaker fired (caller should skip execution),
+        False if safe to proceed.
+        """
+        action_hash = self._hash_action(tool_name, args)
+        if self.detect_loop(action_hash):
+            intervention = (
+                "System Alert: Detected repeated failed tool calls. "
+                "STOP current action. Please reason about why it failed "
+                "and use read or search codebase to gather new context."
+            )
+            self.ctx.add_tool_result(tool_call_id, intervention)
+            self.action_history.append(action_hash)
+            return True
+        return False
+
     async def run(
         self,
         user_input: str,
@@ -178,18 +198,8 @@ class Agent:
                     self.ctx.add_tool_result(tc["id"], f"Error: invalid JSON arguments: {e}")
                     continue
 
-                # --- Circuit breaker: detect repeated failed tool calls ---
-                action_hash = self._hash_action(tool_name, args)
-                if self.detect_loop(action_hash):
-                    intervention = (
-                        "System Alert: Detected repeated failed tool calls. "
-                        "STOP current action. Please reason about why it failed "
-                        "and use read or search codebase to gather new context."
-                    )
-                    self.ctx.add_tool_result(tc["id"], intervention)
-                    self.action_history.append(action_hash)
+                if self._check_circuit_breaker(tc["id"], tool_name, args):
                     continue
-                # --- End circuit breaker ---
 
                 # Inject workspace_dir into all tools
                 if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
@@ -206,7 +216,7 @@ class Agent:
                         observation += f"\nPartial output: {result.content}"
 
                 self.ctx.add_tool_result(tc["id"], observation)
-                self.action_history.append(action_hash)
+                self.action_history.append(self._hash_action(tool_name, args))
 
     async def run_stream(
         self,
@@ -252,10 +262,35 @@ class Agent:
 
             for tc in tool_calls:
                 tool_name = tc["function"]["name"]
+
+                try:
+                    tool_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError as e:
+                    yield AgentEvent(
+                        type="tool_call",
+                        tool_name=tool_name,
+                        tool_args={},
+                    )
+                    tool = self.tools_by_name.get(tool_name)
+                    result = ToolResult.fail(f"invalid JSON arguments: {e}")
+                    observation = (
+                        result.content
+                        if result.success
+                        else f"ERROR: {result.error}\nPartial output: {result.content}" if result.content
+                        else f"ERROR: {result.error}"
+                    )
+                    self.ctx.add_tool_result(tc["id"], observation)
+                    yield AgentEvent(
+                        type="tool_result",
+                        tool_name=tool_name,
+                        tool_result=result,
+                    )
+                    continue
+
                 yield AgentEvent(
                     type="tool_call",
                     tool_name=tool_name,
-                    tool_args=json.loads(tc["function"]["arguments"]),
+                    tool_args=tool_args,
                 )
 
                 tool = self.tools_by_name.get(tool_name)
@@ -265,37 +300,26 @@ class Agent:
                         f"unknown tool '{tool_name}'. Available: {list(self.tools_by_name.keys())}"
                     )
                 else:
-                    try:
-                        args = json.loads(tc["function"]["arguments"])
-                    except json.JSONDecodeError as e:
-                        result = ToolResult.fail(f"invalid JSON arguments: {e}")
-                    else:
-                        # --- Circuit breaker: detect repeated failed tool calls ---
-                        action_hash = self._hash_action(tool_name, args)
-                        if self.detect_loop(action_hash):
-                            intervention = (
+                    if self._check_circuit_breaker(tc["id"], tool_name, tool_args):
+                        yield AgentEvent(
+                            type="tool_result",
+                            tool_name=tool_name,
+                            tool_result=ToolResult.fail(
                                 "System Alert: Detected repeated failed tool calls. "
                                 "STOP current action. Please reason about why it failed "
                                 "and use read or search codebase to gather new context."
-                            )
-                            self.ctx.add_tool_result(tc["id"], intervention)
-                            self.action_history.append(action_hash)
-                            yield AgentEvent(
-                                type="tool_result",
-                                tool_name=tool_name,
-                                tool_result=ToolResult.fail(intervention),
-                            )
-                            continue
-                        # --- End circuit breaker ---
+                            ),
+                        )
+                        continue
 
-                        if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
-                            args["workspace_dir"] = self.workspace_dir
-                        try:
-                            result = await tool.execute(**args)
-                        except Exception as e:
-                            result = ToolResult.fail(str(e))
+                    if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
+                        tool_args["workspace_dir"] = self.workspace_dir
+                    try:
+                        result = await tool.execute(**tool_args)
+                    except Exception as e:
+                        result = ToolResult.fail(str(e))
 
-                        self.action_history.append(action_hash)
+                    self.action_history.append(self._hash_action(tool_name, tool_args))
 
                 observation = (
                     result.content
