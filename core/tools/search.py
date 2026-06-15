@@ -114,14 +114,11 @@ class SearchCodebaseTool(BaseTool):
     def _build_signature(self, node: ast.AST, source: str) -> str:
         """Build a human-readable signature for a function or class definition."""
         try:
-            # ast.get_source_segment needs the original source lines
             lines = source.splitlines()
-            sig = ast.get_source_segment(source, node)
-            if sig is None:
-                return node.name
-            # For multi-line signatures, take just the first line
-            sig_line = sig.splitlines()[0].strip()
-            return sig_line
+            start_line = node.lineno - 1
+            end_line = node.body[0].lineno - 1 if hasattr(node, 'body') and node.body else node.end_lineno
+            sig_lines = lines[start_line:end_line]
+            return " ".join(line.strip() for line in sig_lines)
         except Exception:
             return node.name
 

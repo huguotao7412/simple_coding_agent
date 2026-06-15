@@ -60,6 +60,8 @@ def _walk_tree_pure_python(workspace_dir: str, max_depth: int = 2) -> str:
 
 def get_workspace_tree(workspace_dir: str) -> str:
     """Get directory structure of workspace. Tries `tree` command first, falls back to pure Python."""
+    if platform.system() == "Windows":
+        return _walk_tree_pure_python(workspace_dir)
     try:
         result = subprocess.run(
             [

@@ -33,12 +33,13 @@ class WebBridge:
         async for event in self.agent.run_stream(user_input):
             st.session_state.events.append(event)
             if event.type in ("tool_result", "done"):
-                st.rerun()
+                pass
             elif event.type == "tool_call":
-                st.rerun()
+                pass
 
         st.session_state.streaming = False
         st.session_state.events = []
+        st.rerun()
 
     def switch_project(self, project_name: str, st) -> None:
         root = Path(st.session_state.workspace_root)

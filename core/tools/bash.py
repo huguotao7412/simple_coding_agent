@@ -56,6 +56,11 @@ class BashTool(BaseTool):
 
             return ToolResult.ok(truncate_long_output(stdout_str or "(no output)"))
         except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()  # 确保资源被回收
+            except Exception:
+                pass
             return ToolResult.fail("Command timed out after 120 seconds")
         except Exception as e:
             return ToolResult.fail(str(e))
