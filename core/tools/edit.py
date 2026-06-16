@@ -22,47 +22,81 @@ def _validate_syntax(file_path: str, content: str) -> str | None:
     return None
 
 
+def _normalize_lines(text: str) -> str:
+    """Strip trailing whitespace from each line (preserves leading indent)."""
+    return "\n".join(line.rstrip() for line in text.splitlines())
+
+
+def _fuzzy_find(content: str, search: str) -> tuple[int, int] | None:
+    """Find the best fuzzy match for `search` in `content`.
+
+    Uses difflib.SequenceMatcher on whitespace‑normalized lines. Returns
+    (start_char, end_char) in the **original** content, or None if the
+    best match is below the similarity threshold.
+    """
+    content_norm = _normalize_lines(content)
+    search_norm = _normalize_lines(search)
+
+    sm = difflib.SequenceMatcher(None, content_norm, search_norm)
+    # ratio() measures overall similarity; require ≥ 85 %
+    if sm.ratio() < 0.85:
+        return None
+
+    # Use get_matching_blocks to locate the best contiguous run
+    blocks = sm.get_matching_blocks()
+    if not blocks or len(blocks) <= 1:
+        return None
+
+    # The matching blocks (except the sentinel) cover the search text
+    # Map the first and last real match back to content positions
+    real_blocks = [b for b in blocks if b.size > 0]
+    if not real_blocks:
+        return None
+
+    start = real_blocks[0].a
+    end = real_blocks[-1].a + real_blocks[-1].size
+
+    # Guard: don't return tiny/spurious matches
+    if end - start < max(len(search_norm) * 0.5, 4):
+        return None
+
+    return start, end
+
+
 class EditTool(BaseTool):
     name = "edit"
     description = (
-        "Make precise edits to a file using absolute line numbers. "
-        "Provide start_line and end_line (inclusive, 1-indexed — must match "
-        "the line numbers shown by the read tool) and a replace_block with the "
-        "new code. The tool replaces lines [start_line, end_line] with replace_block."
+        "Make precise edits to a file by providing the exact code block to replace. "
+        "Provide `search_block` (the existing code to replace — copy‑pasted from the "
+        "file) and `replace_block` (the new code). The tool locates the unique match "
+        "and replaces it. "
+        "If the match is ambiguous (multiple hits) or not found, you must re‑read "
+        "the file and provide a more specific search_block."
     )
     parameters = {
         "file_path": {"type": "string", "description": "Absolute path to the file."},
-        "start_line": {
-            "type": "integer",
+        "search_block": {
+            "type": "string",
             "description": (
-                "Starting line number of the block to replace (inclusive, 1-indexed). "
-                "Must match the line numbers returned by the read tool exactly."
-            ),
-        },
-        "end_line": {
-            "type": "integer",
-            "description": (
-                "Ending line number of the block to replace (inclusive, 1-indexed). "
-                "For a pure insertion without deleting any lines, set end_line = start_line - 1 "
-                "(i.e. end_line points just before the insertion point). "
-                "For a pure deletion, pass an empty replace_block."
+                "The exact code block to find and replace. Must be unique in the file. "
+                "Copy‑paste the exact lines from the file as shown by the read tool. "
+                "Include surrounding context lines if needed to make the match unique."
             ),
         },
         "replace_block": {
             "type": "string",
             "description": (
-                "The new block of code that will replace lines start_line through end_line. "
-                "Must include proper indentation. Pass an empty string to delete the target lines."
+                "The new code that will replace search_block. "
+                "Must include proper indentation. Pass an empty string to delete search_block."
             ),
         },
     }
-    required_params = ["file_path", "start_line", "end_line", "replace_block"]
+    required_params = ["file_path", "search_block", "replace_block"]
 
     async def execute(
         self,
         file_path: str,
-        start_line: int,
-        end_line: int,
+        search_block: str,
         replace_block: str,
         workspace_dir: str = "",
     ) -> ToolResult:
@@ -73,6 +107,7 @@ class EditTool(BaseTool):
             return ToolResult.fail(str(e))
         if not os.path.isfile(file_path):
             return ToolResult.fail(f"File not found: {file_path}")
+
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -80,91 +115,71 @@ class EditTool(BaseTool):
             return ToolResult.fail(str(e))
 
         # ================================================================
-        # Line-number-based replacement
+        # Level 1 — Exact match
         # ================================================================
-        file_lines = content.splitlines(keepends=True)
-        total_lines = len(file_lines)
+        count = content.count(search_block)
 
-        # --- Fuzzy adjustment: clip slightly out-of-range line numbers ---
-        MAX_DRIFT = 20
-        fuzzy_note = ""
-        if start_line > total_lines:
-            drift = start_line - total_lines
-            if drift <= MAX_DRIFT:
-                start_line = total_lines
-                fuzzy_note = f" (start_line adjusted from +{drift} to end of file)"
-            else:
-                return ToolResult.fail(
-                    f"start_line ({start_line}) is {drift} lines beyond file end "
-                    f"({total_lines} lines). File may have been modified since last read. "
-                    f"Please re-read the file before editing."
-                )
-        if start_line < 1:
-            if abs(start_line) <= MAX_DRIFT:
-                fuzzy_note = f" (start_line adjusted from {start_line} to 1)"
-                start_line = 1
-            else:
-                return ToolResult.fail(
-                    f"start_line ({start_line}) is invalid for file with {total_lines} lines."
-                )
-        if end_line > total_lines:
-            drift = end_line - total_lines
-            if drift <= MAX_DRIFT:
-                end_line = total_lines
-                suffix = f"end_line adjusted from +{drift})"
-                if fuzzy_note:
-                    fuzzy_note = fuzzy_note.rstrip(")") + f", {suffix}"
-                else:
-                    fuzzy_note = f" ({suffix}"
-            else:
-                return ToolResult.fail(
-                    f"end_line ({end_line}) is {drift} lines beyond file end "
-                    f"({total_lines} lines). File may have been modified since last read. "
-                    f"Please re-read the file before editing."
+        if count == 0:
+            # ================================================================
+            # Level 2 — Whitespace‑normalized match (trailing ws tolerant)
+            # ================================================================
+            content_norm = _normalize_lines(content)
+            search_norm = _normalize_lines(search_block)
+            norm_count = content_norm.count(search_norm)
+
+            if norm_count == 1 and search_norm:
+                # Map normalized position back to original content
+                norm_start = content_norm.index(search_norm)
+                norm_end = norm_start + len(search_norm)
+                # Find the corresponding original span by walking lines
+                old_block = _map_norm_to_original(content, content_norm, norm_start, norm_end)
+                if old_block is not None:
+                    new_content = content.replace(old_block, replace_block, 1)
+                    return self._write_and_diff(file_path, content, new_content)
+
+            # ================================================================
+            # Level 3 — Fuzzy similarity via SequenceMatcher
+            # ================================================================
+            span = _fuzzy_find(content, search_block)
+            if span is not None:
+                old_block = content[span[0]:span[1]]
+                new_content = content.replace(old_block, replace_block, 1)
+                return self._write_and_diff(
+                    file_path, content, new_content,
+                    note="[Note: fuzzy match applied — verify the diff carefully]",
                 )
 
-        # --- Handle pure insertion (end_line = start_line - 1) ---
-        if end_line == start_line - 1:
-            # Insert replace_block *before* start_line
-            if start_line < 1 or start_line > total_lines + 1:
+            # --- Not found at all ---
+            if norm_count > 1:
                 return ToolResult.fail(
-                    f"Invalid insertion point. File has {total_lines} lines, "
-                    f"received start_line={start_line} (valid range: 1–{total_lines + 1})."
+                    f"search_block is ambiguous: found {norm_count} similar matches "
+                    f"after whitespace normalization. Provide more surrounding context "
+                    f"lines to make the match unique, then re‑read the file and try again.",
                 )
-            start_idx = start_line - 1
-            end_idx = start_idx  # nothing to delete
-        else:
-            # --- Validate line range ---
-            if start_line < 1:
-                return ToolResult.fail(
-                    f"start_line must be >= 1, got {start_line}."
-                )
-            if end_line > total_lines:
-                return ToolResult.fail(
-                    f"end_line ({end_line}) exceeds file length ({total_lines} lines)."
-                )
-            if start_line > end_line:
-                return ToolResult.fail(
-                    f"start_line ({start_line}) must be <= end_line ({end_line}). "
-                    "For pure insertion, use end_line = start_line - 1."
-                )
+            return ToolResult.fail(
+                "search_block not found in file (exact, whitespace‑normalized, "
+                "or fuzzy match all failed). Please re‑read the file and try again.",
+            )
 
-            # Convert 1-indexed to 0-indexed
-            start_idx = start_line - 1
-            end_idx = end_line  # exclusive upper bound for slicing
+        if count > 1:
+            return ToolResult.fail(
+                f"search_block matched {count} identical occurrences. "
+                "Provide additional surrounding context lines to make the match unique, "
+                "then re‑read the file and try again.",
+            )
 
-        # --- Prepare replacement lines ---
-        if replace_block and not replace_block.endswith("\n"):
-            replace_block += "\n"
-        replace_lines = replace_block.splitlines(keepends=True) if replace_block else []
+        # --- Unique exact match — fast path ---
+        new_content = content.replace(search_block, replace_block, 1)
+        return self._write_and_diff(file_path, content, new_content)
 
-        # --- Slice & rebuild ---
-        new_lines = (
-            file_lines[:start_idx]
-            + replace_lines
-            + file_lines[end_idx:]
-        )
-        new_content = "".join(new_lines)
+    def _write_and_diff(
+        self,
+        file_path: str,
+        old_content: str,
+        new_content: str,
+        note: str = "",
+    ) -> ToolResult:
+        """Validate syntax, write the file, and return a unified diff."""
 
         # --- Proactive syntax validation before writing ---
         syntax_error = _validate_syntax(file_path, new_content)
@@ -180,12 +195,49 @@ class EditTool(BaseTool):
 
         # --- Return unified diff ---
         diff = difflib.unified_diff(
-            content.splitlines(keepends=True),
+            old_content.splitlines(keepends=True),
             new_content.splitlines(keepends=True),
             fromfile=file_path,
             tofile=file_path,
         )
         diff_text = "".join(diff)
-        if fuzzy_note:
-            diff_text = f"[Note: line numbers were auto-adjusted{fuzzy_note}]\n{diff_text}"
+        if note:
+            diff_text = f"{note}\n{diff_text}"
         return ToolResult.ok(diff_text if diff_text else "No changes made.")
+
+
+def _map_norm_to_original(
+    original: str, normalized: str, norm_start: int, norm_end: int
+) -> str | None:
+    """Map a span in the normalized text back to the corresponding span in the original.
+
+    Walks both texts line‑by‑line to handle trailing‑whitespace differences.
+    """
+    orig_lines = original.splitlines(keepends=True)
+    norm_lines = normalized.splitlines(keepends=True)
+
+    # Build a mapping: for each normalized character position, which original line?
+    # Simpler: walk through both line by line and find the matching region.
+    orig_pos = 0
+    norm_pos = 0
+    start_orig = None
+    end_orig = None
+
+    for o_line, n_line in zip(orig_lines, norm_lines):
+        o_stripped = o_line.rstrip("\n\r")
+        n_stripped = n_line.rstrip("\n\r")
+
+        if norm_pos >= norm_start and start_orig is None:
+            start_orig = orig_pos
+        if norm_pos >= norm_end and end_orig is None:
+            end_orig = orig_pos
+
+        orig_pos += len(o_line)
+        norm_pos += len(n_line)
+
+    if start_orig is None:
+        return None
+    if end_orig is None:
+        end_orig = orig_pos
+
+    return original[start_orig:end_orig]

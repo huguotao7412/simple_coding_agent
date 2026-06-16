@@ -237,7 +237,7 @@ class Agent:
         while True:
             # Check context and compress if needed
             if self.ctx.needs_compression():
-                await self.ctx.compress(self.llm)
+                self.ctx.compress()
 
             # Build payload: static prefix (cacheable) + dynamic context tail
             payload_messages = self.ctx.messages + [self._build_dynamic_context_msg()]
@@ -283,7 +283,7 @@ class Agent:
 
         while True:
             if self.ctx.needs_compression():
-                await self.ctx.compress(self.llm)
+                self.ctx.compress()
                 yield AgentEvent(type="compaction")
 
             tokens: list[str] = []

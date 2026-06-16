@@ -97,57 +97,24 @@ class ContextManager:
         end = user_indices[-self.keep_recent]
         return (1, end)
 
-    async def compress(self, llm_client, compression_model: str | None = None) -> None:
-        """Summarize oldest messages using the LLM, preserving scratchpad if present."""
+    def compress(self) -> None:
+        """Drop oldest messages via sliding window, preserving system prompt and scratchpad.
+
+        No LLM summarization — pure truncation keeps the prefix static so KV caches
+        stay warm, and exact code references (line numbers, stack traces) are never
+        degraded by a lossy summary.
+        """
         start, end = self.get_compressible_range()
         if start >= end:
             return
 
-        messages_to_summarize = self.messages[start:end]
+        # --- Extract latest scratchpad from the window being dropped ---
+        messages_to_drop = self.messages[start:end]
+        saved_scratchpad = self._extract_last_scratchpad(messages_to_drop)
 
-        # --- Extract latest scratchpad before compression ---
-        saved_scratchpad = self._extract_last_scratchpad(messages_to_summarize)
-
-        # --- Build summary prompt with length protection ---
-        MAX_PROMPT_CHARS = 64000
-        per_msg_limit = 500
-
-        def _format_msg(m: dict, limit: int) -> str:
-            content = m.get("content") or ""
-            if m.get("tool_calls"):
-                calls = [tc.get("function", {}).get("name", "unknown") for tc in m["tool_calls"]]
-                content += f" [Action: Executed tools {calls}]"
-            return f"[{m['role']}]: {content[:limit]}"
-
-        serialized = "\n".join(_format_msg(m, per_msg_limit) for m in messages_to_summarize)
-
-        # If total exceeds max, reduce per-message limit and retry
-        if len(serialized) > MAX_PROMPT_CHARS:
-            per_msg_limit = 200
-            serialized = "\n".join(_format_msg(m, per_msg_limit) for m in messages_to_summarize)
-
-        # Final safety cap — hard truncate if still too large
-        if len(serialized) > MAX_PROMPT_CHARS:
-            serialized = serialized[:MAX_PROMPT_CHARS] + "\n...[content truncated — too many messages to summarize]..."
-
-        summary_prompt = (
-            "Summarize the following conversation history concisely, "
-            "preserving key decisions, file changes made, and unresolved tasks:\n\n"
-        ) + serialized
-
-        try:
-            result = await llm_client.chat(
-                messages=[{"role": "user", "content": summary_prompt}],
-                tools=None,
-                on_token=None,
-            )
-            summary = result.get("content", "Previous conversation summarized.")
-        except Exception:
-            summary = "(Conversation history compressed due to context limit.)"
-
-        # --- Reassemble: system prompt -> scratchpad (if found) -> summary -> recent ---
+        # --- Reassemble: system prompt -> scratchpad (if found) -> recent tail ---
         tail = self.messages[end:]
-        new_messages = self.messages[:start]  # Keep system prompt
+        new_messages = self.messages[:start]  # Keep system prompt (index 0)
 
         if saved_scratchpad:
             new_messages.append({
@@ -155,9 +122,5 @@ class ContextManager:
                 "content": f"[Engineering Scratchpad]:\n{saved_scratchpad}",
             })
 
-        new_messages.append({
-            "role": "system",
-            "content": f"[Conversation summary]: {summary}",
-        })
         new_messages.extend(tail)
         self.messages = new_messages

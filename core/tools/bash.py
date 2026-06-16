@@ -5,6 +5,7 @@ import subprocess
 import asyncio
 import re
 import os
+import sys
 from collections import deque
 
 from .base import BaseTool, ToolResult, truncate_long_output
@@ -52,10 +53,11 @@ class BashTool(BaseTool):
     name = "bash"
     description = (
         "Execute shell commands with four action modes.\n"
-        "IMPORTANT: Bash is stateless — each call starts a fresh subshell. "
-        "Do NOT use `cd` commands. Use the `cwd` parameter to specify the working directory.\n\n"
-        "• 'run' (default): block until completion (120s timeout), return full output.\n"
-        "• 'background': launch a long-running server/daemon, return its PID immediately.\n"
+        "The 'run' action uses a persistent shell session — environment state (cwd, "
+        "env vars, venv activations) persists across calls. You CAN use `cd`, `source`, "
+        "and `export` and they will stick for subsequent commands.\n\n"
+        "• 'run' (default): execute in the persistent session (120s timeout), return full output.\n"
+        "• 'background': launch a long-running server/daemon in a fresh process, return its PID immediately.\n"
         "• 'logs': fetch the last 500 lines of buffered output from a background process.\n"
         "• 'kill': terminate a background process and clean up its resources.\n"
         "Use background + logs + kill to implement the start→verify→stop dev loop."
@@ -65,15 +67,17 @@ class BashTool(BaseTool):
             "type": "string",
             "description": (
                 "The shell command to execute. Required for 'run' and 'background' actions. "
-                "Can be empty for 'logs' and 'kill' actions."
+                "Can be empty for 'logs' and 'kill' actions. "
+                "For 'run', the command runs in a persistent session — cd, source, and export "
+                "effects are preserved."
             ),
         },
         "action": {
             "type": "string",
             "enum": ["run", "background", "logs", "kill"],
             "description": (
-                "Execution mode: 'run' blocks for output (default), "
-                "'background' starts a long-running process, "
+                "Execution mode: 'run' blocks for output in the persistent session (default), "
+                "'background' starts a long-running process in a fresh shell, "
                 "'logs' retrieves buffered output by PID, "
                 "'kill' terminates a background process by PID."
             ),
@@ -82,8 +86,8 @@ class BashTool(BaseTool):
             "type": "string",
             "description": (
                 "Optional relative path to execute the command in. "
-                "Defaults to workspace root. Use this instead of 'cd' commands "
-                "since each bash call is a fresh subshell."
+                "Defaults to workspace root. The session's working directory will be updated "
+                "to this path for subsequent commands."
             ),
         },
         "pid": {
@@ -95,6 +99,47 @@ class BashTool(BaseTool):
         },
     }
     required_params = ["command"]
+
+    def __init__(self):
+        self._session_proc: asyncio.subprocess.Process | None = None
+        self._session_lock: asyncio.Lock = asyncio.Lock()
+
+    async def _ensure_session(self, cwd: str) -> asyncio.subprocess.Process:
+        """Start or recover the persistent shell session."""
+        if self._session_proc is not None and self._session_proc.returncode is not None:
+            # Session died — clean up
+            try:
+                self._session_proc.stdin.close()
+            except Exception:
+                pass
+            self._session_proc = None
+
+        if self._session_proc is None:
+            # Anti-hang: prevent apt/npm/git from blocking on interactive prompts
+            session_env = os.environ.copy()
+            session_env["DEBIAN_FRONTEND"] = "noninteractive"
+            session_env["CI"] = "1"
+            session_env["GIT_TERMINAL_PROMPT"] = "0"
+            if sys.platform == "win32":
+                self._session_proc = await asyncio.create_subprocess_exec(
+                    "cmd.exe",
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    cwd=cwd,
+                    env=session_env,
+                )
+            else:
+                self._session_proc = await asyncio.create_subprocess_exec(
+                    "/bin/bash", "--norc",
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    cwd=cwd,
+                    env=session_env,
+                )
+
+        return self._session_proc
 
     async def execute(
         self,
@@ -128,7 +173,16 @@ class BashTool(BaseTool):
         # Route by action
         # ================================================================
         if action == "run":
-            return await self._run_blocking(command, target_dir)
+            # Ensure stateful session exists, starting in target_dir
+            await self._ensure_session(target_dir)
+            # If cwd specified, prepend cd so session lands in the right dir
+            full_cmd = command
+            if cwd:
+                if sys.platform == "win32":
+                    full_cmd = f'cd /d "{target_dir}" && {command}'
+                else:
+                    full_cmd = f'cd "{target_dir}" && {command}'
+            return await self._run_blocking(full_cmd)
         elif action == "background":
             return await self._run_background(command, target_dir)
         elif action == "logs":
@@ -142,46 +196,100 @@ class BashTool(BaseTool):
     # Action handlers
     # ------------------------------------------------------------------
 
-    async def _run_blocking(self, command: str, cwd: str) -> ToolResult:
-        """Original blocking behaviour with 120s timeout."""
-        try:
-            env = os.environ.copy()
-            env["DEBIAN_FRONTEND"] = "noninteractive"
-            env["CI"] = "1"
-            env["GIT_TERMINAL_PROMPT"] = "0"
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-                env=env,
-            )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=120
-            )
-            stdout_str = stdout.decode("utf-8", errors="replace").strip()
-            stderr_str = stderr.decode("utf-8", errors="replace").strip()
+    async def _run_blocking(self, command: str) -> ToolResult:
+        """Execute a command in the persistent shell session with marker-based output capture.
 
-            if proc.returncode != 0:
-                detail = stderr_str or stdout_str or f"exit code {proc.returncode}"
-                return ToolResult.fail(
-                    detail,
-                    content=truncate_long_output(stdout_str) if stdout_str else stdout_str,
-                )
+        Writes the command followed by a unique echo marker to the session's stdin,
+        then reads stdout line-by-line until the marker is found. The marker carries
+        the exit code so the caller knows whether the command succeeded.
+        """
+        async with self._session_lock:
+            proc = self._session_proc
+            if proc is None or proc.returncode is not None:
+                return ToolResult.fail("Shell session is not running. Please retry.")
 
-            return ToolResult.ok(truncate_long_output(stdout_str or "(no output)"))
-        except asyncio.TimeoutError:
+            # Build the exit-code marker
+            if sys.platform == "win32":
+                marker = "echo __SCA_MARKER__ %errorlevel%"
+            else:
+                marker = "echo __SCA_MARKER__ $?"
+
             try:
-                if platform.system() == "Windows":
-                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
-                else:
-                    proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
-            return ToolResult.fail("Command timed out after 120 seconds")
-        except Exception as e:
-            return ToolResult.fail(str(e))
+                # --- Write command + marker into the session ---
+                proc.stdin.write((command + "\n").encode())
+                proc.stdin.write((marker + "\n").encode())
+                await proc.stdin.drain()
+
+                # --- Read output until marker line ---
+                output_lines: list[str] = []
+                exit_code = 0
+                marker_found = False
+
+                while True:
+                    try:
+                        line = await asyncio.wait_for(
+                            proc.stdout.readline(), timeout=120
+                        )
+                    except asyncio.TimeoutError:
+                        # Session hung — kill it so next call starts fresh
+                        self._session_proc = None
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        return ToolResult.fail(
+                            "Command timed out after 120 seconds. Shell session reset."
+                        )
+
+                    if not line:
+                        # EOF — session died
+                        break
+
+                    decoded = line.decode("utf-8", errors="replace")
+
+                    if "__SCA_MARKER__" in decoded:
+                        marker_found = True
+                        # Parse exit code from marker line
+                        parts = decoded.strip().split()
+                        for i, p in enumerate(parts):
+                            if p == "__SCA_MARKER__":
+                                if i + 1 < len(parts):
+                                    try:
+                                        exit_code = int(parts[i + 1])
+                                    except ValueError:
+                                        pass
+                                break
+                        break
+
+                    output_lines.append(decoded)
+
+                output = "".join(output_lines).strip()
+
+                if not marker_found:
+                    # Session died unexpectedly
+                    self._session_proc = None
+                    return ToolResult.fail(
+                        f"Shell session terminated unexpectedly (returncode={proc.returncode}).",
+                        content=truncate_long_output(output) if output else output,
+                    )
+
+                if exit_code != 0:
+                    return ToolResult.fail(
+                        f"Exit code {exit_code}",
+                        content=truncate_long_output(output) if output else output,
+                    )
+
+                return ToolResult.ok(truncate_long_output(output or "(no output)"))
+
+            except (BrokenPipeError, ConnectionResetError, ProcessLookupError):
+                # Session pipe broke — reset for next call
+                self._session_proc = None
+                return ToolResult.fail(
+                    "Shell session pipe broken. The session has been reset — please retry."
+                )
+            except Exception as e:
+                self._session_proc = None
+                return ToolResult.fail(str(e))
 
     async def _run_background(self, command: str, cwd: str) -> ToolResult:
         """Launch a command in the background, capture its output asynchronously."""
