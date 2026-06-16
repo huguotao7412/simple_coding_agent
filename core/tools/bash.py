@@ -117,11 +117,15 @@ class BashTool(BaseTool):
 
         if self._session_proc is None:
             # Anti-hang: prevent apt/npm/git from blocking on interactive prompts
+            if not os.path.exists(cwd):
+                cwd = os.getcwd()
             session_env = os.environ.copy()
             session_env["DEBIAN_FRONTEND"] = "noninteractive"
             session_env["CI"] = "1"
             session_env["GIT_TERMINAL_PROMPT"] = "0"
             if sys.platform == "win32":
+                if "SystemRoot" not in session_env:
+                    session_env["SystemRoot"] = "C:\\Windows"
                 self._session_proc = await asyncio.create_subprocess_exec(
                     "cmd.exe",
                     stdin=asyncio.subprocess.PIPE,

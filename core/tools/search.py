@@ -163,7 +163,10 @@ class SearchCodebaseTool(BaseTool):
         self, root: str, query: str, include_ext: str | None
     ) -> ToolResult:
         results: list[str] = []
-        pattern = re.compile(re.escape(query))
+        try:
+            pattern = re.compile(query)
+        except re.error as e:
+            return ToolResult.fail(f"Invalid regex query '{query}': {e}. Please fix your regex pattern.")
 
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in self._IGNORED_DIRS]

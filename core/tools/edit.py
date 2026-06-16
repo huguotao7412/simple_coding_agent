@@ -133,9 +133,10 @@ class EditTool(BaseTool):
                 norm_start = content_norm.index(search_norm)
                 norm_end = norm_start + len(search_norm)
                 # Find the corresponding original span by walking lines
-                old_block = _map_norm_to_original(content, content_norm, norm_start, norm_end)
-                if old_block is not None:
-                    new_content = content.replace(old_block, replace_block, 1)
+                mapped = _map_norm_to_original(content, content_norm, norm_start, norm_end)
+                if mapped is not None:
+                    old_block, s_idx, e_idx = mapped
+                    new_content = content[:s_idx] + replace_block + content[e_idx:]
                     return self._write_and_diff(file_path, content, new_content)
 
             # ================================================================
@@ -143,13 +144,14 @@ class EditTool(BaseTool):
             # ================================================================
             span = _fuzzy_find(content, search_block)
             if span is not None:
-                old_block = _map_norm_to_original(content, content_norm, span[0], span[1])
-                if old_block is not None:
-                    new_content = content.replace(old_block, replace_block, 1)
+                mapped = _map_norm_to_original(content, content_norm, span[0], span[1])
+                if mapped is not None:
+                    old_block, s_idx, e_idx = mapped
+                    new_content = content[:s_idx] + replace_block + content[e_idx:]
                     return self._write_and_diff(
-                    file_path, content, new_content,
-                    note="[Note: fuzzy match applied — verify the diff carefully]",
-                )
+                        file_path, content, new_content,
+                        note="[Note: fuzzy match applied — verify the diff carefully]",
+                    )
 
             # --- Not found at all ---
             if norm_count > 1:
@@ -237,4 +239,4 @@ def _map_norm_to_original(
 
     if start_orig >= end_orig:
         return None
-    return original[start_orig:end_orig]
+    return original[start_orig:end_orig], start_orig, end_orig
