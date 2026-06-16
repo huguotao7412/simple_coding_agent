@@ -11,6 +11,8 @@ from collections import deque
 
 from .base import BaseTool, ToolResult, truncate_long_output
 
+ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
 BLACKLIST = [
     # Recursive force delete: rm -r /, rm -rf /, rm -rfa /, rm -rf ~, etc.
     r"rm\s+-r\S*\s+[/~]",
@@ -274,6 +276,7 @@ class BashTool(BaseTool):
                     output_lines.append(decoded)
 
                 output = "".join(output_lines).strip()
+                output = ANSI_ESCAPE.sub('', output)
 
                 if not marker_found:
                     # Session died unexpectedly

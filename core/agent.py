@@ -177,12 +177,20 @@ class Agent:
             raw_args = re.sub(r"\s*```$", "", raw_args).strip()
             args = json.loads(raw_args)
         except json.JSONDecodeError as e:
-            self.ctx.add_tool_result(tc["id"], f"Error: invalid JSON arguments: {e}")
+            error_hint = (
+                f"Error: Invalid JSON format in arguments: {e}\n"
+                "CRITICAL HINT: \n"
+                "1. If you are writing multi-line code, you MUST escape newlines as \\n and double quotes as \\\".\n"
+                "2. Ensure there are NO trailing commas.\n"
+                "3. Do NOT wrap the arguments in Markdown blockticks like ```json ... ``` inside the tool call.\n"
+                "Please fix the format and call the tool again."
+            )
+            self.ctx.add_tool_result(tc["id"], error_hint)
             self.action_history.append(self._hash_action(tool_name, {}))
             return (
                 tool_name, {},
-                ToolResult.fail(f"invalid JSON arguments: {e}"),
-                f"Error: invalid JSON arguments: {e}",
+                ToolResult.fail(error_hint),
+                error_hint,
                 False,
             )
 

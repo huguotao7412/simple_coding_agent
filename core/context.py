@@ -108,24 +108,22 @@ class ContextManager:
         return (1, safe_end)
 
     def compress(self) -> None:
-        """Drop oldest messages via sliding window, preserving system prompt and scratchpad.
-
-        No LLM summarization — pure truncation keeps the prefix static so KV caches
-        stay warm, and exact code references (line numbers, stack traces) are never
-        degraded by a lossy summary.
-        """
+        """Drop oldest messages via sliding window, and aggressively truncate large messages to prevent overflow."""
         start, end = self.get_compressible_range()
+
         if start >= end:
+            # 即使无旧消息可删，也要裁剪当前消息
+            self._truncate_large_messages(self.messages)
             return
 
-        # --- Extract latest scratchpad from the window being dropped ---
         messages_to_drop = self.messages[start:end]
         saved_scratchpad = self._extract_last_scratchpad(messages_to_drop)
 
-        # --- Reassemble: system prompt -> scratchpad (if found) -> recent tail ---
         tail = self.messages[end:]
-        new_messages = self.messages[:start]  # Keep system prompt (index 0)
+        # [FIX] 对保留下来的近期对话进行巨型消息扫描与硬裁剪
+        self._truncate_large_messages(tail)
 
+        new_messages = self.messages[:start]
         if saved_scratchpad:
             new_messages.append({
                 "role": "system",
@@ -134,3 +132,16 @@ class ContextManager:
 
         new_messages.extend(tail)
         self.messages = new_messages
+
+    def _truncate_large_messages(self, msgs: list[dict], max_chars: int = 12000) -> None:
+        """[NEW] 强制截断保留窗口内的过长文本，彻底根除 Context Overflow 死锁。"""
+        for msg in msgs:
+            if msg.get("role") in ("tool", "user", "assistant") and isinstance(msg.get("content"), str):
+                if len(msg["content"]) > max_chars:
+                    half = int(max_chars * 0.4)
+                    omitted = len(msg["content"]) - (half * 2)
+                    msg["content"] = (
+                            msg["content"][:half] +
+                            f"\n\n... [System: Message exceeded {max_chars} chars. {omitted} chars aggressively removed to prevent memory overflow] ...\n\n" +
+                            msg["content"][-half:]
+                    )

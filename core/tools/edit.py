@@ -210,6 +210,9 @@ class EditTool(BaseTool):
         diff_text = "".join(diff)
         if note:
             diff_text = f"{note}\n{diff_text}"
+        from core.tools.base import truncate_long_output
+        diff_text = truncate_long_output(diff_text, threshold=4000)
+
         return ToolResult.ok(diff_text if diff_text else "No changes made.")
 
 

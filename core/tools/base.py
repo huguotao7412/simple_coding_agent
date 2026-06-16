@@ -45,13 +45,17 @@ class BaseTool(ABC):
 
     def validate_path(self, file_path: str, workspace_dir: str) -> str:
         import os
+        if not os.path.isabs(file_path):
+            file_path = os.path.join(workspace_dir, file_path)
+
         resolved = os.path.realpath(file_path)
         workspace_real = os.path.realpath(workspace_dir)
+
         if not resolved.startswith(workspace_real + os.sep) and resolved != workspace_real:
             from core.exceptions import ToolSecurityError
             raise ToolSecurityError(
                 self.name,
-                f"Path '{file_path}' escapes workspace '{workspace_dir}'",
+                f"Path '{file_path}' escapes workspace '{workspace_dir}'. Please use paths relative to the workspace."
             )
         return resolved
 
