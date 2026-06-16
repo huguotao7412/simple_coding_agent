@@ -250,7 +250,7 @@ class Agent:
                     on_token=on_token,
                 )
             except LLMAPIError as e:
-                error_msg = f"LLM API error: {e.status_code} - {e.message}"
+                error_msg = str(e)
                 self.ctx.add_assistant_message(content=error_msg)
                 return error_msg
 
@@ -322,7 +322,7 @@ class Agent:
                 # 任务彻底结束后，获取最终的完整 response
                 response = await chat_task
             except LLMAPIError as e:
-                error_msg = f"LLM API error: {e.status_code} - {e.message}"
+                error_msg = str(e)
                 self.ctx.add_assistant_message(content=error_msg)
                 yield AgentEvent(type="done", content=error_msg)
                 return
