@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import os
 import re
+import asyncio
 
 from .base import BaseTool, ToolResult
 
@@ -42,9 +43,9 @@ class SearchCodebaseTool(BaseTool):
             return ToolResult.fail(f"Workspace directory not found: {workspace_dir}")
 
         if mode == "symbol":
-            return await self._search_symbols(workspace_dir, query, include_ext)
+            return await asyncio.to_thread(self._search_symbols_sync, workspace_dir, query, include_ext)
         elif mode == "text":
-            return await self._search_text(workspace_dir, query, include_ext)
+            return await asyncio.to_thread(self._search_text_sync, workspace_dir, query, include_ext)
         else:
             return ToolResult.fail(
                 f"Unknown mode '{mode}'. Supported modes: 'symbol', 'text'."

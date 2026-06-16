@@ -107,29 +107,34 @@ class ContextManager:
 
         return (1, safe_end)
 
-    def compress(self) -> None:
-        """Drop oldest messages via sliding window, and aggressively truncate large messages to prevent overflow."""
+    async def compress(self, llm_client) -> None:
         start, end = self.get_compressible_range()
-
         if start >= end:
-            # 即使无旧消息可删，也要裁剪当前消息
             self._truncate_large_messages(self.messages)
             return
 
         messages_to_drop = self.messages[start:end]
         saved_scratchpad = self._extract_last_scratchpad(messages_to_drop)
 
+        # 构造摘要 Prompt 并调用 LLM
+        summary_prompt = "Summarize the following conversation history concisely, preserving key file paths, decisions, and bugs:\n\n"
+        summary_prompt += "\n".join(f"[{m['role']}]: {(m.get('content') or '')[:500]}" for m in messages_to_drop)
+
+        try:
+            # 利用传入的 llm_client 进行轻量级摘要
+            result = await llm_client.chat([{"role": "user", "content": summary_prompt[:16000]}])
+            summary = result.get("content", "Previous conversation summarized.")
+        except Exception:
+            summary = "(Conversation compressed but summary failed due to error.)"
+
         tail = self.messages[end:]
-        # [FIX] 对保留下来的近期对话进行巨型消息扫描与硬裁剪
         self._truncate_large_messages(tail)
 
         new_messages = self.messages[:start]
         if saved_scratchpad:
-            new_messages.append({
-                "role": "system",
-                "content": f"[Engineering Scratchpad]:\n{saved_scratchpad}",
-            })
+            new_messages.append({"role": "system", "content": f"[Engineering Scratchpad]:\n{saved_scratchpad}"})
 
+        new_messages.append({"role": "system", "content": f"[Conversation summary]: {summary}"})
         new_messages.extend(tail)
         self.messages = new_messages
 

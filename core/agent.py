@@ -186,7 +186,7 @@ class Agent:
                 "Please fix the format and call the tool again."
             )
             self.ctx.add_tool_result(tc["id"], error_hint)
-            self.action_history.append(self._hash_action(tool_name, {}))
+            self.action_history.append(self._hash_action(tool_name, {"__error": raw_args}))
             return (
                 tool_name, {},
                 ToolResult.fail(error_hint),
@@ -248,7 +248,7 @@ class Agent:
 
             # Check context and compress if needed
             if self.ctx.needs_compression():
-                self.ctx.compress()
+                await self.ctx.compress(self.llm)
 
             # Build payload: static prefix (cacheable) + dynamic context tail
             payload_messages = self.ctx.messages + [self._build_dynamic_context_msg()]
@@ -304,7 +304,7 @@ class Agent:
                 return
 
             if self.ctx.needs_compression():
-                self.ctx.compress()
+                await self.ctx.compress(self.llm)
                 yield AgentEvent(type="compaction")
 
             queue = asyncio.Queue()

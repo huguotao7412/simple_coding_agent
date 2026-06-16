@@ -251,7 +251,7 @@ class BashTool(BaseTool):
                             import subprocess
                             if sys.platform == "win32":
                                 # 必须使用 /T (Tree) 彻底击杀子进程，防止端口与文件被锁
-                                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+                                await asyncio.create_subprocess_exec("taskkill", "/F", "/T", "/PID", str(proc.pid), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                             else:
                                 proc.kill()
                         except Exception:
@@ -384,7 +384,7 @@ class BashTool(BaseTool):
 
         try:
             if platform.system() == "Windows":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+                await asyncio.create_subprocess_exec("taskkill", "/F", "/T", "/PID", str(proc.pid), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             else:
                 proc.kill()
             await proc.wait()

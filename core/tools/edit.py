@@ -117,6 +117,7 @@ class EditTool(BaseTool):
 
         content = content.replace("\r\n", "\n")
         search_block = search_block.replace("\r\n", "\n")
+        replace_block = replace_block.replace("\r\n", "\n")
 
         # ================================================================
         # Level 1 — Exact match
