@@ -80,22 +80,26 @@ class ContextManager:
         return self.estimate_tokens() > int(self.model_context_limit * self.compression_threshold)
 
     def get_compressible_range(self) -> tuple[int, int]:
-        """Return (start, end) indices of messages to compress.
-
-        Preserves system prompt (index 0) and last `keep_recent` turns.
-        """
-        if len(self.messages) <= 1 + self.keep_recent * 2:
+        if len(self.messages) <= 1:
             return (1, 1)
 
-        user_indices = [
-            i for i, m in enumerate(self.messages)
-            if m["role"] == "user"
-        ]
-        if len(user_indices) <= self.keep_recent:
-            return (1, 1)
+        # 1. 尝试常规策略：保留最近的几次 user 交互
+        user_indices = [i for i, m in enumerate(self.messages) if m["role"] == "user"]
+        if len(user_indices) > self.keep_recent:
+            return (1, user_indices[-self.keep_recent])
 
-        end = user_indices[-self.keep_recent]
-        return (1, end)
+        # 2. 兜底防爆策略：在超长无 user 的自主工具循环中强行寻找截断点
+        safe_end = 1
+        if len(self.messages) > 15:
+            # 从后往前找，留足尾部上下文（约最近的10条消息）
+            for i in range(len(self.messages) - 10, 1, -1):
+                # 安全切分点：assistant 角色（顺带丢弃它之前的所有内容）
+                # 这样截断不会导致 tool_result 找不到对应的 assistant tool_call
+                if self.messages[i]["role"] == "assistant":
+                    safe_end = i
+                    break
+
+        return (1, safe_end)
 
     def compress(self) -> None:
         """Drop oldest messages via sliding window, preserving system prompt and scratchpad.

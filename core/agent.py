@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import json
 import os
+import asyncio
 import platform
 import subprocess
 import sys
@@ -286,22 +287,37 @@ class Agent:
                 self.ctx.compress()
                 yield AgentEvent(type="compaction")
 
-            tokens: list[str] = []
+            queue = asyncio.Queue()
 
             def on_token(t: str) -> None:
-                tokens.append(t)
+                # 使用 put_nowait 将字塞入队列，不阻塞回调
+                queue.put_nowait(t)
 
             # Build payload: static prefix (cacheable) + dynamic context tail
             payload_messages = self.ctx.messages + [self._build_dynamic_context_msg()]
 
-            response = await self.llm.chat(
-                messages=payload_messages,
-                tools=tool_schemas if tool_schemas else None,
-                on_token=on_token,
+            # 将 LLM 请求作为后台任务启动，不要用 await 在这里死等
+            chat_task = asyncio.create_task(
+                self.llm.chat(
+                    messages=payload_messages,
+                    tools=tool_schemas if tool_schemas else None,
+                    on_token=on_token,
+                )
             )
 
-            for token in tokens:
-                yield AgentEvent(type="thought", token=token, content=token)
+            # 只要后台任务没结束，或者队列里还有字，就一直循环取字
+            while not chat_task.done() or not queue.empty():
+                try:
+                    # 设置极短的超时时间，拿到字立刻 yield 出去
+                    token = await asyncio.wait_for(queue.get(), timeout=0.05)
+                    yield AgentEvent(type="thought", token=token, content=token)
+                except asyncio.TimeoutError:
+                    # 如果这 0.05 秒没拿到字，continue 继续下一轮轮询
+                    continue
+
+            # 任务彻底结束后，获取最终的完整 response
+            response = await chat_task
+            # === 流式接收修改结束 ===
 
             tool_calls = response.get("tool_calls")
 

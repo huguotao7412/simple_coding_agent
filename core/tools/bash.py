@@ -231,15 +231,19 @@ class BashTool(BaseTool):
                             proc.stdout.readline(), timeout=120
                         )
                     except asyncio.TimeoutError:
-                        # Session hung — kill it so next call starts fresh
+                        # Session hung — kill it completely so next call starts fresh
                         self._session_proc = None
                         try:
-                            proc.kill()
+                            import sys
+                            import subprocess
+                            if sys.platform == "win32":
+                                # 必须使用 /T (Tree) 彻底击杀子进程，防止端口与文件被锁
+                                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+                            else:
+                                proc.kill()
                         except Exception:
                             pass
-                        return ToolResult.fail(
-                            "Command timed out after 120 seconds. Shell session reset."
-                        )
+                        return ToolResult.fail("Command timed out after 120 seconds. Shell session reset.")
 
                     if not line:
                         # EOF — session died
