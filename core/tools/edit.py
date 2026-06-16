@@ -209,37 +209,32 @@ class EditTool(BaseTool):
 
 
 def _map_norm_to_original(
-    original: str, normalized: str, norm_start: int, norm_end: int
+        original: str, normalized: str, norm_start: int, norm_end: int
 ) -> str | None:
-    """Map a span in the normalized text back to the corresponding span in the original.
-
-    Walks both texts line‑by‑line to handle trailing‑whitespace differences.
-    """
     orig_lines = original.splitlines(keepends=True)
     norm_lines = normalized.splitlines(keepends=True)
 
-    # Build a mapping: for each normalized character position, which original line?
-    # Simpler: walk through both line by line and find the matching region.
-    orig_pos = 0
-    norm_pos = 0
-    start_orig = None
-    end_orig = None
+    def get_orig_idx(norm_idx: int) -> int:
+        o_pos = 0
+        n_pos = 0
+        for o, n in zip(orig_lines, norm_lines):
+            # 判断字符索引是否落在当前行
+            if n_pos <= norm_idx < n_pos + len(n):
+                offset = norm_idx - n_pos
+                # 如果匹配到了去空格后的换行符位置，强行将其映射回原始文本的换行符
+                # 这样就能把原本被剔除的尾随空格完整囊括进替换块中
+                if n.endswith('\n') and offset == len(n) - 1:
+                    return o_pos + len(o) - 1
+                elif n.endswith('\r\n') and offset >= len(n) - 2:
+                    return o_pos + len(o) - (len(n) - offset)
+                return o_pos + offset
+            o_pos += len(o)
+            n_pos += len(n)
+        return o_pos
 
-    for o_line, n_line in zip(orig_lines, norm_lines):
-        o_stripped = o_line.rstrip("\n\r")
-        n_stripped = n_line.rstrip("\n\r")
+    start_orig = get_orig_idx(norm_start)
+    end_orig = get_orig_idx(norm_end)
 
-        if norm_pos >= norm_start and start_orig is None:
-            start_orig = orig_pos
-        if norm_pos >= norm_end and end_orig is None:
-            end_orig = orig_pos
-
-        orig_pos += len(o_line)
-        norm_pos += len(n_line)
-
-    if start_orig is None:
+    if start_orig >= end_orig:
         return None
-    if end_orig is None:
-        end_orig = orig_pos
-
     return original[start_orig:end_orig]

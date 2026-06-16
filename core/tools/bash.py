@@ -3,6 +3,7 @@ from __future__ import annotations
 import platform
 import subprocess
 import asyncio
+import uuid
 import re
 import os
 import sys
@@ -208,11 +209,17 @@ class BashTool(BaseTool):
             if proc is None or proc.returncode is not None:
                 return ToolResult.fail("Shell session is not running. Please retry.")
 
+            import sys
+            import uuid  # 引入 uuid 生成动态不可预测的 Marker
+
+            # --- 修复：生成动态 UUID Marker 防止碰撞 ---
+            marker_id = f"__SCA_{uuid.uuid4().hex}__"
+
             # Build the exit-code marker
             if sys.platform == "win32":
-                marker = "echo __SCA_MARKER__ %errorlevel%"
+                marker = f"echo {marker_id} %errorlevel%"
             else:
-                marker = "echo __SCA_MARKER__ $?"
+                marker = f"echo {marker_id} $?"
 
             try:
                 # --- Write command + marker into the session ---
@@ -251,12 +258,13 @@ class BashTool(BaseTool):
 
                     decoded = line.decode("utf-8", errors="replace")
 
-                    if "__SCA_MARKER__" in decoded:
+                    # 将硬编码的 __SCA_MARKER__ 替换为动态 marker_id
+                    if marker_id in decoded:
                         marker_found = True
                         # Parse exit code from marker line
                         parts = decoded.strip().split()
                         for i, p in enumerate(parts):
-                            if p == "__SCA_MARKER__":
+                            if p == marker_id:  # 同步修改匹配目标
                                 if i + 1 < len(parts):
                                     try:
                                         exit_code = int(parts[i + 1])

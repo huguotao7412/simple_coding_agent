@@ -318,8 +318,14 @@ class Agent:
                 if not chat_task.done():
                     chat_task.cancel()
 
+            try:
                 # 任务彻底结束后，获取最终的完整 response
-            response = await chat_task
+                response = await chat_task
+            except LLMAPIError as e:
+                error_msg = f"LLM API error: {e.status_code} - {e.message}"
+                self.ctx.add_assistant_message(content=error_msg)
+                yield AgentEvent(type="done", content=error_msg)
+                return
             # === 流式接收修改结束 ===
 
             tool_calls = response.get("tool_calls")
