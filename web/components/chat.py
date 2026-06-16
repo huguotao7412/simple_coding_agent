@@ -57,6 +57,10 @@ def render_current_events():
             st.toast("上下文已压缩，释放空间")
             i += 1
 
+        elif event.type == "error":
+            st.error(event.content)
+            i += 1
+
         elif event.type == "done":
             content = event.content or ""
             if content.strip():

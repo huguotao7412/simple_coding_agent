@@ -48,6 +48,11 @@ class Bridge:
                         self.ui.render_tool_status(event.tool_name or "tool", status)
                     elif event.type == "compaction":
                         self.ui.render_info("\n[System: Context compressed]")
+                    elif event.type == "error":
+                        if stream:
+                            stream.__exit__(None, None, None)
+                            stream = None
+                        self.ui.render_error(f"Agent Error: {event.content}")
             finally:
                 if stream:
                     stream.__exit__(None, None, None)

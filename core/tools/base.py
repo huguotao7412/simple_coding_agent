@@ -56,7 +56,7 @@ class BaseTool(ABC):
         return resolved
 
 
-TRUNCATION_THRESHOLD = 8000
+TRUNCATION_THRESHOLD = 3000
 
 
 def truncate_long_output(text: str, threshold: int = TRUNCATION_THRESHOLD) -> str:

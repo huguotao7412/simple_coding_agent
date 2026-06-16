@@ -21,7 +21,7 @@ from .exceptions import LLMAPIError
 @dataclass
 class AgentEvent:
     type: str
-    # "thought" / "tool_call" / "tool_result" / "compaction" / "done"
+    # "thought" / "tool_call" / "tool_result" / "compaction" / "error" / "done"
     content: str = ""
     tool_name: str | None = None
     tool_args: dict | None = None
@@ -236,6 +236,8 @@ class Agent:
         tool_schemas = [t.schema for t in self.tools_by_name.values()]
 
         while True:
+
+
             # Check context and compress if needed
             if self.ctx.needs_compression():
                 self.ctx.compress()
@@ -282,7 +284,17 @@ class Agent:
         self.ctx.add_user_message(user_input)
         tool_schemas = [t.schema for t in self.tools_by_name.values()]
 
+        step_count = 0
+        MAX_STEPS = 5
+
         while True:
+            step_count += 1
+            if step_count > MAX_STEPS:
+                error_msg = "安全熔断：Agent 单轮工具调用次数已达上限(5次)。系统已强制暂停以防止死循环和网络崩溃。请根据当前线索直接提问。"
+                self.ctx.add_assistant_message(content=error_msg)
+                yield AgentEvent(type="error", content=error_msg)
+                return
+
             if self.ctx.needs_compression():
                 self.ctx.compress()
                 yield AgentEvent(type="compaction")
@@ -324,7 +336,7 @@ class Agent:
             except LLMAPIError as e:
                 error_msg = str(e)
                 self.ctx.add_assistant_message(content=error_msg)
-                yield AgentEvent(type="done", content=error_msg)
+                yield AgentEvent(type="error", content=error_msg)
                 return
             # === 流式接收修改结束 ===
 

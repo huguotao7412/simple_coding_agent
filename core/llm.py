@@ -52,20 +52,22 @@ class LLMClient:
         if tools:
             body["tools"] = tools
 
-        async with httpx.AsyncClient(timeout=120) as client:
+        timeout_config = httpx.Timeout(600.0)
+        async with httpx.AsyncClient(timeout=timeout_config) as client:
             try:
                 async with client.stream(
-                    "POST",
-                    f"{self.base_url}/chat/completions",
-                    headers=self._headers(),
-                    json=body,
+                        "POST",
+                        f"{self.base_url}/chat/completions",
+                        headers=self._headers(),
+                        json=body,
                 ) as response:
                     if response.status_code != 200:
                         text = await response.aread()
                         raise LLMAPIError(response.status_code, text.decode()[:500])
                     return await self._parse_stream(response, on_token)
             except httpx.HTTPError as e:
-                raise LLMAPIError(0, str(e))
+                error_detail = f"{type(e).__name__}: {str(e) or 'Connection dropped or timed out'}"
+                raise LLMAPIError(0, error_detail)
 
     async def _parse_stream(
             self,
@@ -123,10 +125,12 @@ class LLMClient:
                                 tool_call_buf[idx]["function"]["name"] = tc["function"]["name"]
                             if "arguments" in tc["function"]:
                                 tool_call_buf[idx]["function"]["arguments"] += tc["function"]["arguments"]
-        except httpx.HTTPError:
-            # 极简防御：如果服务端异常掐断了流（如 RemoteProtocolError 或 Timeout）
-            # 我们优雅地吞掉异常，退出循环，直接保留并返回已经收集到的半截数据。
-            pass
+        except httpx.HTTPError as e:
+                                # 极简防御：如果服务端异常掐断了流
+             if not content_parts and not tool_call_buf:
+                                    # 如果什么数据都没拿到就断开了（比如彻底超时），必须抛出异常让 UI 知道
+                     raise LLMAPIError(0, f"Stream connection dropped or timed out: {e}")
+             pass
 
         # Build tool_calls list from buffer
         for idx in sorted(tool_call_buf.keys()):
