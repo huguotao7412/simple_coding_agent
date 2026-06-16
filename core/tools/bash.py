@@ -51,7 +51,9 @@ async def _read_stream(stream: asyncio.StreamReader | None, buffer: deque[str]) 
 class BashTool(BaseTool):
     name = "bash"
     description = (
-        "Execute shell commands with four action modes:\n"
+        "Execute shell commands with four action modes.\n"
+        "IMPORTANT: Bash is stateless — each call starts a fresh subshell. "
+        "Do NOT use `cd` commands. Use the `cwd` parameter to specify the working directory.\n\n"
         "• 'run' (default): block until completion (120s timeout), return full output.\n"
         "• 'background': launch a long-running server/daemon, return its PID immediately.\n"
         "• 'logs': fetch the last 500 lines of buffered output from a background process.\n"
@@ -76,6 +78,14 @@ class BashTool(BaseTool):
                 "'kill' terminates a background process by PID."
             ),
         },
+        "cwd": {
+            "type": "string",
+            "description": (
+                "Optional relative path to execute the command in. "
+                "Defaults to workspace root. Use this instead of 'cd' commands "
+                "since each bash call is a fresh subshell."
+            ),
+        },
         "pid": {
             "type": "integer",
             "description": (
@@ -90,6 +100,7 @@ class BashTool(BaseTool):
         self,
         command: str,
         action: str = "run",
+        cwd: str = "",
         pid: int | None = None,
         workspace_dir: str = "",
     ) -> ToolResult:
@@ -101,15 +112,25 @@ class BashTool(BaseTool):
                         f"Command blocked by security policy: matched pattern '{pattern}'"
                     )
 
-        cwd = workspace_dir or os.getcwd()
+        # Resolve working directory from cwd parameter (relative to workspace)
+        base_dir = workspace_dir or os.getcwd()
+        target_dir = base_dir
+        if cwd:
+            target_dir = os.path.abspath(os.path.join(base_dir, cwd))
+            # Security: prevent directory escape
+            abs_base = os.path.abspath(base_dir)
+            if not target_dir.startswith(abs_base + os.sep) and target_dir != abs_base:
+                return ToolResult.fail("Security Error: cwd escapes workspace.")
+            if not os.path.isdir(target_dir):
+                return ToolResult.fail(f"Directory not found: {cwd}")
 
         # ================================================================
         # Route by action
         # ================================================================
         if action == "run":
-            return await self._run_blocking(command, cwd)
+            return await self._run_blocking(command, target_dir)
         elif action == "background":
-            return await self._run_background(command, cwd)
+            return await self._run_background(command, target_dir)
         elif action == "logs":
             return self._get_logs(pid)
         elif action == "kill":
@@ -124,11 +145,16 @@ class BashTool(BaseTool):
     async def _run_blocking(self, command: str, cwd: str) -> ToolResult:
         """Original blocking behaviour with 120s timeout."""
         try:
+            env = os.environ.copy()
+            env["DEBIAN_FRONTEND"] = "noninteractive"
+            env["CI"] = "1"
+            env["GIT_TERMINAL_PROMPT"] = "0"
             proc = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
+                env=env,
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=120
@@ -160,11 +186,16 @@ class BashTool(BaseTool):
     async def _run_background(self, command: str, cwd: str) -> ToolResult:
         """Launch a command in the background, capture its output asynchronously."""
         try:
+            env = os.environ.copy()
+            env["DEBIAN_FRONTEND"] = "noninteractive"
+            env["CI"] = "1"
+            env["GIT_TERMINAL_PROMPT"] = "0"
             proc = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,  # merge stderr into stdout
                 cwd=cwd,
+                env=env,
             )
         except Exception as e:
             return ToolResult.fail(f"Failed to start background process: {e}")

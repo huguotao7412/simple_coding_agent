@@ -1,7 +1,25 @@
 from __future__ import annotations
+import ast
 import difflib
+import json
 import os
 from .base import BaseTool, ToolResult
+
+
+def _validate_syntax(file_path: str, content: str) -> str | None:
+    """Validate content against file extension. Returns error message or None if valid."""
+    _, ext = os.path.splitext(file_path)
+    if ext == ".py":
+        try:
+            ast.parse(content)
+        except SyntaxError as e:
+            return f"SyntaxError: {e.msg} at line {e.lineno}, column {e.offset}"
+    elif ext == ".json":
+        try:
+            json.loads(content)
+        except json.JSONDecodeError as e:
+            return f"JSONDecodeError: {e.msg} at line {e.lineno}, column {e.colno}"
+    return None
 
 
 class EditTool(BaseTool):
@@ -147,6 +165,14 @@ class EditTool(BaseTool):
             + file_lines[end_idx:]
         )
         new_content = "".join(new_lines)
+
+        # --- Proactive syntax validation before writing ---
+        syntax_error = _validate_syntax(file_path, new_content)
+        if syntax_error:
+            return ToolResult.fail(
+                f"Edit would result in SyntaxError: {syntax_error}\nCode change rejected.",
+                content="",
+            )
 
         # --- Write back ---
         with open(file_path, "w", encoding="utf-8") as f:

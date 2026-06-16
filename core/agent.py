@@ -108,17 +108,24 @@ class Agent:
         # Circuit breaker: track recent tool calls to detect loops
         self.action_history: deque[int] = deque(maxlen=5)
 
-        # Build dynamic system prompt with environment context
-        workspace_tree = get_workspace_tree(workspace_dir)
-        runtime_env = get_runtime_env()
-        dynamic_prompt = (
-            SYSTEM_PROMPT
-            + f"\n\n<workspace_context>\n{workspace_tree}\n</workspace_context>"
-            + f"\n\n<environment_context>\n{runtime_env}\n</environment_context>"
-        )
-        # Override context_manager's system prompt with our dynamic version
-        context_manager.messages[0] = {"role": "system", "content": dynamic_prompt}
+        # Keep context_manager.messages[0] as the pure static SYSTEM_PROMPT.
+        # Dynamic workspace/environment context is injected per-request to
+        # preserve prompt cache hits on messages[0].
         self.ctx = context_manager
+
+    def _build_dynamic_context_msg(self) -> dict:
+        """Build a system-level message with current workspace tree and runtime env.
+
+        This is appended to messages at API-call time rather than baked into
+        messages[0], so the prefix (static SYSTEM_PROMPT) always hits the cache.
+        """
+        workspace_tree = get_workspace_tree(self.workspace_dir)
+        runtime_env = get_runtime_env()
+        content = (
+            f"<workspace_context>\n{workspace_tree}\n</workspace_context>\n"
+            f"<environment_context>\n{runtime_env}\n</environment_context>"
+        )
+        return {"role": "system", "content": content}
 
     def _hash_action(self, tool_name: str, args: dict) -> int:
         """Create a deterministic hash for a tool_name + args combination."""
@@ -231,9 +238,13 @@ class Agent:
             # Check context and compress if needed
             if self.ctx.needs_compression():
                 await self.ctx.compress(self.llm)
+
+            # Build payload: static prefix (cacheable) + dynamic context tail
+            payload_messages = self.ctx.messages + [self._build_dynamic_context_msg()]
+
             try:
                 response = await self.llm.chat(
-                    messages=self.ctx.messages,
+                    messages=payload_messages,
                     tools=tool_schemas if tool_schemas else None,
                     on_token=on_token,
                 )
@@ -280,8 +291,11 @@ class Agent:
             def on_token(t: str) -> None:
                 tokens.append(t)
 
+            # Build payload: static prefix (cacheable) + dynamic context tail
+            payload_messages = self.ctx.messages + [self._build_dynamic_context_msg()]
+
             response = await self.llm.chat(
-                messages=self.ctx.messages,
+                messages=payload_messages,
                 tools=tool_schemas if tool_schemas else None,
                 on_token=on_token,
             )
@@ -331,13 +345,3 @@ class Agent:
                     tool_result=result,
                 )
 
-    def refresh_system_prompt(self) -> None:
-        from .system_prompt import SYSTEM_PROMPT
-        workspace_tree = get_workspace_tree(self.workspace_dir)
-        runtime_env = get_runtime_env()
-        dynamic_prompt = (
-                SYSTEM_PROMPT
-                + f"\n\n<workspace_context>\n{workspace_tree}\n</workspace_context>"
-                + f"\n\n<environment_context>\n{runtime_env}\n</environment_context>"
-        )
-        self.ctx.messages[0] = {"role": "system", "content": dynamic_prompt}
