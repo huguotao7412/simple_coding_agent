@@ -64,16 +64,16 @@ class ContextManager:
         })
 
     def estimate_tokens(self) -> int:
-        """Rough token count estimation: ~4 chars per token."""
+        """Rough token count estimation using UTF-8 byte length heuristic."""
         total = 0
         for msg in self.messages:
             for key, value in msg.items():
                 if isinstance(value, str):
-                    total += len(value) // 4
+                    total += len(value.encode('utf-8', errors='ignore')) // 3
                 elif isinstance(value, list):
                     for item in value:
                         if isinstance(item, dict):
-                            total += len(str(item)) // 4
+                            total += len(str(item).encode('utf-8', errors='ignore')) // 3
         return max(1, total)
 
     def needs_compression(self) -> bool:

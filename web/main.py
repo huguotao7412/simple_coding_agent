@@ -83,7 +83,11 @@ with col_main:
 
     user_input = st.chat_input("输入你的指令...")
     if user_input and not st.session_state.streaming:
-        asyncio.run(bridge.handle_user_input(user_input, st))
+        event_placeholder = st.empty()
+        for _ in bridge.handle_user_input_sync(user_input, st):
+            with event_placeholder.container():
+                render_current_events()
+        st.rerun()
 
 with col_preview:
     if selected_file and Path(selected_file).exists():

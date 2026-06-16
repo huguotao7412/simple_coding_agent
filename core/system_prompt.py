@@ -15,6 +15,8 @@ You solve programming tasks by using tools to read, write, edit, and execute cod
   - `action="background"`: launch a long-running server/daemon, returns a PID immediately.
   - `action="logs"`: retrieve the last 500 lines of buffered output from a background process by PID.
   - `action="kill"`: terminate a background process by PID and clean up.
+  【CRITICAL WARNING】: 
+  NEVER run interactive commands (like `python` without scripts, `vim`, `nano`, `top`, or scripts expecting `stdin` input) using `action="run"`. They will swallow the execution marker, deadlock the terminal, and crash the session. ALWAYS use `action="background"` for any server or long-running process, and pass `-y` to commands like `apt` or `npm init`.
   Use background→logs→kill to implement the start→verify→stop dev loop (e.g., `npm run dev` → `curl` → kill).
 - **search_codebase**: 了解陌生项目架构时的首选工具。使用 'symbol' 模式快速查找类和函数的签名与位置；使用 'text' 模式查找变量、报错信息或特定字符串。
 

@@ -216,14 +216,14 @@ class BashTool(BaseTool):
             import sys
             import uuid  # 引入 uuid 生成动态不可预测的 Marker
 
-            # --- 修复：生成动态 UUID Marker 防止碰撞 ---
             marker_id = f"__SCA_{uuid.uuid4().hex}__"
 
-            # Build the exit-code marker
             if sys.platform == "win32":
-                marker = f"echo. && echo {marker_id} %errorlevel%"
+                # Windows CMD: 利用延迟环境变量或直接设值，echo. 不会重置 errorlevel
+                marker = f"set __SCA_ERR=%errorlevel%\r\necho.\r\necho {marker_id} %__SCA_ERR%"
             else:
-                marker = f"echo \"\" && echo {marker_id} $?"
+                # Bash: 立即将 $? 保存到变量中，防止被后续的 echo 覆盖
+                marker = f"__SCA_ERR=$?; echo \"\"; echo {marker_id} $__SCA_ERR"
 
             try:
                 # --- Write command + marker into the session ---
