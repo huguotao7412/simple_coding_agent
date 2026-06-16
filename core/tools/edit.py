@@ -115,6 +115,9 @@ class EditTool(BaseTool):
         except Exception as e:
             return ToolResult.fail(str(e))
 
+        content = content.replace("\r\n", "\n")
+        search_block = search_block.replace("\r\n", "\n")
+
         # ================================================================
         # Level 1 — Exact match
         # ================================================================

@@ -88,10 +88,10 @@ class LLMClient:
                 if data == "[DONE]":
                     break
 
-                import json
                 try:
                     chunk = json.loads(data)
                 except json.JSONDecodeError:
+                    logging.getLogger(__name__).debug("Failed to parse SSE data line: %s", data[:200])
                     continue
 
                 choices = chunk.get("choices")

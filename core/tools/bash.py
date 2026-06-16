@@ -221,9 +221,9 @@ class BashTool(BaseTool):
 
             # Build the exit-code marker
             if sys.platform == "win32":
-                marker = f"echo {marker_id} %errorlevel%"
+                marker = f"echo. && echo {marker_id} %errorlevel%"
             else:
-                marker = f"echo {marker_id} $?"
+                marker = f"echo \"\" && echo {marker_id} $?"
 
             try:
                 # --- Write command + marker into the session ---
@@ -265,16 +265,10 @@ class BashTool(BaseTool):
                     # 将硬编码的 __SCA_MARKER__ 替换为动态 marker_id
                     if marker_id in decoded:
                         marker_found = True
-                        # Parse exit code from marker line
-                        parts = decoded.strip().split()
-                        for i, p in enumerate(parts):
-                            if p == marker_id:  # 同步修改匹配目标
-                                if i + 1 < len(parts):
-                                    try:
-                                        exit_code = int(parts[i + 1])
-                                    except ValueError:
-                                        pass
-                                break
+                        import re
+                        match = re.search(f"{marker_id}\\s+(\\d+)", decoded)
+                        if match:
+                            exit_code = int(match.group(1))
                         break
 
                     output_lines.append(decoded)
