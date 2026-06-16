@@ -3,6 +3,7 @@ import ast
 import difflib
 import json
 import os
+import re
 from .base import BaseTool, ToolResult
 
 
@@ -23,8 +24,8 @@ def _validate_syntax(file_path: str, content: str) -> str | None:
 
 
 def _normalize_lines(text: str) -> str:
-    """Strip trailing whitespace from each line (preserves leading indent)."""
-    return "\n".join(line.rstrip() for line in text.splitlines())
+    """Strip trailing whitespace from each line (preserves leading indent and exact line count)."""
+    return re.sub(r'[ \t]+$', '', text, flags=re.MULTILINE)
 
 
 def _fuzzy_find(content: str, search: str) -> tuple[int, int] | None:
@@ -142,9 +143,10 @@ class EditTool(BaseTool):
             # ================================================================
             span = _fuzzy_find(content, search_block)
             if span is not None:
-                old_block = content[span[0]:span[1]]
-                new_content = content.replace(old_block, replace_block, 1)
-                return self._write_and_diff(
+                old_block = _map_norm_to_original(content, content_norm, span[0], span[1])
+                if old_block is not None:
+                    new_content = content.replace(old_block, replace_block, 1)
+                    return self._write_and_diff(
                     file_path, content, new_content,
                     note="[Note: fuzzy match applied — verify the diff carefully]",
                 )

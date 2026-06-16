@@ -70,6 +70,7 @@ class LiveMarkdownStream:
             console=self.console,
             refresh_per_second=10,
             vertical_overflow="visible",
+            transient=True,
         )
         self._live.start()
         return self

@@ -305,17 +305,20 @@ class Agent:
                 )
             )
 
-            # 只要后台任务没结束，或者队列里还有字，就一直循环取字
-            while not chat_task.done() or not queue.empty():
-                try:
-                    # 设置极短的超时时间，拿到字立刻 yield 出去
-                    token = await asyncio.wait_for(queue.get(), timeout=0.05)
-                    yield AgentEvent(type="thought", token=token, content=token)
-                except asyncio.TimeoutError:
-                    # 如果这 0.05 秒没拿到字，continue 继续下一轮轮询
-                    continue
+            try:
+                # 只要后台任务没结束，或者队列里还有字，就一直循环取字
+                while not chat_task.done() or not queue.empty():
+                    try:
+                        token = await asyncio.wait_for(queue.get(), timeout=0.05)
+                        yield AgentEvent(type="thought", token=token, content=token)
+                    except asyncio.TimeoutError:
+                        continue
+            finally:
+                # 极简防御：一旦生成器意外销毁或中断，立刻掐断 LLM 后台请求
+                if not chat_task.done():
+                    chat_task.cancel()
 
-            # 任务彻底结束后，获取最终的完整 response
+                # 任务彻底结束后，获取最终的完整 response
             response = await chat_task
             # === 流式接收修改结束 ===
 
