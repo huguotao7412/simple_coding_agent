@@ -384,7 +384,11 @@ class BashTool(BaseTool):
 
         try:
             if platform.system() == "Windows":
-                await asyncio.create_subprocess_exec("taskkill", "/F", "/T", "/PID", str(proc.pid), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                killer = await asyncio.create_subprocess_exec(
+                    "taskkill", "/F", "/T", "/PID", str(proc.pid),
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                await killer.wait()
             else:
                 proc.kill()
             await proc.wait()

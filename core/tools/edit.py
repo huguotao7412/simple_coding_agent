@@ -110,10 +110,13 @@ class EditTool(BaseTool):
             return ToolResult.fail(f"File not found: {file_path}")
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, "r", encoding="utf-8", newline="") as f:
                 content = f.read()
         except Exception as e:
             return ToolResult.fail(str(e))
+
+        # 动态嗅探当前文件的换行符风格
+        original_newline = "\r\n" if "\r\n" in content else "\n"
 
         content = content.replace("\r\n", "\n")
         search_block = search_block.replace("\r\n", "\n")
@@ -141,7 +144,7 @@ class EditTool(BaseTool):
                 if mapped is not None:
                     old_block, s_idx, e_idx = mapped
                     new_content = content[:s_idx] + replace_block + content[e_idx:]
-                    return self._write_and_diff(file_path, content, new_content)
+                    return self._write_and_diff(file_path, content, new_content, original_newline=original_newline)
 
             # ================================================================
             # Level 3 — Fuzzy similarity via SequenceMatcher
@@ -154,6 +157,7 @@ class EditTool(BaseTool):
                     new_content = content[:s_idx] + replace_block + content[e_idx:]
                     return self._write_and_diff(
                         file_path, content, new_content,
+                        original_newline=original_newline,
                         note="[Note: fuzzy match applied — verify the diff carefully]",
                     )
 
@@ -178,13 +182,14 @@ class EditTool(BaseTool):
 
         # --- Unique exact match — fast path ---
         new_content = content.replace(search_block, replace_block, 1)
-        return self._write_and_diff(file_path, content, new_content)
+        return self._write_and_diff(file_path, content, new_content, original_newline=original_newline)
 
     def _write_and_diff(
         self,
         file_path: str,
         old_content: str,
         new_content: str,
+        original_newline: str = "\n",
         note: str = "",
     ) -> ToolResult:
         """Validate syntax, write the file, and return a unified diff."""
@@ -198,8 +203,10 @@ class EditTool(BaseTool):
             )
 
         # --- Write back ---
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
+        # 恢复原始换行符并强制以 newline="" 写入，避免系统二次转码
+        new_content_restored = new_content.replace("\n", original_newline)
+        with open(file_path, "w", encoding="utf-8", newline="") as f:
+            f.write(new_content_restored)
 
         # --- Return unified diff ---
         diff = difflib.unified_diff(

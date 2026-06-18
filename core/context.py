@@ -146,8 +146,12 @@ class ContextManager:
         self._truncate_large_messages(tail)
 
         new_messages = self.messages[:start]
-        if saved_scratchpad:
-            new_messages.append({"role": "system", "content": f"[Engineering Scratchpad]:\n{saved_scratchpad}"})
+
+        has_newer_scratchpad = self._extract_last_scratchpad(tail) is not None
+
+        if saved_scratchpad and not has_newer_scratchpad:
+            new_messages.append({"role": "system",
+                                 "content": f"[Engineering Scratchpad]:\n{saved_scratchpad}"})
 
         new_messages.append({"role": "system", "content": f"[Conversation summary]: {summary}"})
         new_messages.extend(tail)
