@@ -35,6 +35,8 @@ def main():
     from core.tools.edit import EditTool
     from core.tools.bash import BashTool
     from core.tools.search import SearchCodebaseTool
+    from core.tools.list_dir import ListDirTool
+    from core.tools.read_outline import ReadOutlineTool
     from core.system_prompt import SYSTEM_PROMPT
     from cli.ui import UI
     from cli.bridge import Bridge
@@ -47,7 +49,7 @@ def main():
     )
 
     ctx = ContextManager(system_prompt=SYSTEM_PROMPT)
-    tools = [ReadTool(), WriteTool(), EditTool(), BashTool(), SearchCodebaseTool()]
+    tools = [ReadTool(), WriteTool(), EditTool(), BashTool(), SearchCodebaseTool(), ListDirTool(), ReadOutlineTool()]
     agent = Agent(llm_client=llm, context_manager=ctx, tools=tools, workspace_dir=workspace_dir)
 
     ui = UI()

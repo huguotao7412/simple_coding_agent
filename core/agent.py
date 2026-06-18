@@ -61,26 +61,40 @@ def _walk_tree_pure_python(workspace_dir: str, max_depth: int = 2) -> str:
     return "\n".join(lines)
 
 
-def get_workspace_tree(workspace_dir: str) -> str:
-    """Get directory structure of workspace. Tries `tree` command first, falls back to pure Python."""
+def get_workspace_tree(workspace_dir: str, max_lines: int = 100) -> str:
+    """Get directory structure of workspace. Tries `tree` command first, falls back to pure Python.
+
+    Truncates output to max_lines to prevent context overflow in large projects.
+    """
     if platform.system() == "Windows":
-        return _walk_tree_pure_python(workspace_dir)
-    try:
-        result = subprocess.run(
-            [
-                "tree", "-L", "2", "-I",
-                ".git|__pycache__|.venv|node_modules|.mypy_cache|.pytest_cache",
-                workspace_dir,
-            ],
-            capture_output=True,
-            timeout=10,
-            text=True,
+        raw = _walk_tree_pure_python(workspace_dir)
+    else:
+        try:
+            result = subprocess.run(
+                [
+                    "tree", "-L", "2", "-I",
+                    ".git|__pycache__|.venv|node_modules|.mypy_cache|.pytest_cache",
+                    workspace_dir,
+                ],
+                capture_output=True,
+                timeout=10,
+                text=True,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                raw = result.stdout.strip()
+            else:
+                raw = _walk_tree_pure_python(workspace_dir)
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            raw = _walk_tree_pure_python(workspace_dir)
+
+    lines = raw.split("\n")
+    if len(lines) > max_lines:
+        raw = (
+            "\n".join(lines[:max_lines])
+            + "\n... [Workspace tree truncated due to size. "
+            + "Use 'list_dir' tool to explore specific directories] ..."
         )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        pass
-    return _walk_tree_pure_python(workspace_dir)
+    return raw
 
 
 def get_runtime_env() -> str:
@@ -148,8 +162,11 @@ class Agent:
         if self.detect_loop(action_hash):
             intervention = (
                 "System Alert: Detected repeated failed tool calls. "
-                "STOP current action. Please reason about why it failed "
-                "and use read or search codebase to gather new context."
+                "You are stuck in a loop. STOP current action immediately. "
+                "Try using search_codebase with a DIFFERENT query, "
+                "or read a DIFFERENT file. "
+                "Please reason about why it failed and gather new context "
+                "before retrying the same action."
             )
             self.ctx.add_tool_result(tool_call_id, intervention)
             self.action_history.append(action_hash)
@@ -300,7 +317,7 @@ class Agent:
         tool_schemas = [t.schema for t in self.tools_by_name.values()]
 
         step_count = 0
-        MAX_STEPS = 5
+        MAX_STEPS = 30
 
         while True:
             step_count += 1

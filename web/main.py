@@ -24,6 +24,8 @@ from core.tools.write import WriteTool
 from core.tools.edit import EditTool
 from core.tools.bash import BashTool
 from core.tools.search import SearchCodebaseTool
+from core.tools.list_dir import ListDirTool
+from core.tools.read_outline import ReadOutlineTool
 from core.system_prompt import SYSTEM_PROMPT
 from web.bridge import WebBridge
 from web.components.sidebar import render_sidebar
@@ -48,7 +50,7 @@ def init_agent() -> Agent:
         max_tokens=max_tokens,
     )
     ctx = ContextManager(system_prompt=SYSTEM_PROMPT)
-    tools = [ReadTool(), WriteTool(), EditTool(), BashTool(), SearchCodebaseTool()]
+    tools = [ReadTool(), WriteTool(), EditTool(), BashTool(), SearchCodebaseTool(), ListDirTool(), ReadOutlineTool()]
     return Agent(llm_client=llm, context_manager=ctx, tools=tools, workspace_dir=workspace)
 
 

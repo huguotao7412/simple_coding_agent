@@ -32,6 +32,9 @@ class SearchCodebaseTool(BaseTool):
     # Directories ignored during traversal
     _IGNORED_DIRS = {".git", ".venv", "__pycache__", "node_modules", ".idea", "dist"}
 
+    # Global cap to prevent context overflow in large codebases
+    MAX_RESULTS = 30
+
     async def execute(
         self,
         query: str,
@@ -136,6 +139,13 @@ class SearchCodebaseTool(BaseTool):
             return ToolResult.ok(
                 f"No symbols matching '{query}' found in the codebase."
             )
+        if len(results) > self.MAX_RESULTS:
+            truncated = results[:self.MAX_RESULTS]
+            truncated.append(
+                f"\n... [Found >{self.MAX_RESULTS} matches. Showing top {self.MAX_RESULTS}. "
+                "Please refine your query to be more specific.] ..."
+            )
+            return ToolResult.ok("\n".join(truncated))
         return ToolResult.ok("\n".join(results))
 
     def _build_signature(self, node: ast.AST, source: str) -> str:
@@ -208,4 +218,11 @@ class SearchCodebaseTool(BaseTool):
             return ToolResult.ok(
                 f"No matches for '{query}' found in the codebase."
             )
+        if len(results) > self.MAX_RESULTS:
+            truncated = results[:self.MAX_RESULTS]
+            truncated.append(
+                f"\n... [Found >{self.MAX_RESULTS} matches. Showing top {self.MAX_RESULTS}. "
+                "Please refine your query to be more specific.] ..."
+            )
+            return ToolResult.ok("\n\n".join(truncated))
         return ToolResult.ok("\n\n".join(results))

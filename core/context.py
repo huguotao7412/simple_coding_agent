@@ -116,13 +116,28 @@ class ContextManager:
         messages_to_drop = self.messages[start:end]
         saved_scratchpad = self._extract_last_scratchpad(messages_to_drop)
 
-        # 构造摘要 Prompt 并调用 LLM
-        summary_prompt = "Summarize the following conversation history concisely, preserving key file paths, decisions, and bugs:\n\n"
-        summary_prompt += "\n".join(f"[{m['role']}]: {(m.get('content') or '')[:500]}" for m in messages_to_drop)
+        # 构造摘要 Prompt：极致瘦身——只保留动作元数据，剥离原始代码
+        slim_entries: list[str] = []
+        for m in messages_to_drop:
+            role = m["role"]
+            raw = (m.get("content") or "")
+            # Strip code blocks for the summary — we only need signals, not 100K of code
+            stripped = re.sub(r"```[^`]*```", "[code block omitted]", raw, flags=re.DOTALL)
+            # For tool results, keep only the first ~80 chars as a hint
+            if role == "tool":
+                snippet = stripped[:80].replace("\n", " ")
+                slim_entries.append(f"[{role}]: {snippet}...")
+            else:
+                snippet = stripped[:150].replace("\n", " ")
+                slim_entries.append(f"[{role}]: {snippet}")
+        summary_prompt = (
+            "Summarize the following conversation history concisely, "
+            "preserving key file paths, decisions, and bugs:\n\n"
+            + "\n".join(slim_entries)
+        )
 
         try:
-            # 利用传入的 llm_client 进行轻量级摘要
-            result = await llm_client.chat([{"role": "user", "content": summary_prompt[:16000]}])
+            result = await llm_client.chat([{"role": "user", "content": summary_prompt[:8000]}])
             summary = result.get("content", "Previous conversation summarized.")
         except Exception:
             summary = "(Conversation compressed but summary failed due to error.)"
@@ -138,15 +153,84 @@ class ContextManager:
         new_messages.extend(tail)
         self.messages = new_messages
 
+    _FENCE_RE = re.compile(r"```")
+    _XML_TAG_RE = re.compile(r"<(scratchpad|completed_tasks|current_bugs|key_files_in_focus)\b")
+
     def _truncate_large_messages(self, msgs: list[dict], max_chars: int = 12000) -> None:
-        """[NEW] 强制截断保留窗口内的过长文本，彻底根除 Context Overflow 死锁。"""
+        """Smart truncation that preserves JSON code blocks and XML tag closure.
+
+        - tool/assistant/user messages exceeding max_chars are head-tail truncated.
+        - For assistant messages: preserves <scratchpad> XML and avoids breaking
+          inside ``` code fences.
+        - For tool messages: finds natural break points to avoid corrupting output.
+        """
         for msg in msgs:
-            if msg.get("role") in ("tool", "user", "assistant") and isinstance(msg.get("content"), str):
-                if len(msg["content"]) > max_chars:
-                    half = int(max_chars * 0.4)
-                    omitted = len(msg["content"]) - (half * 2)
-                    msg["content"] = (
-                            msg["content"][:half] +
-                            f"\n\n... [System: Message exceeded {max_chars} chars. {omitted} chars aggressively removed to prevent memory overflow] ...\n\n" +
-                            msg["content"][-half:]
-                    )
+            content = msg.get("content")
+            if not isinstance(content, str) or len(content) <= max_chars:
+                continue
+
+            role = msg.get("role", "")
+            keep_head = int(max_chars * 0.35)
+            keep_tail = int(max_chars * 0.35)
+            omitted = len(content) - keep_head - keep_tail
+
+            trunc_marker = (
+                f"\n\n... [System: {omitted} chars omitted to prevent context overflow] ...\n\n"
+            )
+
+            # --- Assistant messages: protect XML scratchpad and code fences ---
+            if role == "assistant":
+                # Find scratchpad boundaries
+                sp_match = self._SCRATCHPAD_RE.search(content)
+                if sp_match:
+                    sp_start, sp_end = sp_match.span()
+                    # If scratchpad is in the middle, try to keep it intact
+                    if sp_start > keep_head and sp_end < len(content) - keep_tail:
+                        # Scratchpad is in the middle zone — shift cut points
+                        head = content[:keep_head]
+                        tail = content[-keep_tail:]
+                        # Ensure we don't break inside a code fence
+                        head = self._close_open_fences(head)
+                        tail = self._reopen_closed_fences(tail)
+                        msg["content"] = head + trunc_marker + tail
+                        continue
+
+                # No scratchpad in danger zone — just ensure fence safety
+                head = content[:keep_head]
+                tail = content[-keep_tail:]
+                head = self._close_open_fences(head)
+                tail = self._reopen_closed_fences(tail)
+                msg["content"] = head + trunc_marker + tail
+
+            # --- Tool messages: truncate at natural boundaries ---
+            elif role == "tool":
+                head = content[:keep_head]
+                tail = content[-keep_tail:]
+                # Try to break at last newline in head to avoid mid-line cuts
+                last_nl = head.rfind("\n")
+                if last_nl > keep_head * 0.7:
+                    head = head[:last_nl]
+                first_nl = tail.find("\n")
+                if first_nl != -1 and first_nl < keep_tail * 0.3:
+                    tail = tail[first_nl:]
+                msg["content"] = head + trunc_marker + tail
+
+            # --- User messages: simple safe truncation ---
+            else:
+                msg["content"] = content[:keep_head] + trunc_marker + content[-keep_tail:]
+
+    @staticmethod
+    def _close_open_fences(text: str) -> str:
+        """If there's an odd number of ``` in text, close the last open fence."""
+        count = text.count("```")
+        if count % 2 == 1:
+            text += "\n```"
+        return text
+
+    @staticmethod
+    def _reopen_closed_fences(text: str) -> str:
+        """If there's an odd number of ``` in text, prepend an opening fence."""
+        count = text.count("```")
+        if count % 2 == 1:
+            text = "```\n" + text
+        return text

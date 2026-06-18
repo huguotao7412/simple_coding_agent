@@ -5,15 +5,18 @@ from .base import BaseTool, ToolResult, truncate_long_output
 
 class ReadTool(BaseTool):
     name = "read"
-    description = "Read a file from the workspace. Returns content with line number prefixes."
+    description = (
+        "Read a file from the workspace. Returns content with line number prefixes. "
+        "For large files, read in chunks of 500 lines using offset."
+    )
     parameters = {
         "file_path": {"type": "string", "description": "Absolute path to the file."},
         "offset": {"type": "integer", "description": "Starting line (0-indexed). Default 0."},
-        "limit": {"type": "integer", "description": "Max lines to read. Default 2000."},
+        "limit": {"type": "integer", "description": "Max lines to read. Default 500 (chunked reading recommended for large files)."},
     }
     required_params = ["file_path"]
 
-    async def execute(self, file_path: str, workspace_dir: str = "", offset: int = 0, limit: int = 2000) -> ToolResult:
+    async def execute(self, file_path: str, workspace_dir: str = "", offset: int = 0, limit: int = 500) -> ToolResult:
         try:
             self.validate_path(file_path, workspace_dir)
         except Exception as e:
