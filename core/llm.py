@@ -109,13 +109,22 @@ class LLMClient:
 
                 # Reasoning content delta (DeepSeek thinking mode)
                 if "reasoning_content" in delta and delta["reasoning_content"]:
-                    reasoning_parts.append(delta["reasoning_content"])
+                    token = delta["reasoning_content"]
+                    reasoning_parts.append(token)
+                    if on_token:
+                        if not reasoning_started:
+                            on_token("> 🧠 **Thinking...**\n> ")
+                            reasoning_started = True
+                        on_token(token.replace("\n", "\n> "))
 
                 # Content delta
                 if "content" in delta and delta["content"]:
                     token = delta["content"]
                     content_parts.append(token)
                     if on_token:
+                        if reasoning_started and not content_started:
+                            on_token("\n\n")
+                        content_started = True
                         on_token(token)
 
                 # Tool call delta

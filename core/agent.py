@@ -190,9 +190,17 @@ class Agent:
         # 1. Parse arguments
         try:
             raw_args = tc["function"]["arguments"].strip()
-            raw_args = re.sub(r"^```json\s*", "", raw_args, flags=re.IGNORECASE)
+            # 防线1: 放宽 markdown 剔除正则，让 "json" 关键字变为可选
+            raw_args = re.sub(r"^```(?:json\s*)?", "", raw_args, flags=re.IGNORECASE)
             raw_args = re.sub(r"\s*```$", "", raw_args).strip()
-            args = json.loads(raw_args)
+            # 防线2: 空字符串拦截，避免将空字符串传给 json.loads()
+            if not raw_args:
+                args = {}
+            else:
+                args = json.loads(raw_args)
+            # 防线3: 类型守卫，防止解析出列表/字符串/None 等非字典类型导致后续崩溃
+            if not isinstance(args, dict):
+                args = {}
         except json.JSONDecodeError as e:
             error_hint = (
                 f"Error: Invalid JSON format in arguments: {e}\n"
@@ -393,9 +401,17 @@ class Agent:
                 tool_name = tc["function"]["name"]
                 try:
                     raw_args = tc["function"]["arguments"].strip()
-                    raw_args = re.sub(r"^```json\s*", "", raw_args, flags=re.IGNORECASE)
+                    # 防线1: 放宽 markdown 剔除正则，让 "json" 关键字变为可选
+                    raw_args = re.sub(r"^```(?:json\s*)?", "", raw_args, flags=re.IGNORECASE)
                     raw_args = re.sub(r"\s*```$", "", raw_args).strip()
-                    tool_args = json.loads(raw_args)
+                    # 防线2: 空字符串拦截，避免将空字符串传给 json.loads()
+                    if not raw_args:
+                        tool_args = {}
+                    else:
+                        tool_args = json.loads(raw_args)
+                    # 防线3: 类型守卫，防止解析出列表/字符串/None 等非字典类型
+                    if not isinstance(tool_args, dict):
+                        tool_args = {}
                 except json.JSONDecodeError:
                     tool_args = {}
 

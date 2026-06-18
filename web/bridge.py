@@ -31,21 +31,36 @@ class WebBridge:
         st.session_state.streaming = True
         st.session_state.events = []
 
-        # 创建一个独立的事件循环驱动 async 任务，并在主线程中 yield 释放控制权给 Streamlit
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        gen = self.agent.run_stream(user_input)
+        import threading
+        import queue
 
-        try:
-            while True:
-                # 每次获取一个 token 或事件
-                event = loop.run_until_complete(gen.__anext__())
-                st.session_state.events.append(event)
-                yield event
-        except StopAsyncIteration:
-            pass
-        finally:
+        q = queue.Queue()
+
+        # 将事件循环与 LLM 网络请求封装到独立线程
+        def run_agent_in_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            async def runner():
+                try:
+                    async for event in self.agent.run_stream(user_input):
+                        q.put(event)
+                finally:
+                    q.put(None)  # 结束哨兵
+
+            loop.run_until_complete(runner())
             loop.close()
+
+        t = threading.Thread(target=run_agent_in_thread)
+        t.start()
+
+        # 主线程只负责从队列高速消费并 yield 给 Streamlit
+        while True:
+            event = q.get()
+            if event is None:
+                break
+            st.session_state.events.append(event)
+            yield event
 
         st.session_state.streaming = False
 
