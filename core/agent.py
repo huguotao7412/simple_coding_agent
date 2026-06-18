@@ -221,7 +221,14 @@ class Agent:
             try:
                 result = await tool.execute(**args)
             except Exception as e:
-                result = ToolResult.fail(str(e))
+                result = ToolResult.fail(f"Internal Tool Error: {str(e)}")
+
+            # If the failure is caused by an internal code bug (e.g. AttributeError),
+            # give the model a stronger stop signal to prevent retry loops
+            if not result.success and "AttributeError" in str(result.error):
+                result.error += (
+                    " (CRITICAL: 此工具当前存在内部故障，请立即停止调用并向用户报告)"
+                )
 
             if result.success:
                 observation = result.content

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable
@@ -53,21 +54,26 @@ class LLMClient:
             body["tools"] = tools
 
         timeout_config = httpx.Timeout(600.0)
+        max_retries = 3
+
         async with httpx.AsyncClient(timeout=timeout_config) as client:
-            try:
-                async with client.stream(
-                        "POST",
-                        f"{self.base_url}/chat/completions",
-                        headers=self._headers(),
-                        json=body,
-                ) as response:
-                    if response.status_code != 200:
-                        text = await response.aread()
-                        raise LLMAPIError(response.status_code, text.decode()[:500])
-                    return await self._parse_stream(response, on_token)
-            except httpx.HTTPError as e:
-                error_detail = f"{type(e).__name__}: {str(e) or 'Connection dropped or timed out'}"
-                raise LLMAPIError(0, error_detail)
+            for attempt in range(max_retries):
+                try:
+                    async with client.stream(
+                            "POST",
+                            f"{self.base_url}/chat/completions",
+                            headers=self._headers(),
+                            json=body,
+                    ) as response:
+                        if response.status_code != 200:
+                            text = await response.aread()
+                            raise LLMAPIError(response.status_code, text.decode()[:500])
+                        return await self._parse_stream(response, on_token)
+                except httpx.HTTPError as e:
+                    if attempt == max_retries - 1:
+                        error_detail = f"{type(e).__name__}: {str(e) or 'Connection dropped or timed out'}"
+                        raise LLMAPIError(0, error_detail)
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
 
     async def _parse_stream(
             self,

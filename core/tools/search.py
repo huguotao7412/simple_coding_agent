@@ -54,7 +54,7 @@ class SearchCodebaseTool(BaseTool):
     # ------------------------------------------------------------------
     # Symbol mode — AST-based
     # ------------------------------------------------------------------
-    async def _search_symbols(
+    def _search_symbols_sync(
         self, root: str, query: str, include_ext: str | None
     ) -> ToolResult:
         results: list[str] = []
@@ -160,7 +160,7 @@ class SearchCodebaseTool(BaseTool):
     # ------------------------------------------------------------------
     # Text mode — regex-based with context
     # ------------------------------------------------------------------
-    async def _search_text(
+    def _search_text_sync(
         self, root: str, query: str, include_ext: str | None
     ) -> ToolResult:
         results: list[str] = []
