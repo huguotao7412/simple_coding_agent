@@ -8,6 +8,11 @@ from typing import Any
 
 import httpx
 
+try:
+    from deepseek_tokenizer import ds_token
+except ImportError:  # pragma: no cover
+    ds_token = None
+
 from .exceptions import LLMAPIError
 
 
@@ -25,6 +30,32 @@ class LLMClient:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.max_tokens = max_tokens
+        self._tokenizer = ds_token
+
+    def count_tokens(self, text: str) -> int:
+        """Count tokens in a single string using DeepSeek's tokenizer.
+        Falls back to character heuristic if tokenizer unavailable.
+        """
+        if self._tokenizer is not None:
+            return len(self._tokenizer.encode(text))
+        # Fallback heuristic
+        return max(1, len(text.encode("utf-8", errors="ignore")) // 3)
+
+    def count_messages_tokens(self, messages: list[dict]) -> int:
+        """Count tokens across a full messages array.
+        Includes per-message format overhead (~4 tokens per message).
+        """
+        total = 0
+        for msg in messages:
+            total += 4  # role + formatting overhead
+            for key, value in msg.items():
+                if isinstance(value, str):
+                    total += self.count_tokens(value)
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, dict):
+                            total += self.count_tokens(str(item))
+        return max(1, total)
 
     def _headers(self) -> dict:
         return {
