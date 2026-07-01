@@ -9,7 +9,7 @@ import os
 import sys
 from collections import deque
 
-from .base import BaseTool, ToolResult, truncate_long_output
+from .base import BaseTool, ToolResult, semantic_truncate
 
 ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
@@ -283,16 +283,16 @@ class BashTool(BaseTool):
                     self._session_proc = None
                     return ToolResult.fail(
                         f"Shell session terminated unexpectedly (returncode={proc.returncode}).",
-                        content=truncate_long_output(output) if output else output,
+                        content=semantic_truncate(output)[0] if output else output,
                     )
 
                 if exit_code != 0:
                     return ToolResult.fail(
                         f"Exit code {exit_code}",
-                        content=truncate_long_output(output) if output else output,
+                        content=semantic_truncate(output)[0] if output else output,
                     )
 
-                return ToolResult.ok(truncate_long_output(output or "(no output)"))
+                return ToolResult.ok(semantic_truncate(output or "(no output)")[0])
 
             except (BrokenPipeError, ConnectionResetError, ProcessLookupError):
                 # Session pipe broke — reset for next call
@@ -355,7 +355,7 @@ class BashTool(BaseTool):
         else:
             suffix = f"\n[Process {pid} is still running]"
 
-        return ToolResult.ok(truncate_long_output(logs or "(no output yet)") + suffix)
+        return ToolResult.ok(semantic_truncate(logs or "(no output yet)")[0] + suffix)
 
     async def _kill_process(self, pid: int | None) -> ToolResult:
         """Terminate a background process and clean up its entry."""
@@ -379,7 +379,7 @@ class BashTool(BaseTool):
         if proc.returncode is not None:
             return ToolResult.ok(
                 f"Process {pid} had already exited with code {proc.returncode}.\n"
-                f"Final output ({len(remaining_logs)} chars):\n{truncate_long_output(remaining_logs)}"
+                f"Final output ({len(remaining_logs)} chars):\n{semantic_truncate(remaining_logs)[0]}"
             )
 
         try:
@@ -400,5 +400,5 @@ class BashTool(BaseTool):
 
         return ToolResult.ok(
             f"Process {pid} terminated.\n"
-            f"Final output ({len(remaining_logs)} chars):\n{truncate_long_output(remaining_logs)}"
+            f"Final output ({len(remaining_logs)} chars):\n{semantic_truncate(remaining_logs)[0]}"
         )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os
-from .base import BaseTool, ToolResult, truncate_long_output
+from .base import BaseTool, ToolResult, semantic_truncate
 
 
 class ReadTool(BaseTool):
@@ -31,6 +31,9 @@ class ReadTool(BaseTool):
             if limit:
                 lines = lines[:limit]
             output = "".join(f"{i + offset + 1}\t{line}" for i, line in enumerate(lines))
-            return ToolResult.ok(truncate_long_output(output))
+            truncated, degraded = semantic_truncate(output, file_path=file_path)
+            if degraded:
+                return ToolResult.ok(truncated)
+            return ToolResult.ok(output)
         except Exception as e:
             return ToolResult.fail(str(e))
