@@ -8,29 +8,6 @@ from ..state import GlobalState
 
 MAX_CONCURRENT_ACTORS = 4
 
-# TODO (Task 16): Import ACTOR_TOOLS from ..tools instead of defining locally.
-# For now, define the Actor-accessible tool set here.
-# Actors get read/write/edit/bash/search/list_dir/read_outline but NOT
-# delegate (to prevent recursion) and NOT update_state (Planner-only).
-from .read import ReadTool
-from .write import WriteTool
-from .edit import EditTool
-from .bash import BashTool
-from .search import SearchCodebaseTool
-from .list_dir import ListDirTool
-from .read_outline import ReadOutlineTool
-
-ACTOR_TOOLS: list[type[BaseTool]] = [
-    ReadTool,
-    WriteTool,
-    EditTool,
-    BashTool,
-    SearchCodebaseTool,
-    ListDirTool,
-    ReadOutlineTool,
-]
-
-
 class DelegateTool(BaseTool):
     name = "delegate"
     description = (
@@ -79,7 +56,7 @@ class DelegateTool(BaseTool):
         """Dispatch subtasks to Actors concurrently with asyncio gate."""
         from ..agent import ActorAgent
         from ..context import ContextManager
-
+        from ..tools import ACTOR_TOOLS
         from ..system_prompt import ACTOR_SYSTEM_PROMPT
 
         state = GlobalState.get()
