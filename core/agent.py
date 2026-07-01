@@ -7,9 +7,9 @@ import asyncio
 import platform
 import subprocess
 import sys
-from collections import deque
 from collections.abc import AsyncGenerator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Literal
 
 from .llm import LLMClient
 from .context import ContextManager
@@ -27,6 +27,18 @@ class AgentEvent:
     tool_args: dict | None = None
     tool_result: ToolResult | None = None
     token: str = ""
+    actor_id: str = ""
+
+
+@dataclass
+class ActorSummary:
+    task_id: str
+    status: Literal["done", "failed"]  # noqa: F821
+    files_modified: list[str] = field(default_factory=list)
+    bugs_found: list[str] = field(default_factory=list)
+    key_findings: str = ""
+    suggested_next_steps: str = ""
+    raw_output: str = ""
 
 
 def _walk_tree_pure_python(workspace_dir: str, max_depth: int = 2) -> str:
@@ -106,7 +118,7 @@ def get_runtime_env() -> str:
     return "\n".join(lines)
 
 
-class Agent:
+class ActorAgent:
     """Core ReAct agent. Runs the think->act->observe loop."""
 
     def __init__(
@@ -115,13 +127,17 @@ class Agent:
         context_manager: ContextManager,
         tools: list[BaseTool],
         workspace_dir: str,
+        actor_id: str = "",
+        task_context: str = "",
     ):
+        self.actor_id = actor_id
+        self.task_context = task_context
         self.llm = llm_client
         self.tools_by_name = {t.name: t for t in tools}
         self.workspace_dir = workspace_dir
 
-        # Circuit breaker: track recent tool calls to detect loops
-        self.action_history: deque[int] = deque(maxlen=5)
+        # Lightweight repeat detection (Actor-level only)
+        self._recent_actions: list[int] = []
 
         # Keep context_manager.messages[0] as the pure static SYSTEM_PROMPT.
         # Dynamic workspace/environment context is injected per-request to
@@ -141,37 +157,6 @@ class Agent:
             f"<environment_context>\n{runtime_env}\n</environment_context>"
         )
         return {"role": "system", "content": content}
-
-    def _hash_action(self, tool_name: str, args: dict) -> int:
-        """Create a deterministic hash for a tool_name + args combination."""
-        return hash(tool_name + json.dumps(args, sort_keys=True))
-
-    def detect_loop(self, action_hash: int) -> bool:
-        """Return True if action_hash appears >= 2 times in recent history."""
-        return sum(1 for h in self.action_history if h == action_hash) >= 2
-
-    def _check_circuit_breaker(
-        self, tool_call_id: str, tool_name: str, args: dict
-    ) -> bool:
-        """Check for repeated tool calls and intervene if a loop is detected.
-
-        Returns True if the circuit breaker fired (caller should skip execution),
-        False if safe to proceed.
-        """
-        action_hash = self._hash_action(tool_name, args)
-        if self.detect_loop(action_hash):
-            intervention = (
-                "System Alert: Detected repeated failed tool calls. "
-                "You are stuck in a loop. STOP current action immediately. "
-                "Try using search_codebase with a DIFFERENT query, "
-                "or read a DIFFERENT file. "
-                "Please reason about why it failed and gather new context "
-                "before retrying the same action."
-            )
-            self.ctx.add_tool_result(tool_call_id, intervention)
-            self.action_history.append(action_hash)
-            return True
-        return False
 
     async def _execute_single_tool(
         self,
@@ -211,7 +196,6 @@ class Agent:
                 "Please fix the format and call the tool again."
             )
             self.ctx.add_tool_result(tc["id"], error_hint)
-            self.action_history.append(self._hash_action(tool_name, {"__error": raw_args}))
             return (
                 tool_name, {},
                 ToolResult.fail(error_hint),
@@ -223,19 +207,17 @@ class Agent:
         if tool_name in ("read", "write", "edit", "bash", "search_codebase"):
             args["workspace_dir"] = self.workspace_dir
 
-        # 3. Circuit breaker check
-        if self._check_circuit_breaker(tc["id"], tool_name, args):
-            intervention = (
-                "System Alert: Detected repeated failed tool calls. "
-                "STOP current action. Please reason about why it failed "
-                "and use read or search codebase to gather new context."
-            )
-            return (
-                tool_name, args,
-                ToolResult.fail(intervention),
-                intervention,
-                True,
-            )
+        # 3. Simple repeat detection (lightweight, Actor-level only)
+        action_hash = hash(tool_name + json.dumps(args, sort_keys=True))
+        if hasattr(self, '_recent_actions'):
+            if self._recent_actions.count(action_hash) >= 2:
+                intervention = (
+                    "System Alert: Repeated tool call detected. "
+                    "Please try a different approach."
+                )
+                self.ctx.add_tool_result(tc["id"], intervention)
+                return (tool_name, args, ToolResult.fail(intervention), intervention, True)
+            self._recent_actions.append(action_hash)
 
         # 4. Look up and execute tool
         tool = self.tools_by_name.get(tool_name)
@@ -263,7 +245,6 @@ class Agent:
                     observation += f"\nPartial output: {result.content}"
 
         self.ctx.add_tool_result(tc["id"], observation)
-        self.action_history.append(self._hash_action(tool_name, args))
 
         return tool_name, args, result, observation, False
 
@@ -271,7 +252,7 @@ class Agent:
         self,
         user_input: str,
         on_token: Callable[[str], None] | None = None,
-    ) -> str:
+    ) -> ActorSummary:
         self.ctx.add_user_message(user_input)
         tool_schemas = [t.schema for t in self.tools_by_name.values()]
 
@@ -294,7 +275,12 @@ class Agent:
             except LLMAPIError as e:
                 error_msg = str(e)
                 self.ctx.add_assistant_message(content=error_msg)
-                return error_msg
+                return ActorSummary(
+                    task_id=self.actor_id,
+                    status="failed",
+                    key_findings=error_msg,
+                    raw_output=error_msg,
+                )
 
             tool_calls = response.get("tool_calls")
 
@@ -304,7 +290,12 @@ class Agent:
                     content=response.get("content"),
                     reasoning_content=response.get("reasoning_content"),
                 )
-                return response.get("content") or ""
+                return ActorSummary(
+                    task_id=self.actor_id,
+                    status="done",
+                    key_findings=response.get("content") or "",
+                    raw_output=response.get("content") or "",
+                )
 
             # Record assistant message with tool calls
             self.ctx.add_assistant_message(
@@ -332,12 +323,12 @@ class Agent:
             if step_count > MAX_STEPS:
                 error_msg = "安全熔断：Agent 单轮工具调用次数已达上限(5次)。系统已强制暂停以防止死循环和网络崩溃。请根据当前线索直接提问。"
                 self.ctx.add_assistant_message(content=error_msg)
-                yield AgentEvent(type="error", content=error_msg)
+                yield AgentEvent(type="error", content=error_msg, actor_id=self.actor_id)
                 return
 
             if self.ctx.needs_compression(self.llm):
                 await self.ctx.compress(self.llm)
-                yield AgentEvent(type="compaction")
+                yield AgentEvent(type="compaction", actor_id=self.actor_id)
 
             queue = asyncio.Queue()
 
@@ -362,7 +353,7 @@ class Agent:
                 while not chat_task.done() or not queue.empty():
                     try:
                         token = await asyncio.wait_for(queue.get(), timeout=0.05)
-                        yield AgentEvent(type="thought", token=token, content=token)
+                        yield AgentEvent(type="thought", token=token, content=token, actor_id=self.actor_id)
                     except asyncio.TimeoutError:
                         continue
             finally:
@@ -376,7 +367,7 @@ class Agent:
             except LLMAPIError as e:
                 error_msg = str(e)
                 self.ctx.add_assistant_message(content=error_msg)
-                yield AgentEvent(type="error", content=error_msg)
+                yield AgentEvent(type="error", content=error_msg, actor_id=self.actor_id)
                 return
             # === 流式接收修改结束 ===
 
@@ -387,7 +378,7 @@ class Agent:
                     content=response.get("content"),
                     reasoning_content=response.get("reasoning_content"),
                 )
-                yield AgentEvent(type="done", content=response.get("content") or "")
+                yield AgentEvent(type="done", content=response.get("content") or "", actor_id=self.actor_id)
                 return
 
             self.ctx.add_assistant_message(
@@ -419,6 +410,7 @@ class Agent:
                     type="tool_call",
                     tool_name=tool_name,
                     tool_args=tool_args,
+                    actor_id=self.actor_id,
                 )
 
                 # Execute via shared method
@@ -428,5 +420,9 @@ class Agent:
                     type="tool_result",
                     tool_name=tool_name,
                     tool_result=result,
+                    actor_id=self.actor_id,
                 )
 
+
+# Backward compatibility alias — will be removed after Planner migration
+Agent = ActorAgent
