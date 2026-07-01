@@ -7,6 +7,7 @@ import asyncio
 import platform
 import subprocess
 import sys
+from collections import deque
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from typing import Literal
@@ -14,7 +15,7 @@ from typing import Literal
 from .llm import LLMClient
 from .context import ContextManager
 from .tools.base import BaseTool, ToolResult
-from .system_prompt import SYSTEM_PROMPT
+
 from .exceptions import LLMAPIError
 
 
@@ -137,7 +138,7 @@ class ActorAgent:
         self.workspace_dir = workspace_dir
 
         # Lightweight repeat detection (Actor-level only)
-        self._recent_actions: list[int] = []
+        self._recent_actions: deque[int] = deque(maxlen=10)
 
         # Keep context_manager.messages[0] as the pure static SYSTEM_PROMPT.
         # Dynamic workspace/environment context is injected per-request to
@@ -209,15 +210,14 @@ class ActorAgent:
 
         # 3. Simple repeat detection (lightweight, Actor-level only)
         action_hash = hash(tool_name + json.dumps(args, sort_keys=True))
-        if hasattr(self, '_recent_actions'):
-            if self._recent_actions.count(action_hash) >= 2:
-                intervention = (
-                    "System Alert: Repeated tool call detected. "
-                    "Please try a different approach."
-                )
-                self.ctx.add_tool_result(tc["id"], intervention)
-                return (tool_name, args, ToolResult.fail(intervention), intervention, True)
-            self._recent_actions.append(action_hash)
+        if self._recent_actions.count(action_hash) >= 2:
+            intervention = (
+                "System Alert: Repeated tool call detected. "
+                "Please try a different approach."
+            )
+            self.ctx.add_tool_result(tc["id"], intervention)
+            return (tool_name, args, ToolResult.fail(intervention), intervention, True)
+        self._recent_actions.append(action_hash)
 
         # 4. Look up and execute tool
         tool = self.tools_by_name.get(tool_name)
@@ -256,8 +256,20 @@ class ActorAgent:
         self.ctx.add_user_message(user_input)
         tool_schemas = [t.schema for t in self.tools_by_name.values()]
 
-        while True:
+        step_count = 0
+        MAX_STEPS = 30
 
+        while True:
+            step_count += 1
+            if step_count > MAX_STEPS:
+                error_msg = "Safety limit: Agent reached max steps. Please retry with a simpler request."
+                self.ctx.add_assistant_message(content=error_msg)
+                return ActorSummary(
+                    task_id=self.actor_id,
+                    status="failed",
+                    key_findings=error_msg,
+                    raw_output=error_msg,
+                )
 
             # Check context and compress if needed
             if self.ctx.needs_compression(self.llm):

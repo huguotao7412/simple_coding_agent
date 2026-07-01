@@ -37,7 +37,16 @@ class Planner:
         self.ctx.add_user_message(user_input)
         tool_schemas = [t.schema for t in self.tools_by_name.values()]
 
+        step_count = 0
+        MAX_STEPS = 50
+
         while True:
+            step_count += 1
+            if step_count > MAX_STEPS:
+                error_msg = "Safety limit: Planner reached max steps. Please retry with a simpler request."
+                self.ctx.add_assistant_message(content=error_msg)
+                return error_msg
+
             if self.ctx.needs_compression(self.llm):
                 await self.ctx.compress(self.llm)
 
@@ -90,6 +99,7 @@ class Planner:
                     result = ToolResult.fail(f"unknown tool '{tool_name}'")
                 else:
                     try:
+                        args["workspace_dir"] = self.workspace_dir
                         result = await tool.execute(**args)
                     except Exception as e:
                         result = ToolResult.fail(f"Internal Tool Error: {str(e)}")
@@ -200,6 +210,7 @@ class Planner:
                     result = ToolResult.fail(f"unknown tool '{tool_name}'")
                 else:
                     try:
+                        tool_args["workspace_dir"] = self.workspace_dir
                         result = await tool.execute(**tool_args)
                     except Exception as e:
                         result = ToolResult.fail(f"Internal Tool Error: {str(e)}")
