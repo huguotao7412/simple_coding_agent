@@ -279,7 +279,7 @@ class Agent:
 
 
             # Check context and compress if needed
-            if self.ctx.needs_compression():
+            if self.ctx.needs_compression(self.llm):
                 await self.ctx.compress(self.llm)
 
             # Build payload: static prefix (cacheable) + dynamic context tail
@@ -335,7 +335,7 @@ class Agent:
                 yield AgentEvent(type="error", content=error_msg)
                 return
 
-            if self.ctx.needs_compression():
+            if self.ctx.needs_compression(self.llm):
                 await self.ctx.compress(self.llm)
                 yield AgentEvent(type="compaction")
 

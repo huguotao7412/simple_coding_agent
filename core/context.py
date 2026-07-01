@@ -45,21 +45,14 @@ class ContextManager:
             "content": content,
         })
 
-    def estimate_tokens(self) -> int:
-        """Rough token count estimation using UTF-8 byte length heuristic."""
-        total = 0
-        for msg in self.messages:
-            for key, value in msg.items():
-                if isinstance(value, str):
-                    total += len(value.encode('utf-8', errors='ignore')) // 3
-                elif isinstance(value, list):
-                    for item in value:
-                        if isinstance(item, dict):
-                            total += len(str(item).encode('utf-8', errors='ignore')) // 3
-        return max(1, total)
+    def estimate_tokens(self, llm_client) -> int:
+        """Precise token count using LLM client's tokenizer."""
+        return llm_client.count_messages_tokens(self.messages)
 
-    def needs_compression(self) -> bool:
-        return self.estimate_tokens() > int(self.model_context_limit * self.compression_threshold)
+    def needs_compression(self, llm_client) -> bool:
+        return self.estimate_tokens(llm_client) > int(
+            self.model_context_limit * self.compression_threshold
+        )
 
     def get_compressible_range(self) -> tuple[int, int]:
         if len(self.messages) <= 1:
