@@ -22,24 +22,6 @@ class ContextManager:
             {"role": "system", "content": system_prompt}
         ]
 
-    _SCRATCHPAD_RE = re.compile(r"<scratchpad>.*?</scratchpad>", re.DOTALL)
-
-    @classmethod
-    def _extract_last_scratchpad(cls, messages: list[dict]) -> str | None:
-        """Extract the last scratchpad block from a list of messages.
-
-        Scans in reverse order to find the most recent scratchpad.
-        Returns the full XML block string, or None if not found.
-        """
-        for msg in reversed(messages):
-            content = msg.get("content", "")
-            if not isinstance(content, str):
-                continue
-            matches = list(cls._SCRATCHPAD_RE.finditer(content))
-            if matches:
-                return matches[-1].group(0)
-        return None
-
     def add_user_message(self, content: str) -> None:
         self.messages.append({"role": "user", "content": content})
 
@@ -114,16 +96,13 @@ class ContextManager:
             return
 
         messages_to_drop = self.messages[start:end]
-        saved_scratchpad = self._extract_last_scratchpad(messages_to_drop)
 
-        # 构造摘要 Prompt：极致瘦身——只保留动作元数据，剥离原始代码
+        # Build slim summary entries
         slim_entries: list[str] = []
         for m in messages_to_drop:
             role = m["role"]
             raw = (m.get("content") or "")
-            # Strip code blocks for the summary — we only need signals, not 100K of code
             stripped = re.sub(r"```[^`]*```", "[code block omitted]", raw, flags=re.DOTALL)
-            # For tool results, keep only the first ~80 chars as a hint
             if role == "tool":
                 snippet = stripped[:80].replace("\n", " ")
                 slim_entries.append(f"[{role}]: {snippet}...")
@@ -146,13 +125,6 @@ class ContextManager:
         self._truncate_large_messages(tail)
 
         new_messages = self.messages[:start]
-
-        has_newer_scratchpad = self._extract_last_scratchpad(tail) is not None
-
-        if saved_scratchpad and not has_newer_scratchpad:
-            new_messages.append({"role": "system",
-                                 "content": f"[Engineering Scratchpad]:\n{saved_scratchpad}"})
-
         new_messages.append({"role": "system", "content": f"[Conversation summary]: {summary}"})
         new_messages.extend(tail)
         self.messages = new_messages
@@ -161,11 +133,10 @@ class ContextManager:
     _XML_TAG_RE = re.compile(r"<(scratchpad|completed_tasks|current_bugs|key_files_in_focus)\b")
 
     def _truncate_large_messages(self, msgs: list[dict], max_chars: int = 12000) -> None:
-        """Smart truncation that preserves JSON code blocks and XML tag closure.
+        """Smart truncation that preserves code fence integrity.
 
         - tool/assistant/user messages exceeding max_chars are head-tail truncated.
-        - For assistant messages: preserves <scratchpad> XML and avoids breaking
-          inside ``` code fences.
+        - For assistant messages: avoids breaking inside ``` code fences.
         - For tool messages: finds natural break points to avoid corrupting output.
         """
         for msg in msgs:
@@ -182,24 +153,8 @@ class ContextManager:
                 f"\n\n... [System: {omitted} chars omitted to prevent context overflow] ...\n\n"
             )
 
-            # --- Assistant messages: protect XML scratchpad and code fences ---
+            # --- Assistant messages: ensure code fence safety ---
             if role == "assistant":
-                # Find scratchpad boundaries
-                sp_match = self._SCRATCHPAD_RE.search(content)
-                if sp_match:
-                    sp_start, sp_end = sp_match.span()
-                    # If scratchpad is in the middle, try to keep it intact
-                    if sp_start > keep_head and sp_end < len(content) - keep_tail:
-                        # Scratchpad is in the middle zone — shift cut points
-                        head = content[:keep_head]
-                        tail = content[-keep_tail:]
-                        # Ensure we don't break inside a code fence
-                        head = self._close_open_fences(head)
-                        tail = self._reopen_closed_fences(tail)
-                        msg["content"] = head + trunc_marker + tail
-                        continue
-
-                # No scratchpad in danger zone — just ensure fence safety
                 head = content[:keep_head]
                 tail = content[-keep_tail:]
                 head = self._close_open_fences(head)
