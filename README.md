@@ -124,7 +124,7 @@ Agent 启动时会自动采集当前工作区的物理目录结构和完整的�
    ```bash
    simple_coding_agent/
    ├── pyproject.toml              # 项目打包、入口脚本(sca/sca-web)及依赖配置
-   ├── .env.example                # 环境变量配置模板
+   ├── .env                # 环境变量配置模板
    ├── core/                       # 🧠 【大脑层】纯逻辑处理中心 (零 UI 耦合)
    │   ├── agent.py                # ReAct 核心执行大循环、环境注入与循环熔断控制
    │   ├── context.py              # 对话上下文管理器、Token估算与工作台账硬保留压缩
