@@ -126,7 +126,8 @@ class DelegateTool(BaseTool):
                 )
 
                 try:
-                    summary = await actor.run(description)
+                    trigger_prompt = "请基于上述提供的上下文和目标，开始执行你负责的子任务。"
+                    summary = await actor.run(trigger_prompt)
                     state.add_summary(tid, summary.key_findings or "Task completed.")
                     state.update_task(tid, status=summary.status)
                     return {

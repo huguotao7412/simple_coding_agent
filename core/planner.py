@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import json
 import asyncio
+from collections import deque
 from collections.abc import AsyncGenerator, Callable
 
 from .llm import LLMClient
@@ -24,10 +25,17 @@ class Planner:
         workspace_dir: str,
     ):
         self.llm = llm_client
-        self.tools_by_name = {t.name: t for t in tools}
         self.workspace_dir = workspace_dir
         self.ctx = context_manager
         self.state = GlobalState.get()
+        self._recent_actions: deque[int] = deque(maxlen=10)
+
+        for t in tools:
+            if t.name == "delegate":
+                t._llm = self.llm
+                t._workspace_dir = self.workspace_dir
+
+        self.tools_by_name = {t.name: t for t in tools}
 
     async def run(
         self,
@@ -92,6 +100,13 @@ class Planner:
                     error_hint = f"Error: Invalid JSON: {e}"
                     self.ctx.add_tool_result(tc["id"], error_hint)
                     continue
+
+                action_hash = hash(tool_name + json.dumps(args, sort_keys=True))
+                if self._recent_actions.count(action_hash) >= 2:
+                    intervention = "System Alert: Repeated tool call detected. Please try a different approach."
+                    self.ctx.add_tool_result(tc["id"], intervention)
+                    continue
+                self._recent_actions.append(action_hash)
 
                 tool = self.tools_by_name.get(tool_name)
                 if tool is None:
@@ -195,8 +210,36 @@ class Planner:
                     tool_args = json.loads(raw_args) if raw_args else {}
                     if not isinstance(tool_args, dict):
                         tool_args = {}
-                except json.JSONDecodeError:
-                    tool_args = {}
+                except json.JSONDecodeError as e:
+                        error_hint = f"Error: Invalid JSON format in arguments: {e}"
+                        self.ctx.add_tool_result(tc["id"], error_hint)
+
+                        yield AgentEvent(type="tool_call", tool_name=tool_name, tool_args={})
+                        yield AgentEvent(
+                            type="tool_result",
+                            tool_name=tool_name,
+                            tool_result=ToolResult.fail(error_hint)
+                        )
+                        continue
+
+                action_hash = hash(tool_name + json.dumps(tool_args, sort_keys=True))
+                if self._recent_actions.count(action_hash) >= 2:
+                    intervention = "System Alert: Repeated tool call detected. Please try a different approach."
+                    self.ctx.add_tool_result(tc["id"], intervention)
+
+                    yield AgentEvent(
+                        type="tool_call",
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                    )
+                    yield AgentEvent(
+                        type="tool_result",
+                        tool_name=tool_name,
+                        tool_result=ToolResult.fail(intervention),
+                    )
+                    continue
+
+                self._recent_actions.append(action_hash)
 
                 yield AgentEvent(
                     type="tool_call",
