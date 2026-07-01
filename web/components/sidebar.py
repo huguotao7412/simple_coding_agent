@@ -33,7 +33,31 @@ def render_sidebar(workspace_root: str, current_project: str) -> str | None:
     st.sidebar.divider()
     st.sidebar.subheader("文件")
     project_dir = root / current_project
-    return _render_file_tree(project_dir)
+    selected_file = _render_file_tree(project_dir)
+
+    # --- Task Board ---
+    from core.state import GlobalState
+
+    st.sidebar.divider()
+    st.sidebar.subheader("Tasks")
+
+    state = GlobalState.get()
+    snapshot = state.snapshot()
+    tasks = snapshot.get("task_tree", {})
+
+    if not tasks:
+        st.sidebar.caption("(no active task tree)")
+    else:
+        status_icon = {"pending": "⏳", "running": "🔄", "done": "✅", "failed": "❌"}
+        for task_id, task in tasks.items():
+            icon = status_icon.get(task["status"], "❓")
+            desc_display = task["description"][:40] + ("..." if len(task["description"]) > 40 else "")
+            with st.sidebar.expander(f"{icon} {desc_display}", expanded=False):
+                st.caption(f"Status: {task['status']}")
+                if task.get("result_summary"):
+                    st.markdown(task["result_summary"])
+
+    return selected_file
 
 
 def _render_file_tree(project_dir: Path) -> str | None:
