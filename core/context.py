@@ -130,7 +130,6 @@ class ContextManager:
         self.messages = new_messages
 
     _FENCE_RE = re.compile(r"```")
-    _XML_TAG_RE = re.compile(r"<(scratchpad|completed_tasks|current_bugs|key_files_in_focus)\b")
 
     def _truncate_large_messages(self, msgs: list[dict], max_chars: int = 12000) -> None:
         """Smart truncation that preserves code fence integrity.
