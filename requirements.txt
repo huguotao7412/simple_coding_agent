@@ -12,5 +12,8 @@ click>=8.0.0       # 或 typer，用于构建规范的命令行入口
 python-dotenv>=1.0.0 # 用于加载 .env 配置文件
 unidiff>=0.7.5       # 用于解析和生成文件变更的 Diff 数据，供前端展示
 
+# --- Tokenization ---
+deepseek-tokenizer
+
 # --- 测试与开发 ---
 pytest>=8.0.0
