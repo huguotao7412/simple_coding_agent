@@ -116,6 +116,9 @@ class LLMClient:
         tool_calls: list[dict] = []
         tool_call_buf: dict[int, dict] = {}
 
+        reasoning_started = False
+        content_started = False
+
         import httpx  # 确保能捕获 httpx 异常
         try:
             async for line in response.aiter_lines():

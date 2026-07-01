@@ -76,8 +76,16 @@ class DelegateTool(BaseTool):
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_ACTORS)
 
         async def run_one(subtask: dict) -> dict:
-            tid = subtask["task_id"]
-            description = subtask["description"]
+            tid = subtask.get("task_id", "")
+            if not tid:
+                return {"task_id": "unknown", "status": "failed", "error": "LLM failed to provide task_id"}
+
+            description = subtask.get("description", "")
+            if not description:
+                state.update_task(tid, status="failed")
+                state.add_summary(tid, "ERROR: LLM failed to provide description")
+                return {"task_id": tid, "status": "failed", "error": "Missing description"}
+
             context_files = subtask.get("context_files", [])
             context_summaries = subtask.get("context_summaries", [])
 

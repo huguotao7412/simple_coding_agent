@@ -72,6 +72,11 @@ class WebBridge:
         # Dynamic context is now injected per-request; just reset the
         # conversation to the static system prompt (messages[0]).
         self.agent.ctx.messages = [self.agent.ctx.messages[0]]
+
+        # 清空 Planner 和 Actor 依赖的全局共享状态
+        from core.state import GlobalState
+        GlobalState.reset()
+
         st.session_state.messages = []
         st.session_state.events = []
         st.session_state.current_project = project_name
