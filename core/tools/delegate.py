@@ -80,12 +80,7 @@ class DelegateTool(BaseTool):
         from ..agent import ActorAgent
         from ..context import ContextManager
 
-        # TODO (Task 15): Import ACTOR_SYSTEM_PROMPT from ..system_prompt.
-        # For now fall back to SYSTEM_PROMPT (the Planner prompt).
-        try:
-            from ..system_prompt import ACTOR_SYSTEM_PROMPT
-        except ImportError:
-            from ..system_prompt import SYSTEM_PROMPT as ACTOR_SYSTEM_PROMPT
+        from ..system_prompt import ACTOR_SYSTEM_PROMPT
 
         state = GlobalState.get()
 
