@@ -29,15 +29,10 @@ def main():
     # Lazy imports so --help is fast
     from core.llm import LLMClient
     from core.context import ContextManager
-    from core.agent import Agent
-    from core.tools.read import ReadTool
-    from core.tools.write import WriteTool
-    from core.tools.edit import EditTool
-    from core.tools.bash import BashTool
-    from core.tools.search import SearchCodebaseTool
-    from core.tools.list_dir import ListDirTool
-    from core.tools.read_outline import ReadOutlineTool
-    from core.system_prompt import SYSTEM_PROMPT
+    from core.planner import Planner
+    from core.tools import PLANNER_TOOLS
+    from core.system_prompt import PLANNER_SYSTEM_PROMPT
+    from core.state import GlobalState
     from cli.ui import UI
     from cli.bridge import Bridge
 
@@ -48,12 +43,13 @@ def main():
         max_tokens=int(os.getenv("SCA_MAX_TOKENS", "128000")),
     )
 
-    ctx = ContextManager(system_prompt=SYSTEM_PROMPT)
-    tools = [ReadTool(), WriteTool(), EditTool(), BashTool(), SearchCodebaseTool(), ListDirTool(), ReadOutlineTool()]
-    agent = Agent(llm_client=llm, context_manager=ctx, tools=tools, workspace_dir=workspace_dir)
+    ctx = ContextManager(system_prompt=PLANNER_SYSTEM_PROMPT)
+    tools = [t() for t in PLANNER_TOOLS]
+    state = GlobalState.get()
+    planner = Planner(llm_client=llm, context_manager=ctx, tools=tools, workspace_dir=workspace_dir)
 
     ui = UI()
-    bridge = Bridge(agent=agent, ui=ui)
+    bridge = Bridge(agent=planner, ui=ui)
 
     asyncio.run(bridge.run())
 

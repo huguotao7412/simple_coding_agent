@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from core.agent import Agent
+from core.planner import Planner
 
 
 class WebBridge:
     """Connects Agent run_stream() generator to Streamlit st.session_state."""
 
-    def __init__(self, agent: Agent):
+    def __init__(self, agent: Planner):
         self.agent = agent
 
     def init_session(self, st) -> None:

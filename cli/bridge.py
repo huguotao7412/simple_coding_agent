@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from core.agent import Agent
+from core.planner import Planner
 from cli.ui import UI
 
 
 class Bridge:
     """Connects the core Agent to the terminal UI. Runs the REPL loop."""
 
-    def __init__(self, agent: Agent, ui: UI):
+    def __init__(self, agent: Planner, ui: UI):
         self.agent = agent
         self.ui = ui
 

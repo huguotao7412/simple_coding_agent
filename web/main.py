@@ -18,21 +18,16 @@ load_dotenv()
 
 from core.llm import LLMClient
 from core.context import ContextManager
-from core.agent import Agent
-from core.tools.read import ReadTool
-from core.tools.write import WriteTool
-from core.tools.edit import EditTool
-from core.tools.bash import BashTool
-from core.tools.search import SearchCodebaseTool
-from core.tools.list_dir import ListDirTool
-from core.tools.read_outline import ReadOutlineTool
-from core.system_prompt import SYSTEM_PROMPT
+from core.planner import Planner
+from core.tools import PLANNER_TOOLS
+from core.system_prompt import PLANNER_SYSTEM_PROMPT
+from core.state import GlobalState
 from web.bridge import WebBridge
 from web.components.sidebar import render_sidebar
 from web.components.chat import render_chat_history, render_current_events
 
 
-def init_agent() -> Agent:
+def init_planner() -> Planner:
     api_key = os.getenv("SCA_API_KEY", "")
     if not api_key:
         st.error("SCA_API_KEY not set in .env file")
@@ -49,15 +44,16 @@ def init_agent() -> Agent:
         model=model,
         max_tokens=max_tokens,
     )
-    ctx = ContextManager(system_prompt=SYSTEM_PROMPT)
-    tools = [ReadTool(), WriteTool(), EditTool(), BashTool(), SearchCodebaseTool(), ListDirTool(), ReadOutlineTool()]
-    return Agent(llm_client=llm, context_manager=ctx, tools=tools, workspace_dir=workspace)
+    ctx = ContextManager(system_prompt=PLANNER_SYSTEM_PROMPT)
+    tools = [t() for t in PLANNER_TOOLS]
+    state = GlobalState.get()
+    return Planner(llm_client=llm, context_manager=ctx, tools=tools, workspace_dir=workspace)
 
 
 # --- Page render ---
 
 if "agent" not in st.session_state:
-    st.session_state.agent = init_agent()
+    st.session_state.agent = init_planner()
     st.session_state.bridge = WebBridge(st.session_state.agent)
     st.session_state.bridge.init_session(st)
 

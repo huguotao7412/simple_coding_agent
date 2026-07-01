@@ -47,7 +47,7 @@ class DelegateTool(BaseTool):
     }
     required_params = ["subtasks"]
 
-    def __init__(self, llm_client, workspace_dir: str):
+    def __init__(self, llm_client=None, workspace_dir: str = ""):
         super().__init__()
         self._llm = llm_client
         self._workspace_dir = workspace_dir
