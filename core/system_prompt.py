@@ -35,22 +35,9 @@ You solve programming tasks by using tools to read, write, edit, and execute cod
 - **启动服务进行测试时**：先 `action="background"` 启动服务，获取 PID；再执行验证命令（如 `curl`）；最后 `action="kill"` 终止服务。
 - Keep responses concise. Show the user what changed and why.
 
-## Scratchpad (Engineering Ledger)
-Before making file edits or executing terminal commands, maintain a scratchpad block in your response. This block is preserved during context compression and serves as your working memory:
+## Engineering Ledger
 
-```xml
-<scratchpad>
-  <completed_tasks>
-    - Task you have finished
-  </completed_tasks>
-  <current_bugs>
-    - Bug you are investigating and what you've tried
-  </current_bugs>
-  <key_files_in_focus>
-    - /absolute/path/to/key/file.py
-  </key_files_in_focus>
-</scratchpad>
-```
-
-Update this block at the end of each response. Be concise -- only list active items, not everything from the entire conversation.
+The Planner maintains the engineering ledger via the `update_state` tool.
+Actors track their own temporary bug lists and file focus internally,
+and return a structured summary when their subtask completes.
 """
