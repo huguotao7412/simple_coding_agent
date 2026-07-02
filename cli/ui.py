@@ -4,6 +4,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.live import Live
+from rich.status import Status
 
 SCA_LOGO = r"""
   [cyan] ▄██████▄    ▄██████▄     ▄██▄    [/]
@@ -21,6 +22,7 @@ class UI:
 
     def __init__(self):
         self.console = Console(force_terminal=True)
+        self._tool_status: Status | None = None
 
     def render_markdown(self, text: str) -> None:
         if text.strip():
@@ -29,10 +31,24 @@ class UI:
     def stream_markdown(self) -> "LiveMarkdownStream":
         return LiveMarkdownStream(self.console)
 
+    def clear_tool_status(self) -> None:
+        """停止并清除工具执行的临时状态"""
+        if self._tool_status:
+            self._tool_status.stop()
+            self._tool_status = None
+
     def render_tool_status(self, name: str, status: str) -> None:
         """Show a one-line tool execution status."""
-        color = "yellow" if status == "running" else "green" if status == "done" else "red"
-        self.console.print(f"  [{color}]{name}[/{color}]: {status}")
+        if status == "running":
+            msg = f"[dim cyan]⚡ 正在执行工具:[/] [bold cyan]{name}[/]"
+            if not self._tool_status:
+                self._tool_status = self.console.status(msg, spinner="dots")
+                self._tool_status.start()
+            else:
+                self._tool_status.update(msg)
+        elif status == "failed":
+            if self._tool_status:
+                self._tool_status.update(f"[red]❌ 工具 {name} 执行失败，等待修正...[/]")
 
     def render_error(self, msg: str) -> None:
         self.console.print(f"[red]✗ {msg}[/red]")
@@ -69,7 +85,7 @@ class LiveMarkdownStream:
             Markdown(""),
             console=self.console,
             refresh_per_second=10,
-            vertical_overflow="visible",
+            vertical_overflow="ellipsis",
             transient=True,
         )
         self._live.start()
