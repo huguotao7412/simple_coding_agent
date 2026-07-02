@@ -1,162 +1,663 @@
-# Simple Coding Agent (SCA) 🧠💻
+<p align="center">
+  <a href="README.md"><img src="https://img.shields.io/badge/English-🇬🇧-white?style=for-the-badge" alt="English"></a>
+  <a href="README_CN.md"><img src="https://img.shields.io/badge/中文-🇨🇳-red?style=for-the-badge" alt="中文"></a>
+</p>
 
-Simple Coding Agent (SCA) 是一个基于纯净 **ReAct (Reasoning and Acting)** 架构的本地、轻量级终端及 Web 端编码辅助智能体。项目拒绝引入臃肿复杂的重型 Agent 框架（如 LangChain、LangGraph 的图状态流转），完全由原生 Python 构建。通过极其精简且高度可靠的底层工具链，让大语言模型（完美适配 DeepSeek-V4-Pro、GPT-4o 等）能够直接在本地安全地编写代码、运行终端命令并利用错误反刍（Error Feeding）实现自主纠错与代码修复。
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.12+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.12+">
+  <img src="https://img.shields.io/badge/Architecture-Planner--Actor-8A2BE2?style=for-the-badge" alt="Planner-Actor">
+  <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License MIT">
+  <img src="https://img.shields.io/badge/Model-DeepSeek%20V4%20Pro-4B8BF5?style=for-the-badge" alt="DeepSeek V4 Pro">
+</p>
 
----
+<h1 align="center">🧠 Simple Coding Agent</h1>
 
-## ✨ 核心特性与架构升级
+<p align="center">
+  <b>A Production-Grade Plan-and-Execute Agent for Autonomous Software Engineering</b>
+</p>
 
-### 1. 🌐 动态环境感知注入 (Dynamic Environment Awareness)
-Agent 启动时会自动采集当前工作区的物理目录结构和完整的运行时环境信息：
-- **智能工作区目录树**：优先调用系统 `tree` 命令，若不可用则静默降级为纯 Python 原生 `os.scandir()` 递归，自动过滤 `.git`, `.venv`, `__pycache__`, `node_modules` 等无关噪点目录，生成两层深度的直观树状图。
-- **环境上下文采集**：精准采集操作系统类型、系统版本号、硬件架构以及当前激活的 Python 准确版本号。
-- 以上数据在每轮对话开始前作为 `<workspace_context>` 与 `<environment_context>` 动态注入到 System Prompt 中，赋予 LLM 完美的全局上帝视角。
-
-### 2. 🛠️ 五大原子底层工具 (The Atomic Tools)
-项目不堆砌上层业务逻辑，仅提供五个经过精细打磨、边界清晰的原子级能力：
-- **`read` (文件读取)**：带有标准行号前缀的文件读取工具，支持 `offset` (起始行) 与 `limit` (最大行数) 分片读取，防止大文件撑爆上下文。
-- **`write` (全量写入)**：自动创建中间目录，原子化地创建或覆盖目标文件。
-- **`edit` (局部精准修改)**：支持**精确匹配**与**行规范化模糊Fallback匹配**的双级替换引擎。修改完成后利用 `difflib` 自动计算并向模型返回语义化的 **Unified Diff**（包含 `@@`、`+`、`-` 标记），而非盲目提示，极大地提升了模型对修改结果的感知。
-- **`bash` (终端执行)**：在工作区目录执行 Shell 命令，捕获 `stdout` 和 `stderr`。内置高危命令黑名单过滤（如 `rm -rf /`、`sudo`、`chmod 777 /` 等），并设置 120 秒强超时保护。
-- **`search_codebase` (代码库全局搜索)**：攻克陌生大型项目时的首选利器。支持 `symbol` 模式（通过 Python AST 解析类/函数的签名与 Docstring）与 `text` 模式（通用正则搜索，自动附带命中行前后各 2 行的上下文视窗）。
-
-### 3. 🛡️ 智能输出截断 (Output Truncation)
-为了防止 `bash` 执行大量日志（如安装依赖）或 `read` 超长文件导致上下文溢出（Context Overflow），工具层内置了 `truncate_long_output()` 压缩器。当输出字符超过 8000 字阈值时，自动保留前 20%（头部）和后 30%（尾部）的核心内容，并在中间插入省略标识，保护模型上下文的同时留存最关键的报错或结尾信息。
-
-### 4. ⚡ 死循环熔断器 (Loop Detection & Circuit Breaker)
-针对 Agent 常见的“死循环旋转”陷阱（如反复以相同参数调用同一失败工具），内置基于行列式 Action Hashing 的状态监控器：
-- 记录最近 5 次的工具调用记录。
-- 一旦检测到完全相同的 `Tool + Arguments` 组合在历史中出现 $\ge 2$ 次，立即熔断拦截，跳过真实工具执行。
-- 强制向模型反向注入系统干预警告（System Alert），迫使其停止机械重复，进入反思模式并转换解题策略。
-
-### 5. 🧠 工作台账无损保留与有损记忆分层 (Hierarchical Memory & Scratchpad)
-当总 Token 逼近模型上下文极限阈值（80%）时，触发长文本记忆压缩机制：
-- **工作台账提取**：逆序扫描历史消息，通过正则精准提取 LLM 在 `<scratchpad>` 标签中实时维护的工程日志（包含已完成任务、当前 Bug、聚焦的关键文件路径）。
-- **无损分层重组**：将这份最新的“工作台账”作为高优先级系统提示词，与静态的 System Prompt 一起**无损保留**在消息列表最前端。
-- **有损摘要压缩**：仅将中间积压的旧对话交由 LLM 进行提炼摘要。这种分层设计确保了 Agent 的核心工程记忆绝对不丢失。
+<p align="center">
+  <i>"Don't tell the agent what to type — tell it what you want, and watch it figure out the rest."</i>
+</p>
 
 ---
 
-## 🖥️ 双端皮肤：物理隔离设计
-
-核心大脑逻辑（`core/`）保持纯净，零 `print` 耦合，通过流式生成器 `run_stream()` 对外输出标准事件流（`thought` / `tool_call` / `tool_result` / `compaction` / `done`）。项目原生提供了两套完全解耦的交互皮肤：
-
-### 1. 终端 CLI 交互皮肤 (`sca`)
-基于 `Rich` 库打造的沉浸式交互终端：
-- 完美的流式 Markdown 渲染。
-- **DeepSeek 思考模型原生支持**：流式展示大模型的 `reasoning_content`（思考链），让 Agent 的心智模型完全透明。
-- 工具执行状态卡片实时着色（运行中：黄色，成功：绿色，失败：红色）。
-
-### 2. Web 可视化看板 (`sca-web`)
-基于 `Streamlit` 构建的 IDE 级单页应用：
-- **多项目多开切换**：自动扫描 `SCA_WORKSPACE` 下的子目录，一键无缝切换项目。
-- **侧边栏互动文件树**：实时展示项目文件结构，点击任意文件可一键在右侧面板唤起带有行号和语法高亮的文件预览。
-- **可视化状态卡片**：流式对话框中优雅折叠展示模型的思考流、工具调用参数、及执行结果（Edit 工具的 Diff 结果将以标准补丁着色高亮展示）。
+> **🎯 TL;DR** — SCA is an AI coding agent that decomposes complex engineering tasks into concurrent subtasks, dispatches them to isolated worker agents, and synthesizes the results — all while maintaining a real-time global state ledger. Think of it as a **miniature CI/CD pipeline driven by an LLM brain**.
 
 ---
 
-## 🚀 快速开始
+## 📖 Table of Contents
 
-### 环境要求
-- **Python**: $\ge 3.12$ (推荐 3.12.10)
-- **API Key**: 标准 OpenAI 兼容格式的 API Key（默认且强烈推荐使用 DeepSeek API）。
+- [Why Another Coding Agent?](#-why-another-coding-agent)
+- [Architecture Overview](#-architecture-overview)
+- [Core Features](#-core-features)
+- [Project Structure](#-project-structure)
+- [Quick Start](#-quick-start)
+- [Configuration Reference](#-configuration-reference)
+- [Tool Arsenal](#-tool-arsenal)
+- [Dual Interfaces](#-dual-interfaces)
+- [Safety & Guardrails](#-safety--guardrails)
+- [Advanced Usage](#-advanced-usage)
+- [FAQ](#-faq)
+- [Roadmap](#-roadmap)
 
-### 安装配置
+---
 
-1. **克隆仓库并进入目录**
-   ```bash
-   git clone [https://github.com/huguotao7412/simple_coding_agent.git](https://github.com/huguotao7412/simple_coding_agent.git)
-   cd simple_coding_agent
-   ```
-2. **创建虚拟环境并安装项目 (推荐)**
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # Windows: .venv\Scripts\activate
-   pip install -e .
-    ```
-3. **设置环境变量**
-   - 创建 `.env` 文件，添加你的模型 API Key：
-   ```bash
-   SCA_API_KEY=sk-your-api-key-here
-   SCA_API_BASE=https://api.deepseek.com
-   SCA_MODEL=deepseek-v4-pro
-   SCA_MAX_TOKENS=128000
-   SCA_WORKSPACE=./workspaces
-   ```
-4. **运行 SCA**
-   ```bash
-   # 在当前目录下启动 Agent
-   sca
-   
-   # 指定工作目录启动
-   sca --dir /path/to/your/project
-   
-   # 临时覆盖使用其他模型
-   sca --model gpt-4o
-    ```
-   启动后，SCA 会进入交互式 REPL 终端。你可以直接用自然语言向它下达开发指令：
+## 🤔 Why Another Coding Agent?
 
-   示例指令：
+Most coding agents are **single-threaded**. They think, then act, then think, then act — one step at a time. This works fine for trivial edits, but falls apart on real-world tasks like:
 
-   "帮我在当前目录下初始化一个 React 项目。"
-   
-   "读取 main.py，帮我把里面的冒泡排序改成快速排序。"
-   
-   "运行一下 pytest，如果报错了你就自己看报错信息修复它，直到测试全绿为止。"
-   
-   输入 exit 或 quit 即可退出。
+> *"Add authentication to this FastAPI app, write unit tests, and update the OpenAPI spec."*
 
-4. **启动 Web 可视化界面**
-   ```bash
-   # 启动 Streamlit Web 端
-   sca-web
-   ```
-   Web 端提供：
-   - 侧边栏项目切换器（自动扫描 SCA_WORKSPACE 下子目录）
-   - 文件树浏览器（点击预览文件内容）
-   - 流式对话面板（实时展示 Agent 思考过程）
-   - 工具调用可视化（执行状态卡片 + 成功/失败着色）
-   - 页面刷新后自动恢复会话
+A single-threaded agent serializes everything — 15 minutes later, you're still waiting. **SCA is different.** It decomposes that request into 3 independent subtasks, dispatches them to 3 concurrent Actor agents, and you're done in **a third of the time**.
 
-   CLI 和 Web 端可以随时切换使用，共享同一套 core 引擎。
+| | Traditional Agent | **Simple Coding Agent** |
+|---|---|---|
+| Task Model | Linear ReAct loop | **Plan → Delegate → Synthesize** |
+| Concurrency | 🚫 Serial only | ✅ Up to 4 concurrent Actors |
+| State Tracking | Ad-hoc (lost on crash) | ✅ Global state machine with change log |
+| Context Mgmt | Naive truncation | ✅ Hierarchical: scratchpad retention + old-message summarization |
+| Loop Detection | None or primitive | ✅ Action-hash circuit breaker |
+| Tool Safety | Basic | ✅ 3-layer path sandbox + command blacklist + syntax pre-check |
 
-5. **目录结构说明**
-   ```bash
-   simple_coding_agent/
-   ├── pyproject.toml              # 项目打包、入口脚本(sca/sca-web)及依赖配置
-   ├── .env                # 环境变量配置模板
-   ├── core/                       # 🧠 【大脑层】纯逻辑处理中心 (零 UI 耦合)
-   │   ├── agent.py                # ReAct 核心执行大循环、环境注入与循环熔断控制
-   │   ├── context.py              # 对话上下文管理器、Token估算与工作台账硬保留压缩
-   │   ├── llm.py                  # 异步 OpenAI 兼容流式 API 客户端（含思考流拆分解析）
-   │   ├── system_prompt.py        # 静态系统提示词基座
-   │   ├── exceptions.py           # 异常基类定义
-   │   └── tools/                  # 🛠️ 原子核心工具集
-   │       ├── base.py             # 工具基类与长输出自动截断器
-   │       ├── read.py             # 分片带行号读取
-   │       ├── write.py            # 物理全量写入
-   │       ├── edit.py             # 差异替换与 Unified Diff 发生器
-   │       ├── bash.py             # 终端命令安全执行引擎
-   │       └── search.py           # AST 符号/正则文本双模检索器
-   ├── cli/                        # 🖥️ 【皮肤层】终端交互端
-   │   ├── main.py                 # CLI 命令行添置与延迟加载入口
-   │   ├── ui.py                   # 基于 Rich 的动态 REPL 界面渲染
-   │   └── bridge.py               # 连接大脑 run() 与终端的桥接循环
-   └── web/                        # 🌐 【皮肤层】Streamlit Web 交互端
-       ├── main.py                 # Streamlit 多栏大看板主页面入口
-       ├── cli.py                  # sca-web 脚本触发入口
-       ├── bridge.py               # 异步事件流向 Streamlit 状态机的非阻塞桥接
-       └── components/             # 前端功能组件
-           ├── sidebar.py          # 侧边栏：项目动态扫视 + 联动文件树
-           ├── chat.py             # 对话主区：思考链瀑布 + 工具卡片折叠
-           └── diff.py             # Diff 补丁红绿变色渲染器
-   ```
+---
 
-6. **安全警告**
-   SCA 在执行用户指令时拥有高权限的本地 Shell 执行（bash）与文件覆写（write/edit）能力。虽然我们在代码中内置了高危命令黑名单过滤并严禁目录逃逸，但仍强烈建议遵守以下安全策略：
+## 🏗️ Architecture Overview
 
-   1.禁止赋予 Sudo 权限：切勿以 root 或 sudo sca 权限运行本程序。
-   
-   2.版本控制沙盒：务必在初始化了 git 的干净项目根目录下运行 SCA，以便通过 git diff 随时审查 Agent 做出的每一行修改，或者一键 git reset --hard 回滚异常代码。
-   
-   3.隔离环境（可选）：对于高敏或未知任务，建议将工作目录挂载至 Docker 容器内运行。
+```
+                        ┌─────────────────────────────┐
+                        │         USER INPUT           │
+                        └─────────────┬───────────────┘
+                                      │
+                                      ▼
+                        ┌─────────────────────────────┐
+                        │        🧠 PLANNER            │
+                        │   (Orchestration Agent)      │
+                        │                              │
+                        │  • Task decomposition        │
+                        │  • GlobalState management     │
+                        │  • Actor dispatch & synthesis │
+                        │  • Context compression        │
+                        └──────┬──────────────┬────────┘
+                               │              │
+                    update_state│              │ delegate()
+                               │              │
+                               ▼              ▼
+                    ┌──────────────┐  ┌──────────────────┐
+                    │  GlobalState │  │   ⚡ ACTOR POOL    │
+                    │  (Singleton) │  │  (max 4 concurrent)│
+                    │              │  ├──────────────────┤
+                    │ • TaskTree   │  │ Actor-1: auth     │
+                    │ • ChangeLog  │  │ Actor-2: tests    │
+                    │ • Snapshots  │  │ Actor-3: docs     │
+                    └──────────────┘  └──────┬───────────┘
+                                             │ summaries
+                                             ▼
+                                    ┌──────────────────┐
+                                    │   PLANNER syncs   │
+                                    │   → Synthesizes   │
+                                    │   → Responds      │
+                                    └──────────────────┘
+```
+
+### The Two-Layer Model
+
+**Layer 1 — Planner (The Brain)**
+- Runs a ReAct loop with orchestration-level tools (`delegate`, `update_state`, `search_codebase`, `list_dir`, `read_outline`)
+- Never touches files or runs shell commands directly
+- Maintains a `GlobalState` singleton — the single source of truth for all tasks
+- Handles context compression when approaching token limits
+
+**Layer 2 — Actor Pool (The Hands)**
+- Stateless, isolated execution units — each gets a fresh `ContextManager` and full tool access (`read`, `write`, `edit`, `bash`, `search_codebase`, `list_dir`, `read_outline`)
+- Launched concurrently via `asyncio.Semaphore(4)`
+- Returns structured `ActorSummary { task_id, status, files_modified, bugs_found, key_findings }`
+- Each Actor sees only the context the Planner explicitly injects — no cross-contamination
+
+### GlobalState: The Ledger
+
+```python
+# Every task gets a UUID, dependency list, status, and result summary
+TaskNode(
+    task_id="task_a1b2c3d4",
+    description="Add JWT authentication middleware",
+    status="running",       # pending → running → done / failed
+    dependencies=[],        # block until these complete
+    assigned_actor=None,
+    result_summary=None,
+)
+```
+
+The `ChangeLog` records every mutation — add, update, summary — with timestamps. The Planner consumes changes incrementally via `consume_changes()`, so it always knows exactly what happened and when.
+
+---
+
+## ✨ Core Features
+
+### 1. 🚀 Concurrent Task Orchestration
+
+The Planner decomposes a user request into a **dependency-aware task tree**, then dispatches independent subtasks to up to **4 concurrent Actors**. Each Actor runs in its own `ContextManager` sandbox — no shared mutable state, no race conditions.
+
+```text
+User: "Refactor the auth module, add rate limiting, and write integration tests"
+
+Planner:
+  ├── task_01: Refactor auth.py → Actor-1 (running)
+  ├── task_02: Add rate limiter  → Actor-2 (running)  ← concurrent!
+  ├── task_03: Write tests       → Actor-3 (running)  ← concurrent!
+  └── Synthesize results         → Final response
+```
+
+### 2. 🧠 Chain-of-Thought Streaming
+
+DeepSeek V4 Pro's reasoning tokens are streamed in real-time with visual distinction:
+
+```
+> 🧠 Thinking...
+> Let me analyze the task tree first...
+> The user wants three things done, all independent...
+> I'll dispatch them concurrently and wait for summaries...
+
+(Then the final answer streams normally)
+```
+
+Both CLI and Web UIs render thinking tokens in a visually distinct style — you see **how** the agent reasons, not just **what** it concludes.
+
+### 3. ⚡ Circuit Breaker (Loop Detection)
+
+Agent got stuck calling the same failing tool repeatedly? SCA catches it:
+
+```
+Action hash: hash("bash" + json.dumps({"command": "npm run build"}))
+
+[recent_actions]: [hash1, hash2, hash1, hash3, hash1]
+                               ↑ count(hash1) >= 2 → BREAKER TRIPS
+
+→ System Alert injected into conversation
+→ Agent forced to change strategy
+```
+
+No infinite loops. No wasted API credits.
+
+### 4. 🧠 Hierarchical Memory Compression
+
+When context hits **80% of the model's limit**:
+
+| Layer | Strategy | What's Preserved |
+|---|---|---|
+| **System Prompt** | Frozen — never touched | Agent identity, rules, tool schemas |
+| **Scratchpad** (work log) | Extracted & **retained verbatim** | Completed tasks, active bugs, key file paths |
+| **Middle history** | LLM-summarized | Key decisions, file modifications |
+| **Recent messages** | Kept as-is (last N turns) | Immediate conversational context |
+
+This "hard retention + soft summarization" design means the agent **never forgets what it's currently working on**, even under extreme context pressure.
+
+### 5. 🛡️ Safe by Default
+
+- **Path Sandbox**: Every file operation is validated — `os.path.realpath()` check prevents `../../../etc/passwd` escapes
+- **Command Blacklist**: `sudo`, `rm -rf /`, `mkfs`, `dd if=`, fork bombs, and raw device writes are regex-blocked
+- **Syntax Pre-check**: `write` and `edit` validate Python/JSON syntax **before** touching disk — broken code is rejected upfront
+- **Env Hardening**: Shell sessions run with `DEBIAN_FRONTEND=noninteractive`, `CI=1`, `GIT_TERMINAL_PROMPT=0` — no hangs waiting for user input
+
+---
+
+## 📁 Project Structure
+
+```
+simple_coding_agent/
+│
+├── pyproject.toml                # Package config, entry points (sca / sca-web), deps
+├── .env.example                  # Environment variable template
+├── .gitignore
+│
+├── core/                         # 🧠 BRAIN LAYER — zero UI coupling
+│   ├── planner.py                # Planner agent: decompose → delegate → synthesize
+│   ├── agent.py                  # ActorAgent: isolated ReAct executor
+│   ├── state.py                  # GlobalState: task tree + change log (singleton)
+│   ├── context.py                # ContextManager: token estimation, hierarchical compression
+│   ├── llm.py                    # LLMClient: async OpenAI-compatible streaming with retry
+│   ├── system_prompt.py          # Planner & Actor system prompts (ACTOR_SYSTEM_PROMPT, PLANNER_SYSTEM_PROMPT)
+│   ├── exceptions.py             # Exception hierarchy (SCAAgentError → LLMAPIError, etc.)
+│   │
+│   └── tools/                    # 🛠️ Tool implementations
+│       ├── base.py               # BaseTool ABC, ToolResult dataclass, semantic_truncate()
+│       ├── delegate.py           # Concurrent Actor dispatch (asyncio.Semaphore gate)
+│       ├── update_state.py       # GlobalState CRUD (add_task / update_task / add_summary)
+│       ├── read.py               # Chunked file reader with line numbers
+│       ├── write.py              # Full file write + syntax pre-validation
+│       ├── edit.py               # 3-level diff engine (exact → whitespace-norm → fuzzy)
+│       ├── bash.py               # Persistent shell session + background/logs/kill
+│       ├── search_codebase.py    # Dual-mode: AST symbol search + regex text search
+│       ├── list_dir.py           # Directory listing with emoji icons
+│       ├── read_outline.py       # File skeleton viewer (AST for .py, regex for others)
+│       └── __init__.py           # ACTOR_TOOLS & PLANNER_TOOLS registries
+│
+├── cli/                          # 🖥️ TERMINAL SKIN
+│   ├── main.py                   # CLI entry point (sca command), lazy imports
+│   ├── ui.py                     # Rich-based live Markdown rendering, tool status cards
+│   └── bridge.py                 # async event loop → Rich UI bridge
+│
+└── web/                          # 🌐 WEB SKIN (Streamlit)
+    ├── cli.py                    # sca-web entry point (wraps streamlit run)
+    ├── main.py                   # 3-column layout: sidebar | chat | file preview
+    ├── bridge.py                 # Threaded async event → Streamlit session_state bridge
+    └── components/
+        ├── sidebar.py            # Project switcher + file tree + task board
+        ├── chat.py               # Chat history + streaming event renderer
+        └── diff.py               # HTML diff renderer (green/red)
+```
+
+### Tool Assignment
+
+| Tool | Planner | Actor | Purpose |
+|---|---|---|---|
+| `delegate` | ✅ | ❌ | Dispatch subtasks to concurrent Actors |
+| `update_state` | ✅ | ❌ | CRUD operations on the global task tree |
+| `read` | ❌ | ✅ | Chunked file reading with line numbers |
+| `write` | ❌ | ✅ | Full file creation/overwrite + syntax check |
+| `edit` | ❌ | ✅ | Precision search-replace with 3-level diff matching |
+| `bash` | ❌ | ✅ | Persistent shell with background/logs/kill actions |
+| `search_codebase` | ✅ | ✅ | AST symbol lookup + regex text search |
+| `list_dir` | ✅ | ✅ | Directory listing (depth=1) |
+| `read_outline` | ✅ | ✅ | File skeleton — signatures only, no body |
+
+> **Design principle**: The Planner *observes and decides*; Actors *execute and report*. No tool is shared that would create ambiguity about who did what.
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+| Requirement | Version | Why |
+|---|---|---|
+| **Python** | ≥ 3.12 | Native `asyncio` improvements, AST features |
+| **API Key** | DeepSeek (or OpenAI-compatible) | The LLM brain |
+| **Git** | Any recent version | For `git diff` safety net |
+
+### 1. Clone & Install
+
+```bash
+git clone https://github.com/huguotao7412/simple_coding_agent.git
+cd simple_coding_agent
+
+# Create venv + install (recommended)
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e .
+
+# Optional: dev dependencies (pytest)
+pip install -e ".[dev]"
+```
+
+### 2. Configure Environment
+
+Create a `.env` file in the project root:
+
+```bash
+# Required
+SCA_API_KEY=sk-your-deepseek-api-key-here
+
+# Optional — defaults shown
+SCA_API_BASE=https://api.deepseek.com
+SCA_MODEL=deepseek-v4-pro
+SCA_MAX_TOKENS=128000
+SCA_WORKSPACE=./workspaces
+```
+
+### 3. Launch
+
+```bash
+# Terminal mode — interactive REPL
+sca
+
+# Specify a workspace directory
+sca --dir /path/to/your/project
+
+# Override model for one session
+sca --model gpt-4o
+```
+
+```bash
+# Web dashboard — IDE-like experience
+sca-web
+# → Opens http://localhost:8501
+```
+
+### 4. Try It Out
+
+Once the REPL is running, just talk to it naturally:
+
+```
+> Initialize a FastAPI project with a /health endpoint and Dockerfile.
+
+> Read main.py, find the bubble sort, and replace it with quicksort.
+
+> Run pytest. If anything fails, read the error, fix the code, and re-run until all green.
+
+> Find all places where we're using os.path and migrate them to pathlib.
+
+> Add JWT authentication to this Flask app. Write tests. Update the README.
+```
+
+Type `exit` or `quit` to leave. Press `Ctrl+C` to interrupt a running agent.
+
+---
+
+## ⚙️ Configuration Reference
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SCA_API_KEY` | ✅ Yes | — | Your API key (DeepSeek or OpenAI-compatible) |
+| `SCA_API_BASE` | No | `https://api.deepseek.com` | API endpoint URL |
+| `SCA_MODEL` | No | `deepseek-v4-pro` | Model identifier |
+| `SCA_MAX_TOKENS` | No | `128000` | Token budget per API call |
+| `SCA_WORKSPACE` | No | `./workspaces` | Root directory for project workspaces (Web mode) |
+
+---
+
+## 🛠️ Tool Arsenal
+
+### `read` — Chunked File Reader
+```
+read(file_path="src/auth.py", offset=0, limit=500)
+→ Returns content with 1-indexed line numbers. Automatic semantic truncation
+  for large files with hint to use read_outline first.
+```
+
+### `write` — Atomic File Writer
+```
+write(file_path="src/new_module.py", content="...")
+→ Creates parent dirs automatically. Validates Python/JSON syntax BEFORE
+  writing to disk. Rejects broken code upfront.
+```
+
+### `edit` — Smart Diff Engine
+```
+edit(file_path="src/auth.py", search_block="...", replace_block="...")
+→ 3-level matching:
+  L1: Exact string match (fast path)
+  L2: Whitespace-normalized (tolerant of trailing spaces)
+  L3: Fuzzy difflib.SequenceMatcher (≥85% similarity)
+→ Returns unified diff output with +/− decorations.
+```
+
+### `bash` — Persistent Shell + Process Manager
+```
+# Run a command (state persists across calls — cd, export, venv activate work)
+bash(command="pytest tests/ -v", action="run")
+
+# Start a dev server in background
+bash(command="uvicorn app:app --port 8000", action="background")
+→ Returns PID
+
+# Check server output
+bash(command="", action="logs", pid=12345)
+
+# Kill the server
+bash(command="", action="kill", pid=12345)
+```
+
+### `search_codebase` — Dual-Mode Search
+```
+# AST symbol search (Python classes/functions with signatures + docstrings)
+search_codebase(query="authenticate", mode="symbol")
+
+# Regex text search with 2-line context window
+search_codebase(query="TODO|FIXME|HACK", mode="text")
+
+# Filter by extension
+search_codebase(query="def test_", mode="symbol", include_ext=".py")
+```
+
+### `read_outline` — File Skeleton
+```
+read_outline(file_path="core/agent.py")
+→ Returns:
+  L   25     [Class]  class ActorAgent:
+  L  125      [Func]  def run(self, user_input, on_token=None) -> ActorSummary:
+  L  251      [Func]  async def run_stream(self, user_input) -> AsyncGenerator:
+  ...
+→ Use this FIRST on large files, then read specific sections.
+```
+
+### `list_dir` — Directory Explorer
+```
+list_dir(dir_path="core/tools")
+→ Returns tree-like listing with 📁/📄 icons, ignoring .git, .venv, etc.
+```
+
+### Planner-Only Tools
+
+### `delegate` — Concurrent Actor Dispatch
+```
+delegate(subtasks=[
+  {"task_id": "task_01", "description": "Add JWT middleware",
+   "context_files": ["src/auth.py"], "context_summaries": ["..."]},
+  {"task_id": "task_02", "description": "Write tests",
+   "context_files": ["tests/test_auth.py"]},
+])
+→ Launches up to 4 Actors concurrently via asyncio.Semaphore
+→ Returns: structured summaries for each subtask
+```
+
+### `update_state` — Global Ledger CRUD
+```
+update_state(action="add_task", description="Refactor auth module")
+update_state(action="update_task", task_id="task_01", status="running")
+update_state(action="add_summary", task_id="task_01", summary="Done. Modified 3 files.")
+```
+
+---
+
+## 🖥️ Dual Interfaces
+
+### CLI (`sca`)
+<p>
+  <b>Rich-powered terminal experience</b> — live Markdown streaming, tool execution spinners, and DeepSeek reasoning chain display.
+</p>
+
+- Streaming Markdown via `rich.Live` with cursor animation
+- Real-time tool status cards: ⚡ running (cyan) → ✅ done / ❌ failed
+- DeepSeek thinking tokens rendered as `> 🧠 Thinking...` blockquotes
+- SCA ASCII art logo on launch (because why not)
+- `Ctrl+C` to interrupt, `exit` to quit
+
+### Web (`sca-web`)
+<p>
+  <b>Streamlit IDE-like dashboard</b> — project switcher, file tree, task board, and chat in one view.
+</p>
+
+| Panel | What It Shows |
+|---|---|
+| **Sidebar** | Project dropdown switcher, expandable file tree, real-time task status board |
+| **Main Chat** | Streaming agent responses, collapsible tool execution cards, diff-colored edit results |
+| **File Preview** | Click any file in sidebar → syntax-highlighted preview with line numbers |
+| **Task Board** | Live `GlobalState` snapshot — see which tasks are pending/running/done/failed |
+
+---
+
+## 🛡️ Safety & Guardrails
+
+SCA can write files and execute shell commands. We take safety seriously:
+
+### Defense in Depth
+
+```
+Layer 1 — Path Sandbox
+  All file ops go through BaseTool.validate_path() →
+  os.path.realpath() check against workspace root.
+  ../../../etc/passwd → BLOCKED
+
+Layer 2 — Command Blacklist
+  sudo, rm -rf /, mkfs, dd if=, chmod 777 /, fork bombs,
+  format C:, > /dev/sda → all regex-blocked
+
+Layer 3 — Syntax Pre-check
+  write & edit parse Python AST / JSON before touching disk.
+  SyntaxError → Edit Rejected, file untouched.
+
+Layer 4 — Loop Circuit Breaker
+  Same tool + same args repeated ≥2 times in recent history →
+  execution skipped, System Alert injected
+
+Layer 5 — Environment Hardening
+  DEBIAN_FRONTEND=noninteractive, CI=1, GIT_TERMINAL_PROMPT=0
+  → prevents apt/npm/git from blocking on prompts
+```
+
+### Recommended Practices
+
+1. **Always use version control.** Run SCA inside a git repo. Review every change with `git diff` before committing. If something goes wrong: `git reset --hard`.
+
+2. **Never run as root.** No `sudo sca`. The agent doesn't need root, and neither should you.
+
+3. **Use Docker for untrusted tasks.** Mount your workspace into a container for an extra isolation layer.
+
+4. **Review the diff.** The `edit` tool returns a unified diff for every change. Skim it before moving on.
+
+---
+
+## 🔧 Advanced Usage
+
+### Switching Between CLI and Web
+
+Both interfaces share the same `core/` engine. You can:
+- Start a task in `sca-web`, review the task board, then continue in `sca`
+- Run multiple `sca` sessions against different workspaces simultaneously
+- The Web UI persists session state across page refreshes
+
+### Custom System Prompts
+
+The system prompts live in `core/system_prompt.py`. Want a different agent personality?
+
+```python
+# Edit PLANNER_SYSTEM_PROMPT or ACTOR_SYSTEM_PROMPT
+# No config files needed — just Python strings
+```
+
+### Adding a New Tool
+
+```python
+# 1. Create core/tools/my_tool.py
+from .base import BaseTool, ToolResult
+
+class MyTool(BaseTool):
+    name = "my_tool"
+    description = "Does something useful."
+    parameters = {...}
+    required_params = [...]
+
+    async def execute(self, **kwargs) -> ToolResult:
+        ...
+
+# 2. Register in core/tools/__init__.py
+from .my_tool import MyTool
+
+# Add to ACTOR_TOOLS, PLANNER_TOOLS, or both depending on access level
+ACTOR_TOOLS = [..., MyTool]
+```
+
+### Programmatic API
+
+```python
+import asyncio
+from core.llm import LLMClient
+from core.context import ContextManager
+from core.planner import Planner
+from core.tools import PLANNER_TOOLS
+from core.system_prompt import PLANNER_SYSTEM_PROMPT
+
+async def main():
+    llm = LLMClient(api_key="...", model="deepseek-v4-pro")
+    ctx = ContextManager(system_prompt=PLANNER_SYSTEM_PROMPT)
+    tools = [t() for t in PLANNER_TOOLS]
+    planner = Planner(llm, ctx, tools, workspace_dir="./my_project")
+
+    async for event in planner.run_stream("Add type hints to all functions"):
+        if event.type == "thought":
+            print(event.token, end="", flush=True)
+        elif event.type == "done":
+            print(f"\n\nFinal: {event.content}")
+
+asyncio.run(main())
+```
+
+---
+
+## ❓ FAQ
+
+<details>
+<summary><b>Q: Why DeepSeek? Can I use OpenAI/GPT-4?</b></summary>
+
+SCA is built on the OpenAI-compatible API format. Any model that supports `tools` and streaming will work:
+
+```bash
+SCA_API_BASE=https://api.openai.com/v1
+SCA_MODEL=gpt-4o
+```
+
+However, DeepSeek V4 Pro is **strongly recommended** — its native reasoning tokens (`reasoning_content`) give SCA its Chain-of-Thought transparency. Other models work but won't show the thinking process.
+</details>
+
+<details>
+<summary><b>Q: How is this different from Claude Code / Aider / Cursor?</b></summary>
+
+- **Claude Code / Cursor** are interactive pair-programming tools. SCA is an **autonomous agent** — you give it a goal and it figures out the rest.
+- **Aider** is single-threaded edit-edit-edit. SCA plans first, then executes **concurrently**.
+- SCA's **Planner-Actor split** means it can work on multiple files simultaneously — most other agents are strictly sequential.
+</details>
+
+<details>
+<summary><b>Q: What's the max task complexity SCA can handle?</b></summary>
+
+Practically: anything that fits in 3-5 independent subtasks. The Planner has a 50-step limit, and each Actor has 30 steps. Context compression kicks in at 80% token usage. For truly massive projects, break the work into multiple SCA sessions.
+</details>
+
+<details>
+<summary><b>Q: Can I run SCA headless / in CI?</b></summary>
+
+Not yet — the CLI currently requires an interactive terminal. Programmatic API is available (see above) but not yet packaged as a CI-friendly command. This is on the roadmap.
+</details>
+
+<details>
+<summary><b>Q: Does it support Windows?</b></summary>
+
+Yes! SCA is tested on Windows 11. The `bash` tool auto-detects the platform and uses `cmd.exe` persistent sessions on Windows vs `/bin/bash` on Unix. The workspace tree fallback uses pure Python to avoid depending on the `tree` command.
+</details>
+
+---
+
+## 🗺️ Roadmap
+
+| Milestone | Status |
+|---|---|
+| Planner-Actor architecture | ✅ Done |
+| GlobalState with dependency DAG | ✅ Done |
+| Concurrent Actor dispatch (asyncio gate) | ✅ Done |
+| Hierarchical memory compression | ✅ Done |
+| Circuit breaker / loop detection | ✅ Done |
+| Dual UI (CLI + Streamlit Web) | ✅ Done |
+| 8 core tools with syntax validation | ✅ Done |
+| Git worktree isolation per Actor | 🔨 In Progress |
+| CI/CD headless mode | 📋 Planned |
+| Human-in-the-loop approval for destructive ops | 📋 Planned |
+| Persistent session history (SQLite) | 📋 Planned |
+| Multi-model routing (cheap model for simple tasks) | 💡 Ideas |
+
+---
+
+## 🙏 Acknowledgments
+
+Built with:
+- [DeepSeek](https://deepseek.com) — the LLM that makes this possible
+- [Rich](https://github.com/Textualize/rich) — beautiful terminal rendering
+- [Streamlit](https://streamlit.io) — rapid web UI prototyping
+- [httpx](https://www.python-httpx.org/) — async HTTP with HTTP/2
+
+---
+
+<p align="center">
+  <b>⭐ If this project helps you, consider giving it a star!</b><br>
+  <sub>Built with ☕ and late nights by <a href="https://github.com/huguotao7412">huguotao7412</a></sub>
+</p>
