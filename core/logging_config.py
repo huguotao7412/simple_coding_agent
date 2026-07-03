@@ -43,6 +43,10 @@ def setup_logging(level: str | None = None, json_format: bool | None = None) -> 
         ))
         root.addHandler(handler)
 
+    # Suppress noisy third-party HTTP logs
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 
 class _JSONFormatter(logging.Formatter):
     """Structured JSON log formatter for machine consumption."""

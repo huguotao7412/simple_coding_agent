@@ -153,10 +153,12 @@ class LiveMarkdownStream:
 
     def __exit__(self, *args):
         if self._live:
+            # Final update without cursor, then stop.
+            # transient=False leaves the clean output on screen.
+            if self._buffer.strip():
+                self._live.update(Markdown(self._buffer))
             self._live.stop()
             self._live = None
-        # Live with transient=False leaves its final rendered content on screen.
-        # No extra console.print needed — avoids double-rendering on Windows terminals.
 
     def add_token(self, token: str) -> None:
         self._buffer += token
