@@ -12,7 +12,7 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.mcp_client import MCPToolProvider
+from core.mcp import MCPToolProvider
 
 
 async def test_mcp_filesystem_read_write() -> None:

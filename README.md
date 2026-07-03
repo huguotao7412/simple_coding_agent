@@ -109,10 +109,10 @@ A single-threaded agent serializes everything — 15 minutes later, you're still
 - Handles context compression when approaching token limits
 
 **Layer 2 — Actor Pool (The Hands)**
-- Stateless, isolated execution units — each gets a fresh `ContextManager` and full tool access (`read`, `write`, `edit`, `bash`, `search_codebase`, `list_dir`, `read_outline`)
+- Stateless, isolated execution units — each gets a fresh `ContextManager` and MCP-backed tool access via `@modelcontextprotocol/server-filesystem` + `bash-mcp`
 - Launched concurrently via `asyncio.Semaphore(4)`
 - Returns structured `ActorSummary { task_id, status, files_modified, bugs_found, key_findings }`
-- Each Actor sees only the context the Planner explicitly injects — no cross-contamination
+- Each Actor runs in a dedicated git worktree with its own MCP Server processes — complete process-level isolation
 
 ### GlobalState: The Ledger
 
@@ -207,6 +207,7 @@ This "hard retention + soft summarization" design means the agent **never forget
 simple_coding_agent/
 │
 ├── pyproject.toml                # Package config, entry points (sca / sca-web), deps
+├── package.json                  # Node.js MCP Server dependencies
 ├── .env.example                  # Environment variable template
 ├── .gitignore
 │
@@ -216,17 +217,18 @@ simple_coding_agent/
 │   ├── state.py                  # GlobalState: task tree + change log (singleton)
 │   ├── context.py                # ContextManager: token estimation, hierarchical compression
 │   ├── llm.py                    # LLMClient: async OpenAI-compatible streaming with retry
-│   ├── system_prompt.py          # Planner & Actor system prompts (ACTOR_SYSTEM_PROMPT, PLANNER_SYSTEM_PROMPT)
+│   ├── system_prompt.py          # Planner & Actor system prompts
 │   ├── exceptions.py             # Exception hierarchy (SCAAgentError → LLMAPIError, etc.)
+│   │
+│   ├── mcp/                      # 🔌 MCP (Model Context Protocol) integration
+│   │   ├── __init__.py           # Package exports
+│   │   └── client.py             # MCPToolProvider: dual-server lifecycle, schema conversion
 │   │
 │   └── tools/                    # 🛠️ Tool implementations
 │       ├── base.py               # BaseTool ABC, ToolResult dataclass, semantic_truncate()
 │       ├── delegate.py           # Concurrent Actor dispatch (asyncio.Semaphore gate)
 │       ├── update_state.py       # GlobalState CRUD (add_task / update_task / add_summary)
-│       ├── read.py               # Chunked file reader with line numbers
-│       ├── write.py              # Full file write + syntax pre-validation
-│       ├── edit.py               # 3-level diff engine (exact → whitespace-norm → fuzzy)
-│       ├── bash.py               # Persistent shell session + background/logs/kill
+│       ├── apply_patch.py        # Patch application with fuzz matching + .rej cleanup
 │       ├── search_codebase.py    # Dual-mode: AST symbol search + regex text search
 │       ├── list_dir.py           # Directory listing with emoji icons
 │       ├── read_outline.py       # File skeleton viewer (AST for .py, regex for others)
@@ -249,19 +251,22 @@ simple_coding_agent/
 
 ### Tool Assignment
 
-| Tool | Planner | Actor | Purpose |
-|---|---|---|---|
-| `delegate` | ✅ | ❌ | Dispatch subtasks to concurrent Actors |
-| `update_state` | ✅ | ❌ | CRUD operations on the global task tree |
-| `read` | ❌ | ✅ | Chunked file reading with line numbers |
-| `write` | ❌ | ✅ | Full file creation/overwrite + syntax check |
-| `edit` | ❌ | ✅ | Precision search-replace with 3-level diff matching |
-| `bash` | ❌ | ✅ | Persistent shell with background/logs/kill actions |
-| `search_codebase` | ✅ | ✅ | AST symbol lookup + regex text search |
-| `list_dir` | ✅ | ✅ | Directory listing (depth=1) |
-| `read_outline` | ✅ | ✅ | File skeleton — signatures only, no body |
+| Tool | Planner | Actor | Source | Purpose |
+|---|---|---|---|---|
+| `delegate` | ✅ | ❌ | Local | Dispatch subtasks to concurrent Actors |
+| `update_state` | ✅ | ❌ | Local | CRUD operations on the global task tree |
+| `apply_patch` | ✅ | ❌ | Local | Apply Actor diffs back to main workspace |
+| `read_file` | ❌ | ✅ | MCP | Chunked file reading with line numbers |
+| `write_file` | ❌ | ✅ | MCP | Full file creation/overwrite |
+| `edit_file` | ❌ | ✅ | MCP | Precision search-replace with dry-run preview |
+| `run` | ❌ | ✅ | MCP | Shell command execution with timeout |
+| `run_background` | ❌ | ✅ | MCP | Start background processes (dev servers, etc.) |
+| `search_files` | ❌ | ✅ | MCP | Glob-based file search |
+| `search_codebase` | ✅ | ✅ | Local | AST symbol lookup + regex text search |
+| `list_dir` / `list_directory` | ✅ | ✅ | Local/MCP | Directory listing |
+| `read_outline` | ✅ | ✅ | Local | File skeleton — signatures only, no body |
 
-> **Design principle**: The Planner *observes and decides*; Actors *execute and report*. No tool is shared that would create ambiguity about who did what.
+> **Design principle**: The Planner *observes and decides*; Actors *execute and report*. Actor file/shell tools are now provided by community MCP Servers (`@modelcontextprotocol/server-filesystem` + `bash-mcp`), enabling process-level isolation and ecosystem compatibility.
 
 ---
 
@@ -272,6 +277,7 @@ simple_coding_agent/
 | Requirement | Version | Why |
 |---|---|---|
 | **Python** | ≥ 3.12 | Native `asyncio` improvements, AST features |
+| **Node.js** | ≥ 18 | MCP Server runtime (filesystem + bash) |
 | **API Key** | DeepSeek (or OpenAI-compatible) | The LLM brain |
 | **Git** | Any recent version | For `git diff` safety net |
 
@@ -356,46 +362,70 @@ Type `exit` or `quit` to leave. Press `Ctrl+C` to interrupt a running agent.
 
 ---
 
+## 🔌 MCP Integration (Model Context Protocol)
+
+SCA embraces the open-source MCP ecosystem. Actor agents no longer run local tool code — instead, each Actor spawns dedicated MCP Server subprocesses:
+
+```
+Actor (isolated git worktree)
+  ├── @modelcontextprotocol/server-filesystem  →  read_file, write_file, edit_file,
+  │                                                search_files, list_directory, ...
+  └── bash-mcp                                 →  run, run_background, kill_background,
+                                                   list_background
+```
+
+**Why MCP?**
+- **Process isolation** — tool crashes don't affect the Actor's LLM loop
+- **Ecosystem leverage** — new capabilities (databases, APIs, browsers) are just `npm install` away
+- **Zero maintenance** — file I/O and shell execution are maintained by the MCP community
+- **Future-proof** — any MCP-compatible server plugs in with zero code changes
+
+**Adding a new MCP Server** in the future is as simple as adding it to `core/mcp/client.py`'s server list.
+
+```bash
+# Install MCP Server dependencies (one-time)
+npm install
+# Or globally:
+npm install -g @modelcontextprotocol/server-filesystem bash-mcp
+```
+
+---
+
 ## 🛠️ Tool Arsenal
 
-### `read` — Chunked File Reader
+### `read_file` (MCP) — File Reader
 ```
-read(file_path="src/auth.py", offset=0, limit=500)
-→ Returns content with 1-indexed line numbers. Automatic semantic truncation
-  for large files with hint to use read_outline first.
-```
-
-### `write` — Atomic File Writer
-```
-write(file_path="src/new_module.py", content="...")
-→ Creates parent dirs automatically. Validates Python/JSON syntax BEFORE
-  writing to disk. Rejects broken code upfront.
+read_file(path="src/auth.py")
+→ Returns complete file contents with UTF-8 encoding.
 ```
 
-### `edit` — Smart Diff Engine
+### `write_file` (MCP) — File Writer
 ```
-edit(file_path="src/auth.py", search_block="...", replace_block="...")
-→ 3-level matching:
-  L1: Exact string match (fast path)
-  L2: Whitespace-normalized (tolerant of trailing spaces)
-  L3: Fuzzy difflib.SequenceMatcher (≥85% similarity)
-→ Returns unified diff output with +/− decorations.
+write_file(path="src/new_module.py", content="...")
+→ Creates or overwrites a file. Creates parent directories automatically.
 ```
 
-### `bash` — Persistent Shell + Process Manager
+### `edit_file` (MCP) — Smart Diff Editor
 ```
-# Run a command (state persists across calls — cd, export, venv activate work)
-bash(command="pytest tests/ -v", action="run")
+edit_file(path="src/auth.py", edits=[{"oldText": "...", "newText": "..."}])
+→ Line-based selective editing with dry-run preview mode.
+  Returns Git-style diff output.
+```
 
-# Start a dev server in background
-bash(command="uvicorn app:app --port 8000", action="background")
-→ Returns PID
+### `run` (MCP) — Shell Command
+```
+# Execute a command
+run(command="pytest tests/ -v")
 
-# Check server output
-bash(command="", action="logs", pid=12345)
+# Execute with timeout and working directory
+run(command="npm test", options={"cwd": "/path/to/project", "timeout": 60000})
+```
 
-# Kill the server
-bash(command="", action="kill", pid=12345)
+### `run_background` (MCP) — Background Process
+```
+# Start a dev server
+run_background(command="uvicorn app:app --port 8000", name="backend")
+→ Returns PID. Use kill_background("backend") to stop.
 ```
 
 ### `search_codebase` — Dual-Mode Search
@@ -639,7 +669,8 @@ Yes! SCA is tested on Windows 11. The `bash` tool auto-detects the platform and 
 | Circuit breaker / loop detection | ✅ Done |
 | Dual UI (CLI + Streamlit Web) | ✅ Done |
 | 8 core tools with syntax validation | ✅ Done |
-| Git worktree isolation per Actor | 🔨 In Progress |
+| Git worktree isolation per Actor | ✅ Done |
+| MCP (Model Context Protocol) integration | ✅ Done |
 | CI/CD headless mode | 📋 Planned |
 | Human-in-the-loop approval for destructive ops | 📋 Planned |
 | Persistent session history (SQLite) | 📋 Planned |

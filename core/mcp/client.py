@@ -7,6 +7,8 @@ Two MCP Servers are spawned per Actor:
 
 Usage::
 
+    from core.mcp import MCPToolProvider
+
     provider = MCPToolProvider()
     await provider.start("/path/to/worktree")
     schemas = await provider.list_tools()
@@ -25,7 +27,7 @@ from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from .tools.base import ToolResult
+from ..tools.base import ToolResult
 
 logger = logging.getLogger(__name__)
 

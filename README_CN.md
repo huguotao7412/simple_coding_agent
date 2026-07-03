@@ -109,10 +109,10 @@
 - Token 逼近阈值时触发分层上下文压缩
 
 **第二层 — Actor 池（手脚）**
-- 无状态、隔离的执行单元 —— 每个 Actor 拥有独立的 `ContextManager` 与完整工具链（`read`、`write`、`edit`、`bash`、`search_codebase`、`list_dir`、`read_outline`）
+- 无状态、隔离的执行单元 —— 每个 Actor 拥有独立的 `ContextManager` 与 MCP 驱动的工具链（`@modelcontextprotocol/server-filesystem` + `bash-mcp`）
 - 通过 `asyncio.Semaphore(4)` 控制并发上限
 - 返回结构化的 `ActorSummary { task_id, status, files_modified, bugs_found, key_findings }`
-- 每个 Actor 只看 Planner 显式注入的上下文 —— 杜绝交叉污染
+- 每个 Actor 运行在独立的 git worktree + 专属 MCP Server 子进程中 —— 完整的进程级隔离
 
 ### GlobalState：全局台账
 
@@ -207,6 +207,7 @@ Agent 卡住了，反复以相同参数调用同一个失败的工具？
 simple_coding_agent/
 │
 ├── pyproject.toml                # 包配置、入口脚本 (sca/sca-web)、依赖
+├── package.json                  # Node.js MCP Server 依赖声明
 ├── .env.example                  # 环境变量模板
 ├── .gitignore
 │
@@ -219,14 +220,15 @@ simple_coding_agent/
 │   ├── system_prompt.py          # Planner 与 Actor 系统提示词
 │   ├── exceptions.py             # 异常层级体系
 │   │
+│   ├── mcp/                      # 🔌 MCP (Model Context Protocol) 集成
+│   │   ├── __init__.py           # 包导出
+│   │   └── client.py             # MCPToolProvider：双 Server 生命周期管理、Schema 转换
+│   │
 │   └── tools/                    # 🛠️ 工具实现
 │       ├── base.py               # BaseTool 抽象基类、ToolResult、语义截断
 │       ├── delegate.py           # 并发 Actor 分发（asyncio.Semaphore 门控）
 │       ├── update_state.py       # GlobalState CRUD（add/update/summary）
-│       ├── read.py               # 分片带行号文件读取
-│       ├── write.py              # 全量文件覆写 + 语法预检
-│       ├── edit.py               # 三级 Diff 引擎（精确→去空格归一化→模糊匹配）
-│       ├── bash.py               # 持久化 Shell + 后台进程管理
+│       ├── apply_patch.py        # Patch 合并（fuzz 匹配 + .rej 清理）
 │       ├── search_codebase.py    # 双模搜索：AST 符号 / 正则文本
 │       ├── list_dir.py           # 目录列表（带 emoji 图标）
 │       ├── read_outline.py       # 文件骨架查看器（.py 走 AST，其他走正则）
@@ -249,19 +251,22 @@ simple_coding_agent/
 
 ### 工具权限矩阵
 
-| 工具 | Planner | Actor | 用途 |
-|---|---|---|---|
-| `delegate` | ✅ | ❌ | 将子任务并发分发给 Actor |
-| `update_state` | ✅ | ❌ | 全局任务树 CRUD |
-| `read` | ❌ | ✅ | 分片带行号文件阅读 |
-| `write` | ❌ | ✅ | 创建/覆写文件 + 语法检查 |
-| `edit` | ❌ | ✅ | 精确搜索替换（三级 Diff 匹配） |
-| `bash` | ❌ | ✅ | 持久化 Shell + 后台/logs/kill |
-| `search_codebase` | ✅ | ✅ | AST 符号查询 + 正则文本搜索 |
-| `list_dir` | ✅ | ✅ | 目录列表（深度=1） |
-| `read_outline` | ✅ | ✅ | 文件骨架 —— 只看签名不看实现 |
+| 工具 | Planner | Actor | 来源 | 用途 |
+|---|---|---|---|---|
+| `delegate` | ✅ | ❌ | 本地 | 将子任务并发分发给 Actor |
+| `update_state` | ✅ | ❌ | 本地 | 全局任务树 CRUD |
+| `apply_patch` | ✅ | ❌ | 本地 | 将 Actor diff 合并回主工作区 |
+| `read_file` | ❌ | ✅ | MCP | 读取文件内容（UTF-8） |
+| `write_file` | ❌ | ✅ | MCP | 创建/覆写文件 |
+| `edit_file` | ❌ | ✅ | MCP | 精确编辑（dry-run 预览） |
+| `run` | ❌ | ✅ | MCP | Shell 命令执行（含超时） |
+| `run_background` | ❌ | ✅ | MCP | 启动后台进程（开发服务器等） |
+| `search_files` | ❌ | ✅ | MCP | Glob 文件搜索 |
+| `search_codebase` | ✅ | ✅ | 本地 | AST 符号查询 + 正则文本搜索 |
+| `list_dir` / `list_directory` | ✅ | ✅ | 本地/MCP | 目录列表 |
+| `read_outline` | ✅ | ✅ | 本地 | 文件骨架 —— 只看签名不看实现 |
 
-> **设计原则**：Planner 负责*观察与决策*，Actor 负责*执行与汇报*。权限严格分离，杜绝越权。
+> **设计原则**：Planner 负责*观察与决策*，Actor 负责*执行与汇报*。Actor 的文件/Shell 工具现已由社区 MCP Server（`@modelcontextprotocol/server-filesystem` + `bash-mcp`）提供，实现了进程级隔离与生态兼容。
 
 ---
 
@@ -272,6 +277,7 @@ simple_coding_agent/
 | 条件 | 版本 | 说明 |
 |---|---|---|
 | **Python** | ≥ 3.12 | 原生 `asyncio` 改进、AST 新特性 |
+| **Node.js** | ≥ 18 | MCP Server 运行时（filesystem + bash） |
 | **API Key** | DeepSeek（或 OpenAI 兼容） | LLM 大脑 |
 | **Git** | 任意较新版本 | `git diff` 安全网 |
 
@@ -356,44 +362,68 @@ sca-web
 
 ---
 
+## 🔌 MCP 集成（Model Context Protocol）
+
+SCA 拥抱开源 MCP 生态。Actor Agent 不再运行本地工具代码 —— 每个 Actor 启动独立的 MCP Server 子进程：
+
+```
+Actor（独立 git worktree）
+  ├── @modelcontextprotocol/server-filesystem  →  read_file, write_file, edit_file,
+  │                                                search_files, list_directory, ...
+  └── bash-mcp                                 →  run, run_background, kill_background,
+                                                   list_background
+```
+
+**为什么选 MCP？**
+- **进程级隔离** —— 工具崩溃不影响 Actor 的 LLM 推理循环
+- **生态杠杆** —— 新能力（数据库、API、浏览器）只需 `npm install`
+- **零维护成本** —— 文件 I/O 和 Shell 执行由 MCP 社区维护
+- **面向未来** —— 任何 MCP 兼容的 Server 都可零代码改动接入
+
+```bash
+# 一次性安装 MCP Server 依赖
+npm install
+# 或全局安装：
+npm install -g @modelcontextprotocol/server-filesystem bash-mcp
+```
+
+---
+
 ## 🛠️ 工具库详解
 
-### `read` — 分片文件阅读器
+### `read_file` (MCP) — 文件阅读器
 ```
-read(file_path="src/auth.py", offset=0, limit=500)
-→ 返回带 1 起始行号的文件内容。大文件自动语义截断，提示先用 read_outline 查看结构。
-```
-
-### `write` — 原子化文件写入
-```
-write(file_path="src/new_module.py", content="...")
-→ 自动创建父目录。写入前校验 Python/JSON 语法，拒绝产出 Broken Code。
+read_file(path="src/auth.py")
+→ 返回完整文件内容（UTF-8 编码）。
 ```
 
-### `edit` — 智能 Diff 引擎
+### `write_file` (MCP) — 文件写入器
 ```
-edit(file_path="src/auth.py", search_block="...", replace_block="...")
-→ 三级匹配策略：
-  L1: 精确字符串匹配（快速路径）
-  L2: 去尾随空格后匹配（容忍格式化差异）
-  L3: 模糊匹配 difflib.SequenceMatcher（≥85% 相似度）
-→ 返回 Unified Diff，+/- 清晰标注变更。
+write_file(path="src/new_module.py", content="...")
+→ 创建或覆写文件。自动创建父目录。
 ```
 
-### `bash` — 持久化 Shell + 进程管理器
+### `edit_file` (MCP) — 智能 Diff 编辑器
 ```
-# 执行命令（状态持久化 —— cd、export、venv activate 效果保留）
-bash(command="pytest tests/ -v", action="run")
+edit_file(path="src/auth.py", edits=[{"oldText": "...", "newText": "..."}])
+→ 基于行的选择性编辑。支持 dry-run 预览模式。
+  返回 Git 风格的 diff 输出。
+```
 
-# 后台启动开发服务器
-bash(command="uvicorn app:app --port 8000", action="background")
-→ 返回 PID
+### `run` (MCP) — Shell 命令
+```
+# 执行命令
+run(command="pytest tests/ -v")
 
-# 查看后台进程输出
-bash(command="", action="logs", pid=12345)
+# 带超时与工作目录
+run(command="npm test", options={"cwd": "/path/to/project", "timeout": 60000})
+```
 
-# 终止后台进程
-bash(command="", action="kill", pid=12345)
+### `run_background` (MCP) — 后台进程
+```
+# 启动开发服务器
+run_background(command="uvicorn app:app --port 8000", name="backend")
+→ 返回 PID。用 kill_background("backend") 停止。
 ```
 
 ### `search_codebase` — 双模搜索引擎
@@ -638,6 +668,7 @@ SCA_MODEL=gpt-4o
 | 双端 UI（CLI + Streamlit Web） | ✅ 已完成 |
 | 8 个核心工具 + 语法校验 | ✅ 已完成 |
 | Git Worktree 隔离（每个 Actor 独立分支） | ✅ 已完成 |
+| MCP（Model Context Protocol）集成 | ✅ 已完成 |
 | CI/CD 无头模式 | 📋 计划中 |
 | 破坏性操作人工审批（Human-in-the-loop） | 📋 计划中 |
 | 持久化会话历史（SQLite） | 📋 计划中 |

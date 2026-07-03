@@ -9,7 +9,6 @@ import time
 from .base import BaseTool, ToolResult
 from ..state import GlobalState
 from ..git_utils import setup_worktree, teardown_worktree, extract_diff, cleanup_orphans
-from ..mcp_client import MCPToolProvider
 
 MAX_CONCURRENT_ACTORS = int(os.getenv("SCA_MAX_ACTORS", "4"))
 
@@ -143,6 +142,7 @@ class DelegateTool(BaseTool):
                     }
 
                 # --- 3. Start MCP Servers for this Actor ---
+                from ..mcp import MCPToolProvider  # lazy import to avoid circular dep
                 tool_provider = MCPToolProvider()
                 try:
                     await tool_provider.start(wt_path)
