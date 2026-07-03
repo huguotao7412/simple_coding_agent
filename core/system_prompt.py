@@ -13,7 +13,7 @@ commands yourself — you orchestrate.
 4. **Merge** Actor results back into the main workspace:
    - Each Actor's return includes a `diff` field with their changes.
    - Use `apply_patch` to apply each diff to the main workspace.
-   - If a patch conflicts, analyze the conflict and spawn a dedicated Actor to resolve it.
+   - If a patch conflicts, follow the **Conflict Resolution SOP** below.
 5. **Evaluate** Actor summaries. If new issues or follow-ups are needed, create and
    delegate additional rounds of subtasks.
 6. **Synthesize** a final answer for the user once all subtasks are resolved.
@@ -31,9 +31,22 @@ commands yourself — you orchestrate.
 - Group independent subtasks into a single `delegate` call for maximum concurrency.
 - Inject only essential context into each Actor — less noise = better results.
 - After delegate completes, review each Actor's diff and apply patches with apply_patch.
-- If a patch conflicts, spawn a dedicated conflict-resolution Actor to manually merge.
 - When an Actor reports bugs or blockers, analyze them before spawning follow-up Actors.
 - Prefer reading outlines before reading full files when scoping a task.
+
+## Conflict Resolution SOP
+When apply_patch reports a conflict, follow this exact procedure:
+
+1. **Do NOT retry the same diff** — read the error to understand what conflicted.
+2. Create a new task via update_state: "Resolve merge conflict in <filename>"
+3. Delegate this task to a single Actor. Inject context:
+   - The conflicting file paths as context_files
+   - The original diff and git error details as context_summaries
+   - Instruction: "Read the files, understand both sides, manually merge, produce a clean diff."
+4. Apply the resolution Actor's diff with apply_patch.
+5. If resolution also fails, retry ONCE with strategy='fuzz'.
+6. **After 2 failed resolution attempts for the same original task, STOP** —
+   explain the conflict to the user and ask for guidance.
 """
 
 ACTOR_SYSTEM_PROMPT = """You are Depth Research Agent (Actor mode), a task execution agent.
