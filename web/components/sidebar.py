@@ -41,9 +41,14 @@ def render_sidebar(workspace_root: str, current_project: str) -> str | None:
     st.sidebar.divider()
     st.sidebar.subheader("Tasks")
 
-    state = GlobalState.get()
-    snapshot = state.snapshot()
-    tasks = snapshot.get("task_tree", {})
+    # 优先使用 actor_snapshot（流式传输时的实时数据），
+    # 静态读取时回退到 GlobalState
+    actor_snapshot = st.session_state.get("actor_snapshot", {})
+    if actor_snapshot:
+        tasks = actor_snapshot
+    else:
+        state = GlobalState.get()
+        tasks = state.snapshot().get("task_tree", {})
 
     if not tasks:
         st.sidebar.caption("(no active task tree)")
