@@ -5,6 +5,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.live import Live
 from rich.status import Status
+from rich.table import Table
 
 SCA_LOGO = r"""
   [cyan] ▄██████▄    ▄██████▄     ▄██▄    [/]
@@ -23,6 +24,7 @@ class UI:
     def __init__(self):
         self.console = Console(force_terminal=True)
         self._tool_status: Status | None = None
+        self._actor_table: Live | None = None
 
     def render_markdown(self, text: str) -> None:
         if text.strip():
@@ -36,6 +38,55 @@ class UI:
         if self._tool_status:
             self._tool_status.stop()
             self._tool_status = None
+
+    def clear_actor_status(self) -> None:
+        """停止并清除并发任务状态表"""
+        if self._actor_table:
+            self._actor_table.stop()
+            self._actor_table = None
+
+    def render_actor_status(self, task_tree: dict) -> None:
+        """渲染并发 Actor 执行状态表。
+
+        Bridge 收到 actor_update 事件时调用。
+        同一批 delegate 内的多次调用会原地更新表格。
+        """
+        if not task_tree:
+            return
+
+        status_styles = {
+            "pending":  ("⏳", "dim yellow"),
+            "running":  ("🔄", "bold cyan"),
+            "done":     ("✅", "bold green"),
+            "failed":   ("❌", "bold red"),
+        }
+
+        table = Table(
+            title="并发任务状态",
+            title_style="bold blue",
+            show_header=True,
+            header_style="bold",
+        )
+        table.add_column("Task ID", style="dim", width=14)
+        table.add_column("任务描述", width=40)
+        table.add_column("状态", width=12)
+
+        for tid, task in task_tree.items():
+            icon, style = status_styles.get(task.get("status", ""), ("❓", ""))
+            status_text = f"{icon} {task['status']}"
+            desc = (task.get("description", "") or "")[:38]
+            table.add_row(tid, desc, f"[{style}]{status_text}[/]")
+
+        if self._actor_table:
+            self._actor_table.update(table)
+        else:
+            self._actor_table = Live(
+                table,
+                console=self.console,
+                refresh_per_second=4,
+                transient=False,
+            )
+            self._actor_table.start()
 
     def render_tool_status(self, name: str, status: str) -> None:
         """Show a one-line tool execution status."""
