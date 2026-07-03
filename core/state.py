@@ -12,6 +12,7 @@ class TaskNode:
     assigned_actor: str | None = None
     dependencies: list[str] = field(default_factory=list)
     result_summary: str | None = None
+    diff: str | None = None  # unified diff from Actor's worktree changes
 
 
 @dataclass
@@ -66,12 +67,13 @@ class GlobalState:
             timestamp=time.time(), payload=kwargs,
         ))
 
-    def add_summary(self, task_id: str, summary: str) -> None:
+    def add_summary(self, task_id: str, summary: str, diff: str = "") -> None:
         import time
         self.task_tree[task_id].result_summary = summary
+        self.task_tree[task_id].diff = diff or None
         self.change_log.append(ChangeRecord(
             type="summary_added", task_id=task_id,
-            timestamp=time.time(), payload={"summary": summary},
+            timestamp=time.time(), payload={"summary": summary, "diff": diff},
         ))
 
     def consume_changes(self) -> list[ChangeRecord]:
@@ -89,6 +91,7 @@ class GlobalState:
                     "assigned_actor": t.assigned_actor,
                     "dependencies": t.dependencies,
                     "result_summary": t.result_summary,
+                    "diff": (t.diff or "")[:500],  # truncate for context window
                 }
                 for tid, t in self.task_tree.items()
             },
