@@ -132,35 +132,23 @@ class UI:
 
 
 class LiveMarkdownStream:
-    """Context manager for streaming markdown to the terminal."""
+    """Accumulates streaming tokens and renders markdown once on exit.
+
+    Avoids Rich Live widget entirely — Live's ANSI cursor repositioning
+    is unreliable on Windows terminals, causing duplicate renders.
+    """
 
     def __init__(self, console: Console):
         self.console = console
         self._buffer = ""
-        self._live: Live | None = None
 
     def __enter__(self):
         self._buffer = ""
-        self._live = Live(
-            Markdown(""),
-            console=self.console,
-            refresh_per_second=10,
-            vertical_overflow="ellipsis",
-            transient=False,
-        )
-        self._live.start()
         return self
 
     def __exit__(self, *args):
-        if self._live:
-            # Final update without cursor, then stop.
-            # transient=False leaves the clean output on screen.
-            if self._buffer.strip():
-                self._live.update(Markdown(self._buffer))
-            self._live.stop()
-            self._live = None
+        if self._buffer.strip():
+            self.console.print(Markdown(self._buffer))
 
     def add_token(self, token: str) -> None:
         self._buffer += token
-        if self._live:
-            self._live.update(Markdown(self._buffer + "▌"))
