@@ -9,6 +9,7 @@ import time
 from .base import BaseTool, ToolResult
 from ..state import GlobalState
 from ..git_utils import setup_worktree, teardown_worktree, extract_diff, cleanup_orphans
+from ..mcp_client import MCPToolProvider
 
 MAX_CONCURRENT_ACTORS = int(os.getenv("SCA_MAX_ACTORS", "4"))
 
@@ -88,7 +89,7 @@ class DelegateTool(BaseTool):
 
         # Mark all as running
         for st in subtasks:
-            state.update_task(st["task_id"], status="running")
+            await state.update_task(st["task_id"], status="running")
 
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_ACTORS)
 
@@ -99,8 +100,8 @@ class DelegateTool(BaseTool):
 
             description = subtask.get("description", "")
             if not description:
-                state.update_task(tid, status="failed")
-                state.add_summary(tid, "ERROR: LLM failed to provide description")
+                await state.update_task(tid, status="failed")
+                await state.add_summary(tid, "ERROR: LLM failed to provide description")
                 return {"task_id": tid, "status": "failed", "error": "Missing description"}
 
             context_files = subtask.get("context_files", [])
@@ -133,55 +134,71 @@ class DelegateTool(BaseTool):
                     wt_path = setup_worktree(current_workspace, tid)
                     logger.info("actor_start task_id=%s worktree=%s", tid, wt_path)
                 except Exception as e:
-                    state.update_task(tid, status="failed")
-                    state.add_summary(tid, f"ERROR: worktree setup failed: {e}")
+                    await state.update_task(tid, status="failed")
+                    await state.add_summary(tid, f"ERROR: worktree setup failed: {e}")
                     return {
                         "task_id": tid,
                         "status": "failed",
                         "error": f"worktree setup: {str(e)}",
                     }
 
-                # --- 3. Copy context files into worktree so Actor sees current state ---
-                for fp in context_files:
-                    src = os.path.join(current_workspace, fp)
-                    dst = os.path.join(wt_path, fp)
-                    if os.path.isfile(src):
-                        try:
-                            os.makedirs(os.path.dirname(dst), exist_ok=True)
-                            shutil.copy2(src, dst)
-                        except Exception:
-                            pass  # best-effort copy
-
-                # --- 4. Build ActorAgent pointing at worktree ---
-                actor_ctx = ContextManager(
-                    system_prompt=ACTOR_SYSTEM_PROMPT,
-                    max_tokens=self._llm.max_tokens,
-                )
-                actor_ctx.add_user_message(injected_context)
-
-                actor = ActorAgent(
-                    llm_client=self._llm,
-                    context_manager=actor_ctx,
-                    tools=[t() for t in ACTOR_TOOLS],
-                    workspace_dir=wt_path,
-                    actor_id=tid,
-                    task_context=description,
-                )
-
-                # --- 5. Execute Actor; always teardown worktree ---
+                # --- 3. Start MCP Servers for this Actor ---
+                tool_provider = MCPToolProvider()
                 try:
+                    await tool_provider.start(wt_path)
+                except Exception as e:
+                    logger.error("MCP startup failed for %s: %s", tid, e)
+                    await state.update_task(tid, status="failed")
+                    await state.add_summary(tid, f"ERROR: MCP Server 启动失败: {e}")
+                    teardown_worktree(wt_path)
+                    return {
+                        "task_id": tid,
+                        "status": "failed",
+                        "error": f"MCP startup: {str(e)}",
+                    }
+
+                try:
+                    # --- 4. Copy context files into worktree ---
+                    for fp in context_files:
+                        src = os.path.join(current_workspace, fp)
+                        dst = os.path.join(wt_path, fp)
+                        if os.path.isfile(src):
+                            try:
+                                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                                shutil.copy2(src, dst)
+                            except Exception:
+                                pass  # best-effort copy
+
+                    # --- 5. Build ActorAgent with MCP tool provider ---
+                    actor_ctx = ContextManager(
+                        system_prompt=ACTOR_SYSTEM_PROMPT,
+                        max_tokens=self._llm.max_tokens,
+                    )
+                    actor_ctx.add_user_message(injected_context)
+
+                    actor = ActorAgent(
+                        llm_client=self._llm,
+                        context_manager=actor_ctx,
+                        tools=None,                      # 不使用本地工具
+                        tool_provider=tool_provider,     # MCP 模式
+                        workspace_dir=wt_path,
+                        actor_id=tid,
+                        task_context=description,
+                    )
+
+                    # --- 6. Execute Actor ---
                     trigger_prompt = "请基于上述提供的上下文和目标，开始执行你负责的子任务。"
                     summary = await actor.run(trigger_prompt)
 
                     # Extract diff from worktree changes
                     diff = ""
                     try:
-                        diff = extract_diff(wt_path)
+                        diff = await extract_diff(wt_path)
                     except Exception:
                         logger.warning(f"Failed to extract diff for {tid}")
 
-                    state.add_summary(tid, summary.key_findings or "Task completed.", diff=diff)
-                    state.update_task(tid, status=summary.status)
+                    await state.add_summary(tid, summary.key_findings or "Task completed.", diff=diff)
+                    await state.update_task(tid, status=summary.status)
                     duration_ms = int((time.monotonic() - start_time) * 1000)
                     logger.info(
                         "actor_end task_id=%s duration_ms=%d outcome=%s files_modified=%d",
@@ -197,8 +214,8 @@ class DelegateTool(BaseTool):
                         "diff": diff[:8000],  # truncate for Planner context
                     }
                 except Exception as e:
-                    state.update_task(tid, status="failed")
-                    state.add_summary(tid, f"ERROR: {e}")
+                    await state.update_task(tid, status="failed")
+                    await state.add_summary(tid, f"ERROR: {e}")
                     duration_ms = int((time.monotonic() - start_time) * 1000)
                     logger.error(
                         "actor_end task_id=%s duration_ms=%d outcome=failed error=%s",
@@ -210,45 +227,93 @@ class DelegateTool(BaseTool):
                         "error": str(e),
                     }
                 finally:
-                    # --- 6. Teardown worktree (always, even on exception) ---
+                    # --- 7. Cleanup: MCP first, then worktree ---
+                    try:
+                        await tool_provider.shutdown()
+                    except Exception:
+                        logger.warning("MCP shutdown error for %s", tid, exc_info=True)
                     try:
                         teardown_worktree(wt_path)
                     except Exception:
                         logger.warning(f"Failed to teardown worktree for {tid}: {wt_path}")
 
         # DAG-aware execution: topological sort into dependency levels
-        # Tasks with no pending dependencies run concurrently; dependent tasks wait
-        completed: set[str] = set()
+        # Tasks with no pending dependencies run concurrently; dependent tasks wait.
+        # Failed tasks DO NOT unlock their dependents — they are cascaded as "blocked".
+        completed: set[str] = set()       # task_ids that succeeded (status == "done")
+        failed: set[str] = set()          # task_ids that failed (status != "done")
         all_results: list[dict] = []
         remaining = {st["task_id"]: st for st in subtasks}
 
         while remaining:
-            # Find tasks whose dependencies are all completed
+            # Find tasks whose dependencies are all completed (not just done OR failed,
+            # but only "done" — a failed dependency blocks downstream tasks)
             ready: dict[str, dict] = {}
             for tid, st in remaining.items():
                 node = state.task_tree.get(tid)
                 deps = set(node.dependencies) if node else set()
+
+                # A task is blocked if any of its dependencies failed
+                if deps & failed:
+                    all_results.append({
+                        "task_id": tid,
+                        "status": "blocked",
+                        "error": f"Blocked: dependency {sorted(deps & failed)} failed",
+                    })
+                    await state.update_task(tid, status="blocked")
+                    continue
+
                 unresolved = {d for d in deps if d not in completed and d in remaining}
                 if not unresolved:
                     ready[tid] = st
 
-            if not ready:
-                # Circular dependency or all tasks already processed — execute remaining
+            # Remove blocked tasks from remaining
+            remaining = {tid: st for tid, st in remaining.items()
+                         if tid not in {r["task_id"] for r in all_results if r["status"] == "blocked"}}
+
+            if not ready and remaining:
+                # Circular dependency detected — break the cycle by running all remaining
                 ready = dict(remaining)
 
+            if not ready:
+                break
+
             # Execute ready tasks concurrently
-            batch_results = await asyncio.gather(*[run_one(st) for st in ready.values()])
+            batch_results = await asyncio.gather(
+                *[run_one(st) for st in ready.values()],
+                return_exceptions=True,
+            )
 
             for r in batch_results:
+                # Guard against unhandled exceptions from run_one
+                if isinstance(r, BaseException):
+                    logger.error(f"run_one raised unhandled exception: {r}")
+                    continue
+
                 all_results.append(r)
-                completed.add(r["task_id"])
+                if r["status"] == "done":
+                    completed.add(r["task_id"])
+                else:
+                    failed.add(r["task_id"])
                 if r["task_id"] in remaining:
                     del remaining[r["task_id"]]
 
         # Build return message
-        lines = [f"Delegate complete: {len(all_results)} subtask(s) executed.\n"]
+        done_count = sum(1 for r in all_results if r["status"] == "done")
+        blocked_count = sum(1 for r in all_results if r.get("status") == "blocked")
+        failed_count = sum(1 for r in all_results if r.get("status") == "failed")
+        lines = [
+            f"Delegate complete: {done_count} done, {failed_count} failed, "
+            f"{blocked_count} blocked (total {len(all_results)} subtask(s)).\n"
+        ]
         for r in all_results:
-            status_icon = "OK" if r["status"] == "done" else "FAIL"
+            status = r.get("status", "unknown")
+            if status == "done":
+                status_icon = "OK"
+            elif status == "blocked":
+                status_icon = "BLOCKED"
+            else:
+                status_icon = "FAIL"
             detail = r.get("key_findings", r.get("error", ""))[:200]
             lines.append(f"  [{status_icon}] {r['task_id']}: {detail}")
         return ToolResult.ok("\n".join(lines))
