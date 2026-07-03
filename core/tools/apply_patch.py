@@ -114,9 +114,19 @@ class ApplyPatchTool(BaseTool):
                     return ToolResult.fail(
                         f"Patch for {task_id} conflicts with current workspace state.\n"
                         f"Conflicting files: {', '.join(conflict_files) if conflict_files else 'unknown'}.\n"
-                        f"Git output: {stderr}\n\n"
-                        f"Consider: spawn a resolution Actor to manually merge the changes, "
-                        f"or use strategy='fuzz' to apply partial changes."
+                        f"Git error details:\n{stderr}\n\n"
+                        f"=== RESOLUTION PROTOCOL ===\n"
+                        f"1. Create a new task via update_state: 'Resolve merge conflict for {task_id}'\n"
+                        f"2. Delegate this task to a single Actor. Inject as context_files the\n"
+                        f"   conflicting file paths listed above, plus the original diff below.\n"
+                        f"3. The resolution Actor should read the conflicting files, understand\n"
+                        f"   both the current state AND the intended changes, manually merge,\n"
+                        f"   and produce a clean unified diff as output.\n"
+                        f"4. Apply the resolution Actor's clean diff with apply_patch.\n"
+                        f"5. If resolution also fails, retry ONCE with strategy='fuzz'.\n"
+                        f"6. After 2 failed resolution attempts, report to the user.\n"
+                        f"=== ORIGINAL DIFF (first 2000 chars) ===\n"
+                        f"{diff[:2000]}"
                     )
 
             # --- Apply the patch ---
