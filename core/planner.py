@@ -149,6 +149,9 @@ class Planner:
             if self.ctx.needs_compression(self.llm):
                 await self.ctx.compress(self.llm)
                 yield AgentEvent(type="compaction")
+            elif self.ctx.needs_proactive_compression(self.llm):
+                self.ctx._lightweight_compress()
+                yield AgentEvent(type="compaction", content="lightweight")
 
             queue = asyncio.Queue()
 

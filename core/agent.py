@@ -274,6 +274,8 @@ class ActorAgent:
             # Check context and compress if needed
             if self.ctx.needs_compression(self.llm):
                 await self.ctx.compress(self.llm)
+            elif self.ctx.needs_proactive_compression(self.llm):
+                self.ctx._lightweight_compress()
 
             # Build payload: static prefix (cacheable) + dynamic context tail
             payload_messages = self.ctx.messages + [self._build_dynamic_context_msg()]
@@ -341,6 +343,9 @@ class ActorAgent:
             if self.ctx.needs_compression(self.llm):
                 await self.ctx.compress(self.llm)
                 yield AgentEvent(type="compaction", actor_id=self.actor_id)
+            elif self.ctx.needs_proactive_compression(self.llm):
+                self.ctx._lightweight_compress()
+                yield AgentEvent(type="compaction", content="lightweight", actor_id=self.actor_id)
 
             queue = asyncio.Queue()
 

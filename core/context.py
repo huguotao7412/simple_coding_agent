@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import re
+
+from .tools.base import semantic_truncate, DEFAULT_TOKEN_BUDGET
 
 
 class ContextManager:
@@ -12,15 +15,19 @@ class ContextManager:
         max_tokens: int = 128000,
         model_context_limit: int = 128000,
         compression_threshold: float = 0.8,
+        warning_threshold: float = 0.7,
         keep_recent: int = 5,
     ):
         self.max_tokens = max_tokens
         self.model_context_limit = model_context_limit
         self.compression_threshold = compression_threshold
+        self.warning_threshold = warning_threshold
         self.keep_recent = keep_recent
         self.messages: list[dict] = [
             {"role": "system", "content": system_prompt}
         ]
+        self._result_hashes: set[str] = set()
+        self._max_hash_cache = 50
 
     def add_user_message(self, content: str) -> None:
         self.messages.append({"role": "user", "content": content})
@@ -39,6 +46,25 @@ class ContextManager:
         self.messages.append(msg)
 
     def add_tool_result(self, tool_call_id: str, content: str) -> None:
+        # Auto-truncate large tool results before storing
+        if len(content) > DEFAULT_TOKEN_BUDGET * 3:
+            content, _ = semantic_truncate(content, token_budget=DEFAULT_TOKEN_BUDGET)
+
+        # Dedup: skip identical results within the same conversation window
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+        if content_hash in self._result_hashes:
+            self.messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": "[Same result as previous call, omitted]",
+            })
+            return
+
+        self._result_hashes.add(content_hash)
+        # Rotate cache if it grows too large
+        if len(self._result_hashes) > self._max_hash_cache:
+            self._result_hashes.clear()
+
         self.messages.append({
             "role": "tool",
             "tool_call_id": tool_call_id,
@@ -53,6 +79,18 @@ class ContextManager:
         return self.estimate_tokens(llm_client) > int(
             self.model_context_limit * self.compression_threshold
         )
+
+    def needs_proactive_compression(self, llm_client) -> bool:
+        """Lightweight early warning at warning_threshold — signals that
+        large messages should be truncated, but no LLM summarization yet."""
+        return self.estimate_tokens(llm_client) > int(
+            self.model_context_limit * self.warning_threshold
+        )
+
+    def _lightweight_compress(self) -> None:
+        """Truncate all large messages without calling LLM for summarization.
+        Used at the warning_threshold tier to buy headroom before full compression."""
+        self._truncate_large_messages(self.messages, max_chars=8000)
 
     def get_compressible_range(self) -> tuple[int, int]:
         if len(self.messages) <= 1:
@@ -121,6 +159,7 @@ class ContextManager:
         new_messages.append({"role": "system", "content": f"[Conversation summary]: {summary}"})
         new_messages.extend(tail)
         self.messages = new_messages
+        self._result_hashes.clear()  # Reset dedup cache after compression
 
     _FENCE_RE = re.compile(r"```")
 
