@@ -637,7 +637,7 @@ SCA_MODEL=gpt-4o
 | 死循环熔断器 | ✅ 已完成 |
 | 双端 UI（CLI + Streamlit Web） | ✅ 已完成 |
 | 8 个核心工具 + 语法校验 | ✅ 已完成 |
-| Git Worktree 隔离（每个 Actor 独立分支） | 🔨 开发中 |
+| Git Worktree 隔离（每个 Actor 独立分支） | ✅ 已完成 |
 | CI/CD 无头模式 | 📋 计划中 |
 | 破坏性操作人工审批（Human-in-the-loop） | 📋 计划中 |
 | 持久化会话历史（SQLite） | 📋 计划中 |
