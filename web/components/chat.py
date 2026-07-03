@@ -57,6 +57,17 @@ def render_current_events():
             st.toast("上下文已压缩，释放空间")
             i += 1
 
+        elif event.type == "actor_update":
+            import json
+            try:
+                snapshot = json.loads(event.content)
+                st.session_state["actor_snapshot"] = snapshot.get(
+                    "task_tree", {}
+                )
+            except Exception:
+                pass
+            i += 1
+
         elif event.type == "error":
             st.error(event.content)
             i += 1
