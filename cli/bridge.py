@@ -45,6 +45,18 @@ class Bridge:
                     elif event.type == "tool_result":
                         status = "done" if event.tool_result and event.tool_result.success else "failed"
                         self.ui.render_tool_status(event.tool_name or "tool", status)
+                    elif event.type == "actor_update":
+                        if stream:
+                            stream.__exit__(None, None, None)
+                            stream = None
+                        import json
+                        try:
+                            snapshot = json.loads(event.content)
+                            self.ui.render_actor_status(
+                                snapshot.get("task_tree", {})
+                            )
+                        except Exception:
+                            pass  # best-effort rendering
                     elif event.type == "compaction":
                         self.ui.clear_tool_status()
                         self.ui.render_info("\n[System: Context compressed]")
@@ -56,5 +68,6 @@ class Bridge:
                         self.ui.render_error(f"Agent Error: {event.content}")
             finally:
                 self.ui.clear_tool_status()  # 确保一轮对话结束时，不残留工具动画
+                self.ui.clear_actor_status()  # 清理并发任务状态表
                 if stream:
                     stream.__exit__(None, None, None)
