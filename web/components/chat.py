@@ -78,6 +78,22 @@ def render_current_events():
                 st.session_state.messages.append({"role": "assistant", "content": content})
             i += 1
 
+        elif event.type == "token_stats":
+            import json
+            try:
+                stats = json.loads(event.content)
+                prompt_t = stats.get("prompt_tokens", 0)
+                completion_t = stats.get("completion_tokens", 0)
+                total_t = prompt_t + completion_t
+                st.caption(
+                    f"📊 Token — prompt: {prompt_t:,}  "
+                    f"completion: {completion_t:,}  "
+                    f"total: {total_t:,}"
+                )
+            except Exception:
+                pass
+            i += 1
+
         else:
             i += 1
 
