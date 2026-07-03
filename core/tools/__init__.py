@@ -7,6 +7,7 @@ from .list_dir import ListDirTool
 from .read_outline import ReadOutlineTool
 from .update_state import UpdateStateTool
 from .delegate import DelegateTool
+from .apply_patch import ApplyPatchTool
 
 # Actor tools (execution layer) — tools that modify files/run commands
 ACTOR_TOOLS = [
@@ -23,6 +24,7 @@ ACTOR_TOOLS = [
 PLANNER_TOOLS = [
     UpdateStateTool,
     DelegateTool,
+    ApplyPatchTool,
     ListDirTool,
     SearchCodebaseTool,
     ReadOutlineTool,
@@ -31,6 +33,6 @@ PLANNER_TOOLS = [
 __all__ = [
     "ReadTool", "WriteTool", "EditTool", "BashTool",
     "SearchCodebaseTool", "ListDirTool", "ReadOutlineTool",
-    "UpdateStateTool", "DelegateTool",
+    "UpdateStateTool", "DelegateTool", "ApplyPatchTool",
     "ACTOR_TOOLS", "PLANNER_TOOLS",
 ]
