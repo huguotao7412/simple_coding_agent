@@ -1,0 +1,10 @@
+{
+  "name": "simple-coding-agent-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Node.js MCP Server dependencies for Simple Coding Agent's Actor runtime",
+  "dependencies": {
+    "@modelcontextprotocol/server-filesystem": "latest",
+    "bash-mcp": "latest"
+  }
+}
