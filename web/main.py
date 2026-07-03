@@ -44,6 +44,18 @@ def init_planner() -> Planner:
         model=model,
         max_tokens=max_tokens,
     )
+    # 清理上次异常退出遗留的临时 Worktree
+    from core.git_utils import cleanup_orphans
+    try:
+        removed = cleanup_orphans(workspace)
+        if removed:
+            import logging
+            logging.warning(
+                f"Cleaned up {len(removed)} orphaned worktree(s)"
+            )
+    except Exception:
+        pass  # best-effort on web startup
+
     ctx = ContextManager(system_prompt=PLANNER_SYSTEM_PROMPT)
     tools = [t() for t in PLANNER_TOOLS]
     state = GlobalState.get()
