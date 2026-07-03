@@ -52,7 +52,7 @@ class Planner:
         while True:
             step_count += 1
             if step_count > MAX_STEPS:
-                error_msg = "Safety limit: Planner reached max steps. Please retry with a simpler request."
+                error_msg = "安全熔断：Planner 已达到最大步数限制。请尝试简化请求后重试。"
                 self.ctx.add_assistant_message(content=error_msg)
                 return error_msg
 
@@ -145,7 +145,7 @@ class Planner:
         while True:
             step_count += 1
             if step_count > MAX_STEPS:
-                error_msg = "Safety limit: Planner reached max steps. Please retry with a simpler request."
+                error_msg = "安全熔断：Planner 已达到最大步数限制。请尝试简化请求后重试。"
                 self.ctx.add_assistant_message(content=error_msg)
                 logger.debug(
                     "Planner run max steps: prompt_tokens=%d completion_tokens=%d total=%d",
@@ -322,7 +322,7 @@ class Planner:
 
                 # If delegate was called, check State for task updates
                 if tool_name == "delegate":
-                    snapshot = self.state.snapshot()
+                    snapshot = await self.state.snapshot()
                     yield AgentEvent(
                         type="actor_update",
                         content=json.dumps(snapshot, ensure_ascii=False),

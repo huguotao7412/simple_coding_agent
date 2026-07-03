@@ -121,10 +121,24 @@ def _find_matching_result(events: list[AgentEvent], tool_call_idx: int) -> ToolR
 
 
 def _render_tool_output(tool_name: str, result: ToolResult):
-    """Render tool execution output based on tool type."""
-    content = result.content[:3000] if result.content else ""
+    """Render tool execution output based on tool type.
+
+    Large outputs (diffs, logs) are truncated to 200 lines / 8000 chars
+    to prevent UI thread blocking.
+    """
+    MAX_LINES = 200
+    MAX_CHARS = 8000
+    content = result.content or ""
     if not content:
         return
+
+    lines = content.split("\n")
+    truncated = False
+    if len(lines) > MAX_LINES or len(content) > MAX_CHARS:
+        truncated = True
+        if len(lines) > MAX_LINES:
+            lines = lines[:MAX_LINES]
+        content = "\n".join(lines)[:MAX_CHARS]
 
     if tool_name == "edit":
         st.code(content, language="diff")
@@ -134,3 +148,6 @@ def _render_tool_output(tool_name: str, result: ToolResult):
         st.code(content, language="bash")
     else:
         st.text(content)
+
+    if truncated:
+        st.caption("... [完整差异已合并至主工作区，此处仅展示前 200 行]")

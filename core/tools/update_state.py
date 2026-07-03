@@ -50,7 +50,7 @@ class UpdateStateTool(BaseTool):
             if not description:
                 return ToolResult.fail("'description' is required for add_task action")
             dependencies = kwargs.get("dependencies", [])
-            task_id = state.add_task(description, dependencies)
+            task_id = await state.add_task(description, dependencies)
             return ToolResult.ok(f"Task registered: {task_id}")
 
         elif action == "update_task":
@@ -62,7 +62,7 @@ class UpdateStateTool(BaseTool):
             new_status = kwargs.get("status", "")
             if new_status not in ("pending", "running", "done", "failed"):
                 return ToolResult.fail(f"Invalid status: {new_status}")
-            state.update_task(task_id, status=new_status)
+            await state.update_task(task_id, status=new_status)
             return ToolResult.ok(f"Task {task_id} -> {new_status}")
 
         elif action == "add_summary":
@@ -74,8 +74,8 @@ class UpdateStateTool(BaseTool):
             summary = kwargs.get("summary", "")
             if not summary:
                 return ToolResult.fail("'summary' is required for add_summary action")
-            state.add_summary(task_id, summary)
-            state.update_task(task_id, status="done")
+            await state.add_summary(task_id, summary)
+            await state.update_task(task_id, status="done")
             return ToolResult.ok(f"Summary recorded for {task_id}")
 
         else:

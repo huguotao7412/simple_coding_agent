@@ -181,7 +181,7 @@ class ContextManager:
             omitted = len(content) - keep_head - keep_tail
 
             trunc_marker = (
-                f"\n\n... [System: {omitted} chars omitted to prevent context overflow] ...\n\n"
+                f"\n\n... [系统：为防止上下文溢出，已省略 {omitted} 字符] ...\n\n"
             )
 
             # --- Assistant messages: ensure code fence safety ---

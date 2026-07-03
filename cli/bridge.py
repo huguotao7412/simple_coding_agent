@@ -72,7 +72,7 @@ class Bridge:
                             pass
                     elif event.type == "compaction":
                         self.ui.clear_tool_status()
-                        self.ui.render_info("\n[System: Context compressed]")
+                        self.ui.render_info("\n[系统：上下文已自动压缩]")
                     elif event.type == "error":
                         self.ui.clear_tool_status()
                         if stream:

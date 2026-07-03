@@ -2,12 +2,36 @@
 
 from __future__ import annotations
 
+import glob
 import os
 import subprocess
 import tempfile
 
 from .base import BaseTool, ToolResult
 from ..git_utils import is_clean
+
+
+def _cleanup_rej_files(base_dir: str) -> dict[str, str]:
+    """Scan base_dir for *.rej files, read their contents, and delete them.
+
+    Returns a dict mapping filename → content (first 500 chars each).
+    Call this after any patch application attempt to keep the workspace clean.
+    """
+    rejected: dict[str, str] = {}
+    pattern = os.path.join(base_dir, "**", "*.rej")
+    for rej_path in glob.glob(pattern, recursive=True):
+        try:
+            with open(rej_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()[:500]
+            rel_path = os.path.relpath(rej_path, base_dir)
+            rejected[rel_path] = content
+        except OSError:
+            pass
+        try:
+            os.unlink(rej_path)
+        except OSError:
+            pass
+    return rejected
 
 
 def _run_git(*args: str, cwd: str, timeout: int = 30) -> tuple[int, str, str]:
@@ -100,15 +124,24 @@ class ApplyPatchTool(BaseTool):
                         "apply", "--reject", patch_path,
                         cwd=base_dir, timeout=30,
                     )
+                    # Collect and clean up .rej files
+                    rejected = _cleanup_rej_files(base_dir)
                     result_parts = [
                         f"Patch for {task_id} partially applied (fuzz mode).",
                         f"Conflicts in: {', '.join(conflict_files) if conflict_files else 'unknown files'}.",
                     ]
                     if rc2 != 0:
                         result_parts.append(f"Partial application output: {stderr2}")
-                    result_parts.append(
-                        "Review .rej files in the workspace to resolve rejected hunks."
-                    )
+                    if rejected:
+                        result_parts.append(
+                            f"\nRejected hunks ({len(rejected)} .rej files cleaned up):"
+                        )
+                        for fname, content in rejected.items():
+                            result_parts.append(f"\n--- {fname} ---\n{content}")
+                    else:
+                        result_parts.append(
+                            "\nNo .rej files generated — all hunks applied cleanly."
+                        )
                     return ToolResult.ok("\n".join(result_parts))
                 else:
                     return ToolResult.fail(
@@ -147,6 +180,8 @@ class ApplyPatchTool(BaseTool):
                 os.unlink(patch_path)
             except OSError:
                 pass
+            # Clean up any stray .rej files from previous runs
+            _cleanup_rej_files(base_dir)
 
 
 def _parse_conflict_files(git_stderr: str) -> list[str]:

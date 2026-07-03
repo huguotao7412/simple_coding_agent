@@ -6,6 +6,7 @@ File changes are collected as unified diffs for Planner merge.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import random
 import subprocess
@@ -96,68 +97,50 @@ def teardown_worktree(worktree_path: str) -> None:
     _run_git("branch", "-D", branch_name, cwd=base_dir, timeout=10)
 
 
-def extract_diff(worktree_path: str) -> str:
+async def extract_diff(worktree_path: str) -> str:
     """Extract all uncommitted changes from a worktree as a unified diff.
 
-    Includes:
-    - Modified tracked files (git diff HEAD)
-    - Untracked files (new file diff against /dev/null)
+    Uses native git pipeline for 100% reliable diff generation:
+      1. git reset HEAD  — clear any stale staging (Actor may have run git add)
+      2. git add -A      — stage ALL changes (modified + untracked + deleted)
+      3. git diff --cached --binary  — generate standard, well-formed patch
+      4. git reset HEAD  — restore unstaged state for idempotency
 
     Returns a unified diff string suitable for `git apply`.
     """
-    parts: list[str] = []
+    loop = asyncio.get_running_loop()
 
-    # 1. Diff for modified tracked files
-    rc, stdout, stderr = _run_git("diff", "HEAD", "--binary", cwd=worktree_path, timeout=30)
-    if rc == 0 and stdout:
-        parts.append(stdout)
+    def _run(cmd: list[str], timeout: int = 30) -> tuple[int, str, str]:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, cwd=worktree_path, timeout=timeout,
+        )
+        return result.returncode, result.stdout.strip(), result.stderr.strip()
 
-    # 2. Capture untracked files
-    untracked = _list_untracked(worktree_path)
-    for filepath in untracked:
-        diff = _diff_untracked_file(worktree_path, filepath)
-        if diff:
-            parts.append(diff)
+    # Step 0: Clear any stale staging from Actor's own git operations
+    await loop.run_in_executor(None, _run, ["git", "reset", "HEAD"], 10)
 
-    return "\n".join(parts)
-
-
-def _list_untracked(worktree_path: str) -> list[str]:
-    """List untracked files in the worktree (excluding .git directory entries)."""
-    rc, stdout, stderr = _run_git(
-        "ls-files", "--others", "--exclude-standard",
-        cwd=worktree_path, timeout=10,
+    # Step 1: Stage all changes (modified + untracked + deleted)
+    rc, stdout, stderr = await loop.run_in_executor(
+        None, _run, ["git", "add", "-A"], 10,
     )
     if rc != 0:
-        return []
-    return [f for f in stdout.split("\n") if f]
+        import logging
+        logging.warning(f"extract_diff: git add -A failed: {stderr}")
 
-
-def _diff_untracked_file(worktree_path: str, filepath: str) -> str:
-    """Generate a diff for a single untracked (new) file by diffing against /dev/null."""
-    full_path = os.path.join(worktree_path, filepath)
-    try:
-        with open(full_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-    except (OSError, UnicodeDecodeError):
-        # Binary file — skip diff, just note it
-        return f"# Binary/Unreadable new file: {filepath}\n"
-
-    lines = content.splitlines(keepends=True)
-    diff_header = (
-        f"diff --git a/{filepath} b/{filepath}\n"
-        f"new file mode 100644\n"
-        f"--- /dev/null\n"
-        f"+++ b/{filepath}\n"
+    # Step 2: Generate the standard patch
+    rc, stdout, stderr = await loop.run_in_executor(
+        None, _run, ["git", "diff", "--cached", "--binary"], 30,
     )
-    n = len(lines)
-    hunks = []
-    for line in lines:
-        if line.endswith("\n"):
-            hunks.append(f"+{line}")
-        else:
-            hunks.append(f"+{line}\n")
-    return diff_header + f"@@ -0,0 +1,{n} @@\n" + "".join(hunks)
+
+    # Step 3: Unstage to restore clean state (best-effort)
+    await loop.run_in_executor(None, _run, ["git", "reset", "HEAD"], 10)
+
+    if rc != 0:
+        import logging
+        logging.warning(f"extract_diff: git diff --cached failed: {stderr}")
+        return ""
+
+    return stdout
 
 
 def cleanup_orphans(base_dir: str) -> list[str]:
