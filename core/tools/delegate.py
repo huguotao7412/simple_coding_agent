@@ -67,9 +67,12 @@ class DelegateTool(BaseTool):
 
         state = GlobalState.get()
 
+        # 动态提取最新的 workspace_dir，回退兜底为初始缓存
+        current_workspace = kwargs.get("workspace_dir", self._workspace_dir)
+
         # Clean up any orphaned worktrees from previous crashes
         try:
-            removed = cleanup_orphans(self._workspace_dir)
+            removed = cleanup_orphans(current_workspace)
             if removed:
                 logger.warning(f"Cleaned up orphaned worktrees: {removed}")
         except Exception:
@@ -110,7 +113,7 @@ class DelegateTool(BaseTool):
                     context_parts.append("\n## Relevant Files")
                     for fp in context_files:
                         try:
-                            abs_path = os.path.join(self._workspace_dir, fp)
+                            abs_path = os.path.join(current_workspace, fp)
                             with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
                                 content = f.read()[:4000]
                             context_parts.append(f"\n### {fp}\n```\n{content}\n```")
@@ -127,7 +130,7 @@ class DelegateTool(BaseTool):
                 wt_path: str | None = None
                 start_time = time.monotonic()
                 try:
-                    wt_path = setup_worktree(self._workspace_dir, tid)
+                    wt_path = setup_worktree(current_workspace, tid)
                     logger.info("actor_start task_id=%s worktree=%s", tid, wt_path)
                 except Exception as e:
                     state.update_task(tid, status="failed")
@@ -140,7 +143,7 @@ class DelegateTool(BaseTool):
 
                 # --- 3. Copy context files into worktree so Actor sees current state ---
                 for fp in context_files:
-                    src = os.path.join(self._workspace_dir, fp)
+                    src = os.path.join(current_workspace, fp)
                     dst = os.path.join(wt_path, fp)
                     if os.path.isfile(src):
                         try:
