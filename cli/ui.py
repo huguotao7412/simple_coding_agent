@@ -55,10 +55,10 @@ class UI:
             return
 
         status_styles = {
-            "pending":  ("⏳", "dim yellow"),
-            "running":  ("🔄", "bold cyan"),
-            "done":     ("✅", "bold green"),
-            "failed":   ("❌", "bold red"),
+            "pending":  ("..", "dim yellow"),
+            "running":  (">>", "bold cyan"),
+            "done":     ("OK", "bold green"),
+            "failed":   ("!!", "bold red"),
         }
 
         table = Table(
