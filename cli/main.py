@@ -26,6 +26,21 @@ def main():
     workspace_dir = args.dir or os.getcwd()
     workspace_dir = os.path.abspath(workspace_dir)
 
+    # 清理上次异常退出遗留的临时 Worktree
+    from core.git_utils import cleanup_orphans
+    try:
+        removed = cleanup_orphans(workspace_dir)
+        if removed:
+            print(
+                f"[init] Cleaned up {len(removed)} orphaned worktree(s)",
+                file=sys.stderr,
+            )
+    except Exception as e:
+        print(
+            f"[init] Warning: worktree cleanup failed: {e}",
+            file=sys.stderr,
+        )
+
     # Lazy imports so --help is fast
     from core.llm import LLMClient
     from core.context import ContextManager
