@@ -91,7 +91,7 @@ class Planner:
                 tool_name = tc["function"]["name"]
                 try:
                     raw_args = tc["function"]["arguments"].strip()
-                    raw_args = re.sub(r"^```(?:json\s*)?", "", raw_args, flags=re.IGNORECASE)
+                    raw_args = re.sub(r"^\s*```(?:json\s*)?", "", raw_args, flags=re.IGNORECASE)
                     raw_args = re.sub(r"\s*```$", "", raw_args).strip()
                     args = json.loads(raw_args) if raw_args else {}
                     if not isinstance(args, dict):
@@ -205,7 +205,7 @@ class Planner:
                 tool_name = tc["function"]["name"]
                 try:
                     raw_args = tc["function"]["arguments"].strip()
-                    raw_args = re.sub(r"^```(?:json\s*)?", "", raw_args, flags=re.IGNORECASE)
+                    raw_args = re.sub(r"^\s*```(?:json\s*)?", "", raw_args, flags=re.IGNORECASE)
                     raw_args = re.sub(r"\s*```$", "", raw_args).strip()
                     tool_args = json.loads(raw_args) if raw_args else {}
                     if not isinstance(tool_args, dict):

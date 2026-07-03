@@ -177,7 +177,7 @@ class ActorAgent:
         try:
             raw_args = tc["function"]["arguments"].strip()
             # 防线1: 放宽 markdown 剔除正则，让 "json" 关键字变为可选
-            raw_args = re.sub(r"^```(?:json\s*)?", "", raw_args, flags=re.IGNORECASE)
+            raw_args = re.sub(r"^\s*```(?:json\s*)?", "", raw_args, flags=re.IGNORECASE)
             raw_args = re.sub(r"\s*```$", "", raw_args).strip()
             # 防线2: 空字符串拦截，避免将空字符串传给 json.loads()
             if not raw_args:
@@ -405,7 +405,7 @@ class ActorAgent:
                 try:
                     raw_args = tc["function"]["arguments"].strip()
                     # 防线1: 放宽 markdown 剔除正则，让 "json" 关键字变为可选
-                    raw_args = re.sub(r"^```(?:json\s*)?", "", raw_args, flags=re.IGNORECASE)
+                    raw_args = re.sub(r"^\s*```(?:json\s*)?", "", raw_args, flags=re.IGNORECASE)
                     raw_args = re.sub(r"\s*```$", "", raw_args).strip()
                     # 防线2: 空字符串拦截，避免将空字符串传给 json.loads()
                     if not raw_args:

@@ -15,7 +15,8 @@ class Bridge:
         self.ui.render_welcome()
         while True:
             try:
-                user_input = self.ui.render_user_prompt()
+                import asyncio
+                user_input = await asyncio.to_thread(self.ui.render_user_prompt)
             except (EOFError, KeyboardInterrupt):
                 self.ui.render_info("\nGoodbye.")
                 break

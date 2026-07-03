@@ -56,11 +56,16 @@ class WebBridge:
 
         # 主线程只负责从队列高速消费并 yield 给 Streamlit
         while True:
-            event = q.get()
-            if event is None:
-                break
-            st.session_state.events.append(event)
-            yield event
+           try:
+                event = q.get(timeout=0.05)
+                if event is None:
+                    break
+                st.session_state.events.append(event)
+                yield event
+           except queue.Empty:
+              # 如果没有取到数据，短暂让出控制权，保持 UI 线程活跃
+              continue
+        
 
         st.session_state.streaming = False
 
