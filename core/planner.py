@@ -147,7 +147,7 @@ class Planner:
             if step_count > MAX_STEPS:
                 error_msg = "Safety limit: Planner reached max steps. Please retry with a simpler request."
                 self.ctx.add_assistant_message(content=error_msg)
-                logger.info(
+                logger.debug(
                     "Planner run max steps: prompt_tokens=%d completion_tokens=%d total=%d",
                     total_prompt_tokens, total_completion_tokens,
                     total_prompt_tokens + total_completion_tokens,
@@ -204,7 +204,7 @@ class Planner:
             except LLMAPIError as e:
                 error_msg = str(e)
                 self.ctx.add_assistant_message(content=error_msg)
-                logger.info(
+                logger.debug(
                     "Planner run failed: prompt_tokens=%d completion_tokens=%d total=%d",
                     total_prompt_tokens, total_completion_tokens,
                     total_prompt_tokens + total_completion_tokens,
@@ -227,7 +227,7 @@ class Planner:
                     content=content,
                     reasoning_content=response.get("reasoning_content"),
                 )
-                logger.info(
+                logger.debug(
                     "Planner run complete: prompt_tokens=%d completion_tokens=%d total=%d",
                     total_prompt_tokens, total_completion_tokens,
                     total_prompt_tokens + total_completion_tokens,
