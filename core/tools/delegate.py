@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import shutil
 
 from .base import BaseTool, ToolResult
 from ..state import GlobalState
+from ..git_utils import setup_worktree, teardown_worktree, extract_diff, cleanup_orphans
 
 MAX_CONCURRENT_ACTORS = 4
+
+logger = logging.getLogger(__name__)
 
 class DelegateTool(BaseTool):
     name = "delegate"
@@ -61,6 +66,14 @@ class DelegateTool(BaseTool):
 
         state = GlobalState.get()
 
+        # Clean up any orphaned worktrees from previous crashes
+        try:
+            removed = cleanup_orphans(self._workspace_dir)
+            if removed:
+                logger.warning(f"Cleaned up orphaned worktrees: {removed}")
+        except Exception:
+            pass  # cleanup is best-effort
+
         # Validate all task_ids
         for st in subtasks:
             tid = st.get("task_id", "")
@@ -90,7 +103,7 @@ class DelegateTool(BaseTool):
             context_summaries = subtask.get("context_summaries", [])
 
             async with semaphore:
-                # Build injected context message
+                # --- 1. Read context from MAIN workspace before worktree creation ---
                 context_parts = [f"## Task\n{description}"]
                 if context_files:
                     context_parts.append("\n## Relevant Files")
@@ -109,7 +122,31 @@ class DelegateTool(BaseTool):
 
                 injected_context = "\n".join(context_parts)
 
-                # Build ContextManager with actor prompt + injected context
+                # --- 2. Create worktree ---
+                wt_path: str | None = None
+                try:
+                    wt_path = setup_worktree(self._workspace_dir, tid)
+                except Exception as e:
+                    state.update_task(tid, status="failed")
+                    state.add_summary(tid, f"ERROR: worktree setup failed: {e}")
+                    return {
+                        "task_id": tid,
+                        "status": "failed",
+                        "error": f"worktree setup: {str(e)}",
+                    }
+
+                # --- 3. Copy context files into worktree so Actor sees current state ---
+                for fp in context_files:
+                    src = os.path.join(self._workspace_dir, fp)
+                    dst = os.path.join(wt_path, fp)
+                    if os.path.isfile(src):
+                        try:
+                            os.makedirs(os.path.dirname(dst), exist_ok=True)
+                            shutil.copy2(src, dst)
+                        except Exception:
+                            pass  # best-effort copy
+
+                # --- 4. Build ActorAgent pointing at worktree ---
                 actor_ctx = ContextManager(
                     system_prompt=ACTOR_SYSTEM_PROMPT,
                     max_tokens=self._llm.max_tokens,
@@ -120,15 +157,24 @@ class DelegateTool(BaseTool):
                     llm_client=self._llm,
                     context_manager=actor_ctx,
                     tools=[t() for t in ACTOR_TOOLS],
-                    workspace_dir=self._workspace_dir,
+                    workspace_dir=wt_path,
                     actor_id=tid,
                     task_context=description,
                 )
 
+                # --- 5. Execute Actor; always teardown worktree ---
                 try:
                     trigger_prompt = "请基于上述提供的上下文和目标，开始执行你负责的子任务。"
                     summary = await actor.run(trigger_prompt)
-                    state.add_summary(tid, summary.key_findings or "Task completed.")
+
+                    # Extract diff from worktree changes
+                    diff = ""
+                    try:
+                        diff = extract_diff(wt_path)
+                    except Exception:
+                        logger.warning(f"Failed to extract diff for {tid}")
+
+                    state.add_summary(tid, summary.key_findings or "Task completed.", diff=diff)
                     state.update_task(tid, status=summary.status)
                     return {
                         "task_id": tid,
@@ -137,6 +183,7 @@ class DelegateTool(BaseTool):
                         "bugs_found": summary.bugs_found,
                         "key_findings": (summary.key_findings or "")[:500],
                         "suggested_next_steps": summary.suggested_next_steps,
+                        "diff": diff[:8000],  # truncate for Planner context
                     }
                 except Exception as e:
                     state.update_task(tid, status="failed")
@@ -146,6 +193,12 @@ class DelegateTool(BaseTool):
                         "status": "failed",
                         "error": str(e),
                     }
+                finally:
+                    # --- 6. Teardown worktree (always, even on exception) ---
+                    try:
+                        teardown_worktree(wt_path)
+                    except Exception:
+                        logger.warning(f"Failed to teardown worktree for {tid}: {wt_path}")
 
         # Concurrent execution
         results = await asyncio.gather(*[run_one(st) for st in subtasks])
