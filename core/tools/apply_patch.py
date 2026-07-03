@@ -103,6 +103,7 @@ class ApplyPatchTool(BaseTool):
                 suffix=".patch",
                 delete=False,
                 encoding="utf-8",
+                newline="",
             ) as f:
                 f.write(diff)
                 patch_path = f.name
@@ -126,6 +127,10 @@ class ApplyPatchTool(BaseTool):
                     )
                     # Collect and clean up .rej files
                     rejected = _cleanup_rej_files(base_dir)
+
+                    _run_git("add", "-A", cwd=base_dir, timeout=10)
+                    _run_git("commit", "-m", f"Auto-merge partial patch for task {task_id}", cwd=base_dir, timeout=10)
+
                     result_parts = [
                         f"Patch for {task_id} partially applied (fuzz mode).",
                         f"Conflicts in: {', '.join(conflict_files) if conflict_files else 'unknown files'}.",
@@ -168,6 +173,10 @@ class ApplyPatchTool(BaseTool):
                 cwd=base_dir, timeout=30,
             )
             if rc == 0:
+
+                _run_git("add", "-A", cwd=base_dir, timeout=10)
+                _run_git("commit", "-m", f"Merge Actor changes for task {task_id}", cwd=base_dir, timeout=10)
+
                 return ToolResult.ok(
                     f"Patch for {task_id} applied successfully to main workspace."
                 )

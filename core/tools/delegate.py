@@ -179,7 +179,7 @@ class DelegateTool(BaseTool):
                     actor = ActorAgent(
                         llm_client=self._llm,
                         context_manager=actor_ctx,
-                        tools=None,                      # 不使用本地工具
+                        tools=None,      # 不使用本地工具
                         tool_provider=tool_provider,     # MCP 模式
                         workspace_dir=wt_path,
                         actor_id=tid,
