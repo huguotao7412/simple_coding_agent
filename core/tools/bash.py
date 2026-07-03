@@ -32,6 +32,22 @@ BLACKLIST = [
     r">\s*/dev/sd[a-z]",
     # Windows: format drive
     r"\bformat\s+[A-Za-z]:",
+    # --- Git history / remote mutation ---
+    r"\bgit\s+merge\b",
+    r"\bgit\s+push\b",
+    r"\bgit\s+rebase\b",
+    r"\bgit\s+pull\b",
+    r"\bgit\s+fetch\b",
+    # --- Git worktree manipulation ---
+    r"\bgit\s+worktree\b",
+    # --- Git destructive operations ---
+    r"\bgit\s+branch\s+-D\b",
+    r"\bgit\s+reset\s+--hard\b",
+    r"\bgit\s+clean\s+-fd\b",
+    # --- Git remote manipulation ---
+    r"\bgit\s+remote\b",
+    # --- Git stash (can hide Actor changes from diff extraction) ---
+    r"\bgit\s+stash\b",
 ]
 
 # =====================================================================
