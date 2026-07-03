@@ -111,7 +111,7 @@ class UI:
         """Render a compact token consumption summary line."""
         total = prompt_tokens + completion_tokens
         self.console.print(
-            f"[dim]📊 Token: prompt={prompt_tokens:,} "
+            f"\n[dim]💡 Token: prompt={prompt_tokens:,} "
             f"completion={completion_tokens:,} "
             f"total={total:,}[/]"
         )
@@ -132,23 +132,22 @@ class UI:
 
 
 class LiveMarkdownStream:
-    """Accumulates streaming tokens and renders markdown once on exit.
-
-    Avoids Rich Live widget entirely — Live's ANSI cursor repositioning
-    is unreliable on Windows terminals, causing duplicate renders.
-    """
-
+    """使用 Rich Live 真正实现流式 Markdown 渲染。"""
     def __init__(self, console: Console):
         self.console = console
         self._buffer = ""
+        # refresh_per_second 适度调高保证流畅，但不要太高以防止终端卡顿
+        self._live = Live(console=self.console, refresh_per_second=12, transient=False)
 
     def __enter__(self):
         self._buffer = ""
+        self._live.start()
         return self
 
     def __exit__(self, *args):
-        if self._buffer.strip():
-            self.console.print(Markdown(self._buffer))
+        self._live.stop()
 
     def add_token(self, token: str) -> None:
         self._buffer += token
+        # 每次接到新 token，就更新 Live 面板中的 Markdown 渲染
+        self._live.update(Markdown(self._buffer))

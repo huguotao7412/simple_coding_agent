@@ -59,6 +59,9 @@ class Bridge:
                         except Exception:
                             pass  # best-effort rendering
                     elif event.type == "token_stats":
+                        if stream:
+                            stream.__exit__(None, None, None)
+                            stream = None
                         try:
                             stats = json.loads(event.content)
                             self.ui.render_token_stats(
