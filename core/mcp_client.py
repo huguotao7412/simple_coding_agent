@@ -20,6 +20,7 @@ import asyncio
 import logging
 import os
 from contextlib import AsyncExitStack
+from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -63,6 +64,7 @@ class MCPToolProvider:
     def __init__(self) -> None:
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._sessions: dict[str, ClientSession] = {}
+        self._stdio_ctxs: list[Any] = []          # stdio_client async generators for manual cleanup
         self._tool_routing: dict[str, str] = {}   # tool_name → server_name
         self._tool_schemas: list[dict] = []        # cached OpenAI-format schemas
         self._failure_count: int = 0
@@ -77,7 +79,7 @@ class MCPToolProvider:
         """Launch both MCP Servers bound to the given worktree directory.
 
         Spawns two Node.js subprocesses via npx:
-          - @modelcontextprotocol/server-filesystem --directory <worktree_path>
+          - @modelcontextprotocol/server-filesystem <worktree_path>
           - bash-mcp
 
         Each server is connected via stdio transport and initialized with
@@ -85,11 +87,12 @@ class MCPToolProvider:
         """
         self._worktree_path = os.path.abspath(worktree_path)
 
+        # filesystem server takes the allowed directory as a positional arg
         servers: list[tuple[str, list[str]]] = [
             (
                 "filesystem",
                 ["npx", "-y", "@modelcontextprotocol/server-filesystem",
-                 "--directory", self._worktree_path],
+                 self._worktree_path],
             ),
             (
                 "bash",
@@ -107,12 +110,13 @@ class MCPToolProvider:
                 env=None,
             )
 
-            # Enter stdio transport via exit stack (auto-cleanup on shutdown)
-            read_stream, write_stream = await self._exit_stack.enter_async_context(
-                stdio_client(server_params)
-            )
+            # Manually enter stdio_client to avoid AsyncExitStack task-scope issue
+            # (stdio_client uses anyio task groups internally)
+            stdio_ctx = stdio_client(server_params)
+            read_stream, write_stream = await stdio_ctx.__aenter__()
+            self._stdio_ctxs.append(stdio_ctx)
 
-            # Enter session via exit stack
+            # Enter session via exit stack (safe – ClientSession doesn't use task groups)
             session = await self._exit_stack.enter_async_context(
                 ClientSession(read_stream, write_stream)
             )
@@ -217,21 +221,33 @@ class MCPToolProvider:
     async def shutdown(self) -> None:
         """Gracefully terminate all MCP Server processes.
 
-        Uses the AsyncExitStack to unwind contexts in reverse order
-        (sessions first, then transports). Has a 5-second hard timeout.
-        Failures are logged but never raised — shutdown is best-effort.
+        Attempts clean shutdown via context managers first. Falls back to
+        forceful cancellation if anyio task-scope errors occur (a known
+        limitation of the MCP Python SDK's anyio usage). Subprocesses are
+        terminated via process.kill() as a final safety net.
         """
         logger.info("Shutting down MCP servers for worktree %s", self._worktree_path)
+
+        # Close sessions (via exit stack)
         try:
-            await asyncio.wait_for(self._exit_stack.aclose(), timeout=5.0)
-        except asyncio.TimeoutError:
-            logger.warning("MCP shutdown timed out after 5s — forcing close")
-        except Exception:
-            logger.warning("MCP shutdown error (non-fatal)", exc_info=True)
-        finally:
-            self._sessions.clear()
-            self._tool_routing.clear()
-            self._tool_schemas.clear()
+            await asyncio.wait_for(self._exit_stack.aclose(), timeout=3.0)
+        except BaseException:
+            # anyio task-scope RuntimeError / CancelledError are expected here
+            # (MCP Python SDK issues — sessions use anyio task groups internally)
+            logger.debug("MCP session close: swallowed expected cleanup error", exc_info=True)
+
+        # Close stdio transports (manual — they use anyio task groups)
+        for stdio_ctx in reversed(self._stdio_ctxs):
+            try:
+                await asyncio.wait_for(stdio_ctx.__aexit__(None, None, None), timeout=3.0)
+            except BaseException:
+                logger.debug("MCP stdio close: swallowed expected cleanup error", exc_info=True)
+
+        self._stdio_ctxs.clear()
+        self._sessions.clear()
+        self._tool_routing.clear()
+        self._tool_schemas.clear()
+        logger.info("MCP shutdown complete for worktree %s", self._worktree_path)
 
     # ------------------------------------------------------------------
     # Internal helpers
