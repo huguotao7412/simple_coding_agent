@@ -41,6 +41,10 @@ def main():
             file=sys.stderr,
         )
 
+    # Setup logging before anything else
+    from core.logging_config import setup_logging
+    setup_logging()
+
     # Lazy imports so --help is fast
     from core.llm import LLMClient
     from core.context import ContextManager

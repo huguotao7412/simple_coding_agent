@@ -4,12 +4,13 @@ import asyncio
 import logging
 import os
 import shutil
+import time
 
 from .base import BaseTool, ToolResult
 from ..state import GlobalState
 from ..git_utils import setup_worktree, teardown_worktree, extract_diff, cleanup_orphans
 
-MAX_CONCURRENT_ACTORS = 4
+MAX_CONCURRENT_ACTORS = int(os.getenv("SCA_MAX_ACTORS", "4"))
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +125,10 @@ class DelegateTool(BaseTool):
 
                 # --- 2. Create worktree ---
                 wt_path: str | None = None
+                start_time = time.monotonic()
                 try:
                     wt_path = setup_worktree(self._workspace_dir, tid)
+                    logger.info("actor_start task_id=%s worktree=%s", tid, wt_path)
                 except Exception as e:
                     state.update_task(tid, status="failed")
                     state.add_summary(tid, f"ERROR: worktree setup failed: {e}")
@@ -176,6 +179,11 @@ class DelegateTool(BaseTool):
 
                     state.add_summary(tid, summary.key_findings or "Task completed.", diff=diff)
                     state.update_task(tid, status=summary.status)
+                    duration_ms = int((time.monotonic() - start_time) * 1000)
+                    logger.info(
+                        "actor_end task_id=%s duration_ms=%d outcome=%s files_modified=%d",
+                        tid, duration_ms, summary.status, len(summary.files_modified),
+                    )
                     return {
                         "task_id": tid,
                         "status": summary.status,
@@ -188,6 +196,11 @@ class DelegateTool(BaseTool):
                 except Exception as e:
                     state.update_task(tid, status="failed")
                     state.add_summary(tid, f"ERROR: {e}")
+                    duration_ms = int((time.monotonic() - start_time) * 1000)
+                    logger.error(
+                        "actor_end task_id=%s duration_ms=%d outcome=failed error=%s",
+                        tid, duration_ms, str(e),
+                    )
                     return {
                         "task_id": tid,
                         "status": "failed",
@@ -200,12 +213,38 @@ class DelegateTool(BaseTool):
                     except Exception:
                         logger.warning(f"Failed to teardown worktree for {tid}: {wt_path}")
 
-        # Concurrent execution
-        results = await asyncio.gather(*[run_one(st) for st in subtasks])
+        # DAG-aware execution: topological sort into dependency levels
+        # Tasks with no pending dependencies run concurrently; dependent tasks wait
+        completed: set[str] = set()
+        all_results: list[dict] = []
+        remaining = {st["task_id"]: st for st in subtasks}
+
+        while remaining:
+            # Find tasks whose dependencies are all completed
+            ready: dict[str, dict] = {}
+            for tid, st in remaining.items():
+                node = state.task_tree.get(tid)
+                deps = set(node.dependencies) if node else set()
+                unresolved = {d for d in deps if d not in completed and d in remaining}
+                if not unresolved:
+                    ready[tid] = st
+
+            if not ready:
+                # Circular dependency or all tasks already processed — execute remaining
+                ready = dict(remaining)
+
+            # Execute ready tasks concurrently
+            batch_results = await asyncio.gather(*[run_one(st) for st in ready.values()])
+
+            for r in batch_results:
+                all_results.append(r)
+                completed.add(r["task_id"])
+                if r["task_id"] in remaining:
+                    del remaining[r["task_id"]]
 
         # Build return message
-        lines = [f"Delegate complete: {len(results)} subtask(s) executed.\n"]
-        for r in results:
+        lines = [f"Delegate complete: {len(all_results)} subtask(s) executed.\n"]
+        for r in all_results:
             status_icon = "OK" if r["status"] == "done" else "FAIL"
             detail = r.get("key_findings", r.get("error", ""))[:200]
             lines.append(f"  [{status_icon}] {r['task_id']}: {detail}")

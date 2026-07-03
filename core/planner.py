@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import json
 import asyncio
+import logging
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
 
@@ -137,12 +138,20 @@ class Planner:
 
         step_count = 0
         MAX_STEPS = 30
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        logger = logging.getLogger(__name__)
 
         while True:
             step_count += 1
             if step_count > MAX_STEPS:
                 error_msg = "Safety limit: Planner reached max steps. Please retry with a simpler request."
                 self.ctx.add_assistant_message(content=error_msg)
+                logger.info(
+                    "Planner run max steps: prompt_tokens=%d completion_tokens=%d total=%d",
+                    total_prompt_tokens, total_completion_tokens,
+                    total_prompt_tokens + total_completion_tokens,
+                )
                 yield AgentEvent(type="error", content=error_msg)
                 return
 
@@ -181,9 +190,18 @@ class Planner:
 
             try:
                 response = await chat_task
+                # Accumulate token usage
+                usage = response.get("_usage", {})
+                total_prompt_tokens += usage.get("prompt_tokens", 0)
+                total_completion_tokens += usage.get("completion_tokens", 0)
             except LLMAPIError as e:
                 error_msg = str(e)
                 self.ctx.add_assistant_message(content=error_msg)
+                logger.info(
+                    "Planner run failed: prompt_tokens=%d completion_tokens=%d total=%d",
+                    total_prompt_tokens, total_completion_tokens,
+                    total_prompt_tokens + total_completion_tokens,
+                )
                 yield AgentEvent(type="error", content=error_msg)
                 return
 
@@ -194,6 +212,11 @@ class Planner:
                 self.ctx.add_assistant_message(
                     content=content,
                     reasoning_content=response.get("reasoning_content"),
+                )
+                logger.info(
+                    "Planner run complete: prompt_tokens=%d completion_tokens=%d total=%d",
+                    total_prompt_tokens, total_completion_tokens,
+                    total_prompt_tokens + total_completion_tokens,
                 )
                 yield AgentEvent(type="done", content=content)
                 return

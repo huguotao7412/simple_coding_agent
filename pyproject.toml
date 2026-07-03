@@ -22,3 +22,13 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["cli*", "core*", "web*"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+exclude = [".venv", ".worktrees", "__pycache__"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["deepseek_tokenizer", "streamlit", "dotenv", "rich"]
+ignore_missing_imports = true
