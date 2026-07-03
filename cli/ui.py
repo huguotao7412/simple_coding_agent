@@ -137,7 +137,7 @@ class LiveMarkdownStream:
             console=self.console,
             refresh_per_second=10,
             vertical_overflow="ellipsis",
-            transient=True,
+            transient=False,
         )
         self._live.start()
         return self
@@ -146,9 +146,8 @@ class LiveMarkdownStream:
         if self._live:
             self._live.stop()
             self._live = None
-        # Print final rendered version
-        if self._buffer.strip():
-            self.console.print(Markdown(self._buffer))
+        # Live with transient=False leaves its final rendered content on screen.
+        # No extra console.print needed — avoids double-rendering on Windows terminals.
 
     def add_token(self, token: str) -> None:
         self._buffer += token

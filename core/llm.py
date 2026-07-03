@@ -74,6 +74,12 @@ class LLMClient:
         When streaming, on_token is called for each content delta.
         The returned dict always has the non-streaming format:
         {"role": "assistant", "content": "...", "tool_calls": [...]}
+
+        Retry strategy:
+        - 429 (Rate Limit): read Retry-After header, wait, retry up to 5 times
+        - 5xx (Server Error): exponential backoff 1s/2s/4s/8s, retry up to 4 times
+        - Network error: exponential backoff 1s/2s/4s, retry up to 3 times
+        - 4xx (except 429): no retry, raise immediately
         """
         body: dict[str, Any] = {
             "model": self.model,
@@ -85,10 +91,12 @@ class LLMClient:
             body["tools"] = tools
 
         timeout_config = httpx.Timeout(600.0)
-        max_retries = 3
+        max_retries_network = 3
+        max_retries_server = 4
+        max_retries_rate = 5
 
         async with httpx.AsyncClient(timeout=timeout_config) as client:
-            for attempt in range(max_retries):
+            for attempt in range(max(max_retries_network, max_retries_server, max_retries_rate)):
                 try:
                     async with client.stream(
                             "POST",
@@ -96,15 +104,45 @@ class LLMClient:
                             headers=self._headers(),
                             json=body,
                     ) as response:
-                        if response.status_code != 200:
-                            text = await response.aread()
-                            raise LLMAPIError(response.status_code, text.decode()[:500])
-                        return await self._parse_stream(response, on_token)
-                except httpx.HTTPError as e:
-                    if attempt == max_retries - 1:
+                        if response.status_code == 200:
+                            result = await self._parse_stream(response, on_token)
+                            # Attach estimated token usage
+                            result["_usage"] = {
+                                "prompt_tokens": self.count_messages_tokens(messages),
+                                "completion_tokens": self.count_tokens(result.get("content") or ""),
+                            }
+                            return result
+
+                        text = await response.aread()
+                        error_body = text.decode()[:500]
+
+                        # 429 Rate Limit — wait for Retry-After header
+                        if response.status_code == 429:
+                            if attempt >= max_retries_rate - 1:
+                                raise LLMAPIError(response.status_code, error_body)
+                            retry_after = response.headers.get("Retry-After", "5")
+                            try:
+                                wait = int(retry_after)
+                            except ValueError:
+                                wait = 5
+                            await asyncio.sleep(wait)
+                            continue
+
+                        # 5xx Server Error — exponential backoff
+                        if response.status_code >= 500:
+                            if attempt >= max_retries_server - 1:
+                                raise LLMAPIError(response.status_code, error_body)
+                            await asyncio.sleep(2 ** attempt)
+                            continue
+
+                        # 4xx (except 429) — no retry
+                        raise LLMAPIError(response.status_code, error_body)
+
+                except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError) as e:
+                    if attempt >= max_retries_network - 1:
                         error_detail = f"{type(e).__name__}: {str(e) or 'Connection dropped or timed out'}"
-                        raise LLMAPIError(0, error_detail)
-                    await asyncio.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+                        raise LLMAPIError(0, error_detail) from e
+                    await asyncio.sleep(2 ** attempt)
 
     async def _parse_stream(
             self,

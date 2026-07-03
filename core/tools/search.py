@@ -34,6 +34,7 @@ class SearchCodebaseTool(BaseTool):
 
     # Global cap to prevent context overflow in large codebases
     MAX_RESULTS = 30
+    COMPACT_THRESHOLD_CHARS = 2000
 
     async def execute(
         self,
@@ -224,5 +225,25 @@ class SearchCodebaseTool(BaseTool):
                 f"\n... [Found >{self.MAX_RESULTS} matches. Showing top {self.MAX_RESULTS}. "
                 "Please refine your query to be more specific.] ..."
             )
-            return ToolResult.ok("\n\n".join(truncated))
-        return ToolResult.ok("\n\n".join(results))
+            results = truncated
+
+        output = "\n\n".join(results)
+
+        # Auto-compact: drop context lines when output is large
+        if len(output) > self.COMPACT_THRESHOLD_CHARS:
+            compact: list[str] = []
+            for r in results:
+                # Extract just the file+line header and the match line
+                rlines = r.split("\n")
+                header_line = rlines[0] if rlines else ""
+                match_lines = [l for l in rlines if l.strip().startswith(">")]
+                if match_lines:
+                    compact.append(f"{header_line}: {match_lines[0].strip()[2:]}")
+                else:
+                    compact.append(header_line)
+            compact.append(
+                f"\n... [Compact mode: use read to inspect specific files] ..."
+            )
+            return ToolResult.ok("\n".join(compact))
+
+        return ToolResult.ok(output)

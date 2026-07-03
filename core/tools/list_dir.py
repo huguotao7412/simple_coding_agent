@@ -20,6 +20,8 @@ class ListDirTool(BaseTool):
     }
     required_params = ["dir_path"]
 
+    COMPACT_THRESHOLD_CHARS = 2000
+
     async def execute(self, dir_path: str, workspace_dir: str = "") -> ToolResult:
         # Resolve path
         if not os.path.isabs(dir_path):
@@ -57,4 +59,18 @@ class ListDirTool(BaseTool):
 
         rel = os.path.relpath(dir_path, workspace_dir) if workspace_dir else dir_path
         header = f"Contents of {rel}/:"
-        return ToolResult.ok(header + "\n" + "\n".join(lines))
+        output = header + "\n" + "\n".join(lines)
+
+        # Auto-compact: switch to JSON lines when output is large
+        if len(output) > self.COMPACT_THRESHOLD_CHARS:
+            compact_lines = [header]
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name in ignore_dirs:
+                        continue
+                    compact_lines.append(f'{{"name": "{entry.name}", "type": "dir"}}')
+                else:
+                    compact_lines.append(f'{{"name": "{entry.name}", "type": "file"}}')
+            return ToolResult.ok("\n".join(compact_lines))
+
+        return ToolResult.ok(output)
