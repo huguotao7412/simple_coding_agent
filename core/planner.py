@@ -152,6 +152,13 @@ class Planner:
                     total_prompt_tokens, total_completion_tokens,
                     total_prompt_tokens + total_completion_tokens,
                 )
+                yield AgentEvent(
+                    type="token_stats",
+                    content=json.dumps({
+                        "prompt_tokens": total_prompt_tokens,
+                        "completion_tokens": total_completion_tokens,
+                    }),
+                )
                 yield AgentEvent(type="error", content=error_msg)
                 return
 
@@ -202,6 +209,13 @@ class Planner:
                     total_prompt_tokens, total_completion_tokens,
                     total_prompt_tokens + total_completion_tokens,
                 )
+                yield AgentEvent(
+                    type="token_stats",
+                    content=json.dumps({
+                        "prompt_tokens": total_prompt_tokens,
+                        "completion_tokens": total_completion_tokens,
+                    }),
+                )
                 yield AgentEvent(type="error", content=error_msg)
                 return
 
@@ -217,6 +231,13 @@ class Planner:
                     "Planner run complete: prompt_tokens=%d completion_tokens=%d total=%d",
                     total_prompt_tokens, total_completion_tokens,
                     total_prompt_tokens + total_completion_tokens,
+                )
+                yield AgentEvent(
+                    type="token_stats",
+                    content=json.dumps({
+                        "prompt_tokens": total_prompt_tokens,
+                        "completion_tokens": total_completion_tokens,
+                    }),
                 )
                 yield AgentEvent(type="done", content=content)
                 return

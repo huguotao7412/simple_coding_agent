@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from core.planner import Planner
 from cli.ui import UI
 
@@ -49,7 +51,6 @@ class Bridge:
                         if stream:
                             stream.__exit__(None, None, None)
                             stream = None
-                        import json
                         try:
                             snapshot = json.loads(event.content)
                             self.ui.render_actor_status(
@@ -57,6 +58,15 @@ class Bridge:
                             )
                         except Exception:
                             pass  # best-effort rendering
+                    elif event.type == "token_stats":
+                        try:
+                            stats = json.loads(event.content)
+                            self.ui.render_token_stats(
+                                prompt_tokens=stats.get("prompt_tokens", 0),
+                                completion_tokens=stats.get("completion_tokens", 0),
+                            )
+                        except Exception:
+                            pass
                     elif event.type == "compaction":
                         self.ui.clear_tool_status()
                         self.ui.render_info("\n[System: Context compressed]")

@@ -107,6 +107,15 @@ class UI:
     def render_info(self, msg: str) -> None:
         self.console.print(f"[dim]{msg}[/dim]")
 
+    def render_token_stats(self, prompt_tokens: int, completion_tokens: int) -> None:
+        """Render a compact token consumption summary line."""
+        total = prompt_tokens + completion_tokens
+        self.console.print(
+            f"[dim]📊 Token: prompt={prompt_tokens:,} "
+            f"completion={completion_tokens:,} "
+            f"total={total:,}[/]"
+        )
+
     def render_user_prompt(self) -> str:
         """Display the prompt and read user input."""
         return input("\n> ")
