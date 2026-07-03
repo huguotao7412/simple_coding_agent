@@ -126,16 +126,20 @@ class ActorAgent:
         self,
         llm_client: LLMClient,
         context_manager: ContextManager,
-        tools: list[BaseTool],
-        workspace_dir: str,
+        tools: list[BaseTool] | None = None,
+        workspace_dir: str = "",
         actor_id: str = "",
         task_context: str = "",
+        tool_provider: Any | None = None,
     ):
         self.actor_id = actor_id
         self.task_context = task_context
         self.llm = llm_client
-        self.tools_by_name = {t.name: t for t in tools}
         self.workspace_dir = workspace_dir
+        self._tool_provider = tool_provider
+
+        # Local tool fallback (used when tool_provider is None)
+        self.tools_by_name = {t.name: t for t in tools} if tools else {}
 
         # Lightweight repeat detection (Actor-level only)
         self._recent_actions: deque[int] = deque(maxlen=10)
@@ -219,30 +223,41 @@ class ActorAgent:
             return (tool_name, args, ToolResult.fail(intervention), intervention, True)
         self._recent_actions.append(action_hash)
 
-        # 4. Look up and execute tool
-        tool = self.tools_by_name.get(tool_name)
-        if tool is None:
-            observation = f"Error: unknown tool '{tool_name}'. Available: {list(self.tools_by_name.keys())}"
-            result = ToolResult.fail(f"unknown tool '{tool_name}'")
-        else:
-            try:
-                result = await tool.execute(**args)
-            except Exception as e:
-                result = ToolResult.fail(f"Internal Tool Error: {str(e)}")
-
-            # If the failure is caused by an internal code bug (e.g. AttributeError),
-            # give the model a stronger stop signal to prevent retry loops
-            if not result.success and "AttributeError" in str(result.error):
-                result.error += (
-                    " (CRITICAL: 此工具当前存在内部故障，请立即停止调用并向用户报告)"
-                )
-
+        # 4. Route through MCP or local tool
+        if self._tool_provider is not None:
+            # MCP path: workspace_dir is already bound to the MCP server at startup
+            result = await self._tool_provider.call_tool(tool_name, args)
             if result.success:
                 observation = result.content
             else:
                 observation = f"ERROR: {result.error}"
                 if result.content:
                     observation += f"\nPartial output: {result.content}"
+        else:
+            # Local tool path (fallback)
+            tool = self.tools_by_name.get(tool_name)
+            if tool is None:
+                observation = f"Error: unknown tool '{tool_name}'. Available: {list(self.tools_by_name.keys())}"
+                result = ToolResult.fail(f"unknown tool '{tool_name}'")
+            else:
+                try:
+                    result = await tool.execute(**args)
+                except Exception as e:
+                    result = ToolResult.fail(f"Internal Tool Error: {str(e)}")
+
+                # If the failure is caused by an internal code bug (e.g. AttributeError),
+                # give the model a stronger stop signal to prevent retry loops
+                if not result.success and "AttributeError" in str(result.error):
+                    result.error += (
+                        " (CRITICAL: 此工具当前存在内部故障，请立即停止调用并向用户报告)"
+                    )
+
+                if result.success:
+                    observation = result.content
+                else:
+                    observation = f"ERROR: {result.error}"
+                    if result.content:
+                        observation += f"\nPartial output: {result.content}"
 
         self.ctx.add_tool_result(tc["id"], observation)
 
@@ -254,7 +269,12 @@ class ActorAgent:
         on_token: Callable[[str], None] | None = None,
     ) -> ActorSummary:
         self.ctx.add_user_message(user_input)
-        tool_schemas = [t.schema for t in self.tools_by_name.values()]
+
+        # Get tool schemas from MCP provider or local tools
+        if self._tool_provider is not None:
+            tool_schemas = await self._tool_provider.list_tools()
+        else:
+            tool_schemas = [t.schema for t in self.tools_by_name.values()]
 
         step_count = 0
         MAX_STEPS = 30
@@ -262,7 +282,7 @@ class ActorAgent:
         while True:
             step_count += 1
             if step_count > MAX_STEPS:
-                error_msg = "Safety limit: Agent reached max steps. Please retry with a simpler request."
+                error_msg = "安全熔断：Agent 已达到最大步数限制。请尝试简化请求后重试。"
                 self.ctx.add_assistant_message(content=error_msg)
                 return ActorSummary(
                     task_id=self.actor_id,
@@ -327,7 +347,11 @@ class ActorAgent:
         user_input: str,
     ) -> AsyncGenerator[AgentEvent, None]:
         self.ctx.add_user_message(user_input)
-        tool_schemas = [t.schema for t in self.tools_by_name.values()]
+        # Get tool schemas from MCP provider or local tools
+        if self._tool_provider is not None:
+            tool_schemas = await self._tool_provider.list_tools()
+        else:
+            tool_schemas = [t.schema for t in self.tools_by_name.values()]
 
         step_count = 0
         MAX_STEPS = 30
