@@ -92,6 +92,8 @@ def get_workspace_tree(workspace_dir: str, max_lines: int = 100) -> str:
                 capture_output=True,
                 timeout=10,
                 text=True,
+                encoding="utf-8", 
+                errors="replace",
             )
             if result.returncode == 0 and result.stdout.strip():
                 raw = result.stdout.strip()

@@ -40,6 +40,8 @@ def _run_git(*args: str, cwd: str, timeout: int = 30) -> tuple[int, str, str]:
         ["git", *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=cwd,
         timeout=timeout,
     )

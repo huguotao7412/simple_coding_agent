@@ -22,6 +22,8 @@ def _run_git(*args: str, cwd: str | None = None, timeout: int = 30) -> tuple[int
         ["git", *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=cwd,
         timeout=timeout,
     )
@@ -112,7 +114,8 @@ async def extract_diff(worktree_path: str) -> str:
 
     def _run(cmd: list[str], timeout: int = 30) -> tuple[int, str, str]:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=worktree_path, timeout=timeout,
+            cmd, capture_output=True, text=True, encoding="utf-8",  
+            errors="replace",  cwd=worktree_path, timeout=timeout,
         )
         return result.returncode, result.stdout.strip(), result.stderr.strip()
 
