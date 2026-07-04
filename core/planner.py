@@ -24,9 +24,11 @@ class Planner:
         context_manager: ContextManager,
         tools: list[BaseTool],
         workspace_dir: str,
+        max_steps: int = 50,
     ):
         self.llm = llm_client
         self.workspace_dir = workspace_dir
+        self.max_steps = max_steps
         self.ctx = context_manager
         self.state = GlobalState.get()
         self._recent_actions: deque[int] = deque(maxlen=10)
@@ -47,7 +49,7 @@ class Planner:
         tool_schemas = [t.schema for t in self.tools_by_name.values()]
 
         step_count = 0
-        MAX_STEPS = 50
+        MAX_STEPS = self.max_steps
 
         while True:
             step_count += 1
@@ -137,7 +139,7 @@ class Planner:
         tool_schemas = [t.schema for t in self.tools_by_name.values()]
 
         step_count = 0
-        MAX_STEPS = 30
+        MAX_STEPS = self.max_steps
         total_prompt_tokens = 0
         total_completion_tokens = 0
         logger = logging.getLogger(__name__)

@@ -10,7 +10,7 @@ from typing import Literal, ClassVar
 class TaskNode:
     task_id: str
     description: str
-    status: Literal["pending", "running", "done", "failed", "blocked"] = "pending"
+    status: Literal["pending", "running", "verifying", "done", "failed", "blocked"] = "pending"
     assigned_actor: str | None = None
     dependencies: list[str] = field(default_factory=list)
     result_summary: str | None = None

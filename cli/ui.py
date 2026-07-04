@@ -55,10 +55,12 @@ class UI:
             return
 
         status_styles = {
-            "pending":  ("..", "dim yellow"),
-            "running":  (">>", "bold cyan"),
-            "done":     ("OK", "bold green"),
-            "failed":   ("!!", "bold red"),
+            "pending":    ("..", "dim yellow"),
+            "running":    (">>", "bold cyan"),
+            "verifying":  ("\U0001F50D", "bold magenta"),
+            "done":       ("OK", "bold green"),
+            "failed":     ("!!", "bold red"),
+            "blocked":    ("\U0001F6AB", "dim"),
         }
 
         table = Table(

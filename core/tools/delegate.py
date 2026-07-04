@@ -9,6 +9,7 @@ import time
 from .base import BaseTool, ToolResult
 from ..state import GlobalState
 from ..git_utils import setup_worktree, teardown_worktree, extract_diff, cleanup_orphans
+from ..role_config import ActorRole, get_role_config
 
 MAX_CONCURRENT_ACTORS = int(os.getenv("SCA_MAX_ACTORS", "4"))
 
@@ -45,6 +46,16 @@ class DelegateTool(BaseTool):
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Relevant summary snippets from previous Actors to inject as context.",
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": ["scout", "coder", "verifier"],
+                        "description": "Actor role: scout (read-only explore), coder (implement), verifier (test).",
+                        "default": "coder",
+                    },
+                    "max_steps": {
+                        "type": "integer",
+                        "description": "Override the role's default max_steps. Use for complex tasks needing more steps.",
                     },
                 },
                 "required": ["task_id", "description"],
@@ -141,11 +152,19 @@ class DelegateTool(BaseTool):
                         "error": f"worktree setup: {str(e)}",
                     }
 
-                # --- 3. Start MCP Servers for this Actor ---
+                # --- 3. Resolve role configuration ---
+                role_str = subtask.get("role", "coder")
+                try:
+                    role = ActorRole(role_str)
+                except ValueError:
+                    role = ActorRole.CODER
+                role_cfg = get_role_config(role)
+
+                # --- 4. Start MCP Servers for this Actor ---
                 from ..mcp import MCPToolProvider  # lazy import to avoid circular dep
                 tool_provider = MCPToolProvider()
                 try:
-                    await tool_provider.start(wt_path)
+                    await tool_provider.start(wt_path, tool_allowlist=role_cfg.tool_allowlist)
                 except Exception as e:
                     logger.error("MCP startup failed for %s: %s", tid, e)
                     await state.update_task(tid, status="failed")
@@ -169,9 +188,10 @@ class DelegateTool(BaseTool):
                             except Exception:
                                 pass  # best-effort copy
 
-                    # --- 5. Build ActorAgent with MCP tool provider ---
+                    # --- 6. Build ActorAgent with role-based configuration ---
+                    max_steps = subtask.get("max_steps", role_cfg.default_max_steps)
                     actor_ctx = ContextManager(
-                        system_prompt=ACTOR_SYSTEM_PROMPT,
+                        system_prompt=role_cfg.system_prompt,
                         max_tokens=self._llm.max_tokens,
                     )
                     actor_ctx.add_user_message(injected_context)
@@ -184,6 +204,7 @@ class DelegateTool(BaseTool):
                         workspace_dir=wt_path,
                         actor_id=tid,
                         task_context=description,
+                        max_steps=max_steps,
                     )
 
                     # --- 6. Execute Actor ---
@@ -209,7 +230,7 @@ class DelegateTool(BaseTool):
                         "status": summary.status,
                         "files_modified": summary.files_modified,
                         "bugs_found": summary.bugs_found,
-                        "key_findings": (summary.key_findings or "")[:500],
+                        "key_findings": (summary.key_findings or "")[:2000],
                         "suggested_next_steps": summary.suggested_next_steps,
                         "diff": diff[:8000],  # truncate for Planner context
                     }
@@ -278,18 +299,25 @@ class DelegateTool(BaseTool):
             if not ready:
                 break
 
-            # Execute ready tasks concurrently
-            batch_results = await asyncio.gather(
-                *[run_one(st) for st in ready.values()],
-                return_exceptions=True,
-            )
+            # Execute ready tasks concurrently via TaskGroup (Python 3.12+)
+            batch_results: list[dict] = []
+            async with asyncio.TaskGroup() as tg:
+                tasks_map = {
+                    st["task_id"]: tg.create_task(run_one(st))
+                    for st in ready.values()
+                }
+            for tid, task in tasks_map.items():
+                try:
+                    batch_results.append(task.result())
+                except Exception as e:
+                    logger.error("run_one crashed for %s: %s", tid, e)
+                    batch_results.append({
+                        "task_id": tid,
+                        "status": "failed",
+                        "error": f"Fatal actor error: {str(e)}",
+                    })
 
             for r in batch_results:
-                # Guard against unhandled exceptions from run_one
-                if isinstance(r, BaseException):
-                    logger.error(f"run_one raised unhandled exception: {r}")
-                    continue
-
                 all_results.append(r)
                 if r["status"] == "done":
                     completed.add(r["task_id"])

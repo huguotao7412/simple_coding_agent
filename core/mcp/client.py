@@ -72,12 +72,13 @@ class MCPToolProvider:
         self._failure_count: int = 0
         self._circuit_open: bool = False
         self._worktree_path: str = ""
+        self._tool_allowlist: set[str] | None = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    async def start(self, worktree_path: str) -> None:
+    async def start(self, worktree_path: str, tool_allowlist: set[str] | None = None) -> None:
         """Launch both MCP Servers bound to the given worktree directory.
 
         Spawns two Node.js subprocesses via npx:
@@ -86,8 +87,11 @@ class MCPToolProvider:
 
         Each server is connected via stdio transport and initialized with
         the MCP handshake. Tool schemas are fetched and cached.
+
+        If tool_allowlist is provided, list_tools() will filter to only those tools.
         """
         self._worktree_path = os.path.abspath(worktree_path)
+        self._tool_allowlist = tool_allowlist
 
         # filesystem server takes the allowed directory as a positional arg
         servers: list[tuple[str, list[str]]] = [
@@ -145,10 +149,17 @@ class MCPToolProvider:
                     "parameters": { ... JSON Schema ... },
                 },
             }
+
+        If a tool_allowlist was set at start(), only matching tools are returned.
         """
         if not self._tool_schemas:
             await self._build_routing_table()
-        return self._tool_schemas
+        if self._tool_allowlist is None:
+            return self._tool_schemas
+        return [
+            t for t in self._tool_schemas
+            if t.get("function", {}).get("name") in self._tool_allowlist
+        ]
 
     async def call_tool(self, name: str, args: dict) -> ToolResult:
         """Route a tool call to the correct MCP Server and return the result.

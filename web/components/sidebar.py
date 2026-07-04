@@ -53,7 +53,14 @@ def render_sidebar(workspace_root: str, current_project: str) -> str | None:
     if not tasks:
         st.sidebar.caption("(no active task tree)")
     else:
-        status_icon = {"pending": "⏳", "running": "🔄", "done": "✅", "failed": "❌"}
+        status_icon = {
+            "pending": "⏳",
+            "running": "🔄",
+            "verifying": "\U0001F50D",
+            "done": "✅",
+            "failed": "❌",
+            "blocked": "\U0001F6AB",
+        }
         for task_id, task in tasks.items():
             icon = status_icon.get(task["status"], "❓")
             desc_display = task["description"][:40] + ("..." if len(task["description"]) > 40 else "")

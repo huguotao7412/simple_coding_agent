@@ -133,12 +133,14 @@ class ActorAgent:
         actor_id: str = "",
         task_context: str = "",
         tool_provider: Any | None = None,
+        max_steps: int = 30,
     ):
         self.actor_id = actor_id
         self.task_context = task_context
         self.llm = llm_client
         self.workspace_dir = workspace_dir
         self._tool_provider = tool_provider
+        self.max_steps = max_steps
 
         # Local tool fallback (used when tool_provider is None)
         self.tools_by_name = {t.name: t for t in tools} if tools else {}
@@ -279,7 +281,7 @@ class ActorAgent:
             tool_schemas = [t.schema for t in self.tools_by_name.values()]
 
         step_count = 0
-        MAX_STEPS = 30
+        MAX_STEPS = self.max_steps
 
         while True:
             step_count += 1
@@ -356,7 +358,7 @@ class ActorAgent:
             tool_schemas = [t.schema for t in self.tools_by_name.values()]
 
         step_count = 0
-        MAX_STEPS = 30
+        MAX_STEPS = self.max_steps
 
         while True:
             step_count += 1
