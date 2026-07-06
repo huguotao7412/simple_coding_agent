@@ -3,7 +3,10 @@ from __future__ import annotations
 import pytest
 
 from core.context import ContextManager
+from core.agent import ActorAgent
+from core.planner import Planner
 from core.runtime import AgentRuntime, parse_tool_call
+from core.state import GlobalState
 from core.tools.base import BaseTool, ToolResult
 
 
@@ -44,6 +47,16 @@ class FailingTool(BaseTool):
 
     async def execute(self, **kwargs):
         raise RuntimeError("boom")
+
+
+class FakeDelegateTool(BaseTool):
+    name = "delegate"
+    description = "Fake delegate for planner wrapper tests."
+    parameters = {}
+    required_params = []
+
+    async def execute(self, **kwargs):
+        return ToolResult.ok("delegated")
 
 
 def _tool_call(arguments: str) -> dict:
@@ -279,3 +292,60 @@ async def test_runtime_stops_at_max_steps():
     assert "maximum step limit" in result
     assert ctx.messages[-1]["role"] == "assistant"
     assert "maximum step limit" in ctx.messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_actor_agent_uses_shared_runtime_for_run():
+    llm = FakeLLM([{"role": "assistant", "content": "actor finished"}])
+    ctx = ContextManager(system_prompt="system")
+    actor = ActorAgent(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[],
+        workspace_dir=".",
+        actor_id="task_1",
+        max_steps=3,
+    )
+
+    summary = await actor.run("hello")
+
+    assert summary.task_id == "task_1"
+    assert summary.status == "done"
+    assert summary.key_findings == "actor finished"
+
+
+@pytest.mark.asyncio
+async def test_planner_stream_preserves_delegate_actor_update_and_token_stats():
+    GlobalState.reset()
+    delegate_call = _named_tool_call("delegate", "{}", call_id="call_delegate")
+    llm = FakeLLM([
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [delegate_call],
+            "_usage": {"prompt_tokens": 10, "completion_tokens": 2},
+        },
+        {
+            "role": "assistant",
+            "content": "planner finished",
+            "_usage": {"prompt_tokens": 5, "completion_tokens": 3},
+        },
+    ])
+    ctx = ContextManager(system_prompt="system")
+    planner = Planner(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[FakeDelegateTool()],
+        workspace_dir=".",
+        max_steps=3,
+    )
+
+    events = [event async for event in planner.run_stream("hello")]
+    event_types = [event.type for event in events]
+
+    assert "actor_update" in event_types
+    assert "token_stats" in event_types
+    assert event_types[-1] == "done"
+    token_stats = [event for event in events if event.type == "token_stats"][-1]
+    assert '"prompt_tokens": 15' in token_stats.content
+    assert '"completion_tokens": 5' in token_stats.content

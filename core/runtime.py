@@ -89,6 +89,7 @@ class AgentRuntime:
         actor_id: str = "",
         dynamic_context_builder: Callable[[], dict] | None = None,
         after_tool_call: Callable[[str, ToolResult], Awaitable[list[AgentEvent]]] | None = None,
+        emit_token_stats: bool = False,
     ) -> None:
         self.llm = llm_client
         self.ctx = context_manager
@@ -98,8 +99,10 @@ class AgentRuntime:
         self.actor_id = actor_id
         self.dynamic_context_builder = dynamic_context_builder
         self.after_tool_call = after_tool_call
+        self.emit_token_stats = emit_token_stats
         self.tools_by_name = {t.name: t for t in tools} if tools else {}
         self._recent_actions: deque[int] = deque(maxlen=10)
+        self.last_result_success = True
 
     async def _list_tool_schemas(self) -> list[dict]:
         if self.tool_provider is not None:
@@ -179,6 +182,7 @@ class AgentRuntime:
             step_count += 1
             if step_count > self.max_steps:
                 error_msg = "Safety stop: agent reached the maximum step limit."
+                self.last_result_success = False
                 self.ctx.add_assistant_message(content=error_msg)
                 return error_msg
 
@@ -195,6 +199,7 @@ class AgentRuntime:
                 )
             except LLMAPIError as e:
                 error_msg = str(e)
+                self.last_result_success = False
                 self.ctx.add_assistant_message(content=error_msg)
                 return error_msg
 
@@ -205,6 +210,7 @@ class AgentRuntime:
                     content=content,
                     reasoning_content=response.get("reasoning_content"),
                 )
+                self.last_result_success = True
                 return content
 
             self.ctx.add_assistant_message(
@@ -221,11 +227,23 @@ class AgentRuntime:
         tool_schemas = await self._list_tool_schemas()
 
         step_count = 0
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
         while True:
             step_count += 1
             if step_count > self.max_steps:
                 error_msg = "Safety stop: agent reached the maximum step limit."
+                self.last_result_success = False
                 self.ctx.add_assistant_message(content=error_msg)
+                if self.emit_token_stats:
+                    yield AgentEvent(
+                        type="token_stats",
+                        content=json.dumps({
+                            "prompt_tokens": total_prompt_tokens,
+                            "completion_tokens": total_completion_tokens,
+                        }),
+                        actor_id=self.actor_id,
+                    )
                 yield AgentEvent(type="error", content=error_msg, actor_id=self.actor_id)
                 return
 
@@ -267,9 +285,22 @@ class AgentRuntime:
 
             try:
                 response = await chat_task
+                usage = response.get("_usage", {})
+                total_prompt_tokens += usage.get("prompt_tokens", 0)
+                total_completion_tokens += usage.get("completion_tokens", 0)
             except LLMAPIError as e:
                 error_msg = str(e)
+                self.last_result_success = False
                 self.ctx.add_assistant_message(content=error_msg)
+                if self.emit_token_stats:
+                    yield AgentEvent(
+                        type="token_stats",
+                        content=json.dumps({
+                            "prompt_tokens": total_prompt_tokens,
+                            "completion_tokens": total_completion_tokens,
+                        }),
+                        actor_id=self.actor_id,
+                    )
                 yield AgentEvent(type="error", content=error_msg, actor_id=self.actor_id)
                 return
 
@@ -280,6 +311,16 @@ class AgentRuntime:
                     content=content,
                     reasoning_content=response.get("reasoning_content"),
                 )
+                self.last_result_success = True
+                if self.emit_token_stats:
+                    yield AgentEvent(
+                        type="token_stats",
+                        content=json.dumps({
+                            "prompt_tokens": total_prompt_tokens,
+                            "completion_tokens": total_completion_tokens,
+                        }),
+                        actor_id=self.actor_id,
+                    )
                 yield AgentEvent(type="done", content=content, actor_id=self.actor_id)
                 return
 
