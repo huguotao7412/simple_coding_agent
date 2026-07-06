@@ -7,6 +7,8 @@ from rich.panel import Panel
 from rich.status import Status
 from rich.table import Table
 
+from cli.report import RunReport
+
 SCA_LOGO = r"""
   [cyan]  ____    ____      _     [/]
   [cyan] / ___|  / ___|    / \    [/]
@@ -139,6 +141,56 @@ class UI:
             f"completion={completion_tokens:,} "
             f"total={total:,}[/]"
         )
+
+    def render_run_report(self, report: RunReport) -> None:
+        """Render a final per-run audit summary."""
+        table = Table(
+            title="Run Report",
+            title_style="bold blue",
+            show_header=False,
+            box=None,
+            padding=(0, 1),
+        )
+        table.add_column("Key", style="dim", width=18)
+        table.add_column("Value")
+
+        tool_count = len(report.tool_calls)
+        failed_tools = report.failed_tool_count
+        table.add_row("Tools", f"{tool_count} call(s), {failed_tools} failed")
+
+        if report.files_referenced:
+            files = sorted(report.files_referenced)
+            rendered = ", ".join(files[:5])
+            if len(files) > 5:
+                rendered += f", +{len(files) - 5} more"
+            table.add_row("Files referenced", rendered)
+        else:
+            table.add_row("Files referenced", "none observed")
+
+        if report.actor_status_counts:
+            actor_summary = ", ".join(
+                f"{status}={count}"
+                for status, count in sorted(report.actor_status_counts.items())
+            )
+            table.add_row("Actor tasks", actor_summary)
+
+        if report.total_tokens:
+            table.add_row(
+                "Tokens",
+                f"prompt={report.prompt_tokens:,}, completion={report.completion_tokens:,}, total={report.total_tokens:,}",
+            )
+
+        if report.compactions:
+            table.add_row("Compactions", str(report.compactions))
+
+        if report.errors:
+            table.add_row("Errors", str(len(report.errors)))
+
+        outcome = "failed" if report.errors or failed_tools else "completed"
+        table.add_row("Outcome", outcome)
+
+        self.console.print()
+        self.console.print(table)
 
     def render_user_prompt(self) -> str:
         """Display the prompt and read user input."""

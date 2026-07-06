@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+from cli.report import RunReport
 from cli.ui import UI
 from core.planner import Planner
 
@@ -32,8 +33,11 @@ class Bridge:
 
             stream = None
             streamed_anything = False
+            report = RunReport()
             try:
                 async for event in self.agent.run_stream(user_input):
+                    report.observe(event)
+
                     if event.type == "thought":
                         self.ui.clear_tool_status()
                         if stream is None:
@@ -106,3 +110,4 @@ class Bridge:
                 self.ui.clear_actor_status()
                 if stream:
                     stream.__exit__(None, None, None)
+                self.ui.render_run_report(report)
