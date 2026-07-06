@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from core.mcp import MCPToolProvider
 
 
-async def test_mcp_filesystem_read_write() -> None:
+async def _run_mcp_filesystem_read_write() -> None:
     """Start MCP servers, create a file, read it back, run a bash command."""
     tmpdir = tempfile.mkdtemp(prefix="mcp_test_")
     print(f"Test directory: {tmpdir}")
@@ -92,4 +92,8 @@ async def test_mcp_filesystem_read_write() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(test_mcp_filesystem_read_write())
+    asyncio.run(_run_mcp_filesystem_read_write())
+
+
+def test_mcp_filesystem_read_write() -> None:
+    asyncio.run(_run_mcp_filesystem_read_write())

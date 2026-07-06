@@ -28,6 +28,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from ..tools.base import ToolResult
+from ..tools import ACTOR_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class MCPToolProvider:
         self._stdio_ctxs: list[Any] = []          # stdio_client async generators for manual cleanup
         self._tool_routing: dict[str, str] = {}   # tool_name → server_name
         self._tool_schemas: list[dict] = []        # cached OpenAI-format schemas
+        self._local_tools = {tool_cls.name: tool_cls() for tool_cls in ACTOR_TOOLS}
         self._failure_count: int = 0
         self._circuit_open: bool = False
         self._worktree_path: str = ""
@@ -177,6 +179,14 @@ class MCPToolProvider:
                 "(CRITICAL: MCP circuit breaker open)"
             )
 
+        local_tool = self._local_tools.get(name)
+        if local_tool is not None:
+            try:
+                args["workspace_dir"] = self._worktree_path
+                return await local_tool.execute(**args)
+            except Exception as e:
+                return ToolResult.fail(f"Internal local tool error: {e}")
+
         # Route lookup
         server_name = self._tool_routing.get(name)
         if server_name is None:
@@ -269,6 +279,9 @@ class MCPToolProvider:
     async def _build_routing_table(self) -> None:
         """Fetch tools from each connected server and build routing + schema cache."""
         all_schemas: list[dict] = []
+
+        for tool in self._local_tools.values():
+            all_schemas.append(tool.schema)
 
         for server_name, session in self._sessions.items():
             try:

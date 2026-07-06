@@ -19,7 +19,7 @@ class DelegateTool(BaseTool):
     name = "delegate"
     description = (
         "Dispatch multiple subtasks to independent Actor agents for concurrent execution. "
-        "Each Actor runs with full tool access. "
+        "Each Actor runs with role-specific tool access. "
         "Use this after you have decomposed a complex task into independent subtasks "
         "via update_state. Returns structured summaries from each Actor."
     )
@@ -73,9 +73,6 @@ class DelegateTool(BaseTool):
         """Dispatch subtasks to Actors concurrently with asyncio gate."""
         from ..agent import ActorAgent
         from ..context import ContextManager
-        from ..tools import ACTOR_TOOLS
-        from ..system_prompt import ACTOR_SYSTEM_PROMPT
-
         state = GlobalState.get()
 
         # 动态提取最新的 workspace_dir，回退兜底为初始缓存
@@ -299,23 +296,25 @@ class DelegateTool(BaseTool):
             if not ready:
                 break
 
-            # Execute ready tasks concurrently via TaskGroup (Python 3.12+)
+            # Execute ready tasks concurrently. Keep return_exceptions=True so one
+            # Actor crash does not hide every other Actor's result from Planner.
+            ready_items = list(ready.values())
+            raw_results = await asyncio.gather(
+                *[run_one(st) for st in ready_items],
+                return_exceptions=True,
+            )
             batch_results: list[dict] = []
-            async with asyncio.TaskGroup() as tg:
-                tasks_map = {
-                    st["task_id"]: tg.create_task(run_one(st))
-                    for st in ready.values()
-                }
-            for tid, task in tasks_map.items():
-                try:
-                    batch_results.append(task.result())
-                except Exception as e:
-                    logger.error("run_one crashed for %s: %s", tid, e)
+            for st, result in zip(ready_items, raw_results):
+                tid = st["task_id"]
+                if isinstance(result, Exception):
+                    logger.error("run_one crashed for %s: %s", tid, result)
                     batch_results.append({
                         "task_id": tid,
                         "status": "failed",
-                        "error": f"Fatal actor error: {str(e)}",
+                        "error": f"Fatal actor error: {str(result)}",
                     })
+                else:
+                    batch_results.append(result)
 
             for r in batch_results:
                 all_results.append(r)

@@ -43,7 +43,12 @@ def _build_role_config() -> dict[ActorRole, RoleConfig]:
     return {
         ActorRole.SCOUT: RoleConfig(
             system_prompt=SCOUT_SYSTEM_PROMPT,
-            tool_allowlist={"list_dir", "read_outline", "search_codebase", "read"},
+            tool_allowlist={
+                "list_dir", "read_outline", "search_codebase",
+                "read_file", "read_multiple_files", "list_directory",
+                "directory_tree", "search_files", "get_file_info",
+                "list_allowed_directories",
+            },
             default_max_steps=60,
         ),
         ActorRole.CODER: RoleConfig(
@@ -53,7 +58,13 @@ def _build_role_config() -> dict[ActorRole, RoleConfig]:
         ),
         ActorRole.VERIFIER: RoleConfig(
             system_prompt=VERIFIER_SYSTEM_PROMPT,
-            tool_allowlist={"read", "write", "edit", "bash", "list_dir"},
+            tool_allowlist={
+                "list_dir",
+                "read_file", "read_multiple_files", "write_file", "edit_file",
+                "create_directory", "list_directory", "directory_tree",
+                "get_file_info", "list_allowed_directories",
+                "run",
+            },
             default_max_steps=25,
         ),
     }

@@ -24,7 +24,7 @@ def test_scout_is_read_only():
 
     scout_cfg = get_role_config(ActorRole.SCOUT)
     assert scout_cfg.tool_allowlist is not None, "Scout must have explicit tool allowlist"
-    forbidden = {"write", "edit", "bash"}
+    forbidden = {"write", "edit", "bash", "write_file", "edit_file", "run"}
     assert not (scout_cfg.tool_allowlist & forbidden), \
         f"Scout allowlist contains forbidden tools: {scout_cfg.tool_allowlist & forbidden}"
 
@@ -35,8 +35,8 @@ def test_verifier_has_bash():
 
     verifier_cfg = get_role_config(ActorRole.VERIFIER)
     assert verifier_cfg.tool_allowlist is not None, "Verifier must have explicit tool allowlist"
-    assert "bash" in verifier_cfg.tool_allowlist, "Verifier needs bash to run tests"
-    assert "read" in verifier_cfg.tool_allowlist, "Verifier needs read to inspect code"
+    assert "run" in verifier_cfg.tool_allowlist, "Verifier needs bash-mcp run to run tests"
+    assert "read_file" in verifier_cfg.tool_allowlist, "Verifier needs read_file to inspect code"
 
 
 def test_coder_has_full_access():
@@ -90,3 +90,12 @@ def test_delegate_schema_has_role_field():
     assert "role" in props
     assert "max_steps" in props
     assert props["role"]["enum"] == ["scout", "coder", "verifier"]
+
+
+def test_mcp_provider_exposes_local_actor_tools():
+    """MCPToolProvider must expose local code-intelligence tools to Actors."""
+    from core.mcp.client import MCPToolProvider
+
+    provider = MCPToolProvider()
+    local_names = set(provider._local_tools)
+    assert {"list_dir", "read_outline", "search_codebase"} <= local_names
