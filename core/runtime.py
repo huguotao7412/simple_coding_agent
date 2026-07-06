@@ -2,13 +2,30 @@ from __future__ import annotations
 
 import json
 import re
+import asyncio
+from collections import deque
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 from .context import ContextManager
 from .exceptions import LLMAPIError
 from .llm import LLMClient
-from .tools.base import BaseTool
+from .tools.base import BaseTool, ToolResult
+
+
+WORKSPACE_AWARE_TOOLS = {
+    "apply_patch",
+    "bash",
+    "delegate",
+    "edit",
+    "list_dir",
+    "read",
+    "read_outline",
+    "search_codebase",
+    "update_state",
+    "write",
+}
 
 
 @dataclass
@@ -16,6 +33,17 @@ class ParsedToolCall:
     tool_name: str
     args: dict
     error: str | None = None
+
+
+@dataclass
+class AgentEvent:
+    type: str
+    content: str = ""
+    tool_name: str | None = None
+    tool_args: dict | None = None
+    tool_result: ToolResult | None = None
+    token: str = ""
+    actor_id: str = ""
 
 
 def parse_tool_call(tc: dict) -> ParsedToolCall:
@@ -59,7 +87,8 @@ class AgentRuntime:
         max_steps: int = 30,
         tool_provider: Any | None = None,
         actor_id: str = "",
-        dynamic_context_builder: Any | None = None,
+        dynamic_context_builder: Callable[[], dict] | None = None,
+        after_tool_call: Callable[[str, ToolResult], Awaitable[list[AgentEvent]]] | None = None,
     ) -> None:
         self.llm = llm_client
         self.ctx = context_manager
@@ -68,7 +97,9 @@ class AgentRuntime:
         self.tool_provider = tool_provider
         self.actor_id = actor_id
         self.dynamic_context_builder = dynamic_context_builder
+        self.after_tool_call = after_tool_call
         self.tools_by_name = {t.name: t for t in tools} if tools else {}
+        self._recent_actions: deque[int] = deque(maxlen=10)
 
     async def _list_tool_schemas(self) -> list[dict]:
         if self.tool_provider is not None:
@@ -79,6 +110,65 @@ class AgentRuntime:
         if self.dynamic_context_builder is None:
             return self.ctx.messages
         return self.ctx.messages + [self.dynamic_context_builder()]
+
+    async def _execute_single_tool(self, tc: dict) -> tuple[str, dict, ToolResult, bool]:
+        parsed = parse_tool_call(tc)
+        tool_name = parsed.tool_name
+        args = parsed.args
+
+        if parsed.error is not None:
+            result = ToolResult.fail(parsed.error)
+            self.ctx.add_tool_result(tc["id"], f"Error: {parsed.error}")
+            return tool_name, args, result, False
+
+        if tool_name in WORKSPACE_AWARE_TOOLS and self.workspace_dir:
+            args["workspace_dir"] = self.workspace_dir
+
+        action_hash = hash(tool_name + json.dumps(args, sort_keys=True))
+        if self._recent_actions.count(action_hash) >= 2:
+            intervention = "System Alert: Repeated tool call detected. Please try a different approach."
+            result = ToolResult.fail(intervention)
+            self.ctx.add_tool_result(tc["id"], intervention)
+            return tool_name, args, result, True
+        self._recent_actions.append(action_hash)
+
+        if self.tool_provider is not None:
+            result = await self.tool_provider.call_tool(tool_name, args)
+            if result.success:
+                observation = result.content
+            else:
+                observation = f"ERROR: {result.error}"
+                if result.content:
+                    observation += f"\nPartial output: {result.content}"
+            self.ctx.add_tool_result(tc["id"], observation)
+            return tool_name, args, result, False
+
+        tool = self.tools_by_name.get(tool_name)
+        if tool is None:
+            result = ToolResult.fail(f"unknown tool '{tool_name}'")
+            observation = f"Error: unknown tool '{tool_name}'. Available: {list(self.tools_by_name.keys())}"
+            self.ctx.add_tool_result(tc["id"], observation)
+            return tool_name, args, result, False
+
+        try:
+            result = await tool.execute(**args)
+        except Exception as e:
+            result = ToolResult.fail(f"Internal Tool Error: {str(e)}")
+
+        if result.success:
+            observation = result.content
+        else:
+            observation = f"ERROR: {result.error}"
+            if result.content:
+                observation += f"\nPartial output: {result.content}"
+
+        self.ctx.add_tool_result(tc["id"], observation)
+        return tool_name, args, result, False
+
+    async def _run_after_tool_hook(self, tool_name: str, result: ToolResult) -> list[AgentEvent]:
+        if self.after_tool_call is None:
+            return []
+        return await self.after_tool_call(tool_name, result)
 
     async def run(self, user_input: str, on_token=None) -> str:
         self.ctx.add_user_message(user_input)
@@ -124,8 +214,95 @@ class AgentRuntime:
             )
 
             for tc in tool_calls:
+                await self._execute_single_tool(tc)
+
+    async def run_stream(self, user_input: str) -> AsyncGenerator[AgentEvent, None]:
+        self.ctx.add_user_message(user_input)
+        tool_schemas = await self._list_tool_schemas()
+
+        step_count = 0
+        while True:
+            step_count += 1
+            if step_count > self.max_steps:
+                error_msg = "Safety stop: agent reached the maximum step limit."
+                self.ctx.add_assistant_message(content=error_msg)
+                yield AgentEvent(type="error", content=error_msg, actor_id=self.actor_id)
+                return
+
+            if self.ctx.needs_compression(self.llm):
+                await self.ctx.compress(self.llm)
+                yield AgentEvent(type="compaction", actor_id=self.actor_id)
+            elif self.ctx.needs_proactive_compression(self.llm):
+                self.ctx._lightweight_compress()
+                yield AgentEvent(type="compaction", content="lightweight", actor_id=self.actor_id)
+
+            queue: asyncio.Queue[str] = asyncio.Queue()
+
+            def on_token(token: str) -> None:
+                queue.put_nowait(token)
+
+            chat_task = asyncio.create_task(
+                self.llm.chat(
+                    messages=self._payload_messages(),
+                    tools=tool_schemas if tool_schemas else None,
+                    on_token=on_token,
+                )
+            )
+
+            try:
+                while not chat_task.done() or not queue.empty():
+                    try:
+                        token = await asyncio.wait_for(queue.get(), timeout=0.05)
+                    except asyncio.TimeoutError:
+                        continue
+                    yield AgentEvent(
+                        type="thought",
+                        token=token,
+                        content=token,
+                        actor_id=self.actor_id,
+                    )
+            finally:
+                if not chat_task.done():
+                    chat_task.cancel()
+
+            try:
+                response = await chat_task
+            except LLMAPIError as e:
+                error_msg = str(e)
+                self.ctx.add_assistant_message(content=error_msg)
+                yield AgentEvent(type="error", content=error_msg, actor_id=self.actor_id)
+                return
+
+            tool_calls = response.get("tool_calls")
+            if not tool_calls:
+                content = response.get("content") or ""
+                self.ctx.add_assistant_message(
+                    content=content,
+                    reasoning_content=response.get("reasoning_content"),
+                )
+                yield AgentEvent(type="done", content=content, actor_id=self.actor_id)
+                return
+
+            self.ctx.add_assistant_message(
+                content=response.get("content"),
+                tool_calls=tool_calls,
+                reasoning_content=response.get("reasoning_content"),
+            )
+
+            for tc in tool_calls:
                 parsed = parse_tool_call(tc)
-                if parsed.error is not None:
-                    self.ctx.add_tool_result(tc["id"], f"Error: {parsed.error}")
-                else:
-                    self.ctx.add_tool_result(tc["id"], "Tool execution is not implemented yet.")
+                yield AgentEvent(
+                    type="tool_call",
+                    tool_name=parsed.tool_name,
+                    tool_args=parsed.args,
+                    actor_id=self.actor_id,
+                )
+                tool_name, _, result, _ = await self._execute_single_tool(tc)
+                yield AgentEvent(
+                    type="tool_result",
+                    tool_name=tool_name,
+                    tool_result=result,
+                    actor_id=self.actor_id,
+                )
+                for event in await self._run_after_tool_hook(tool_name, result):
+                    yield event

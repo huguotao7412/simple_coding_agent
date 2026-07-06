@@ -36,6 +36,16 @@ class EchoTool(BaseTool):
         return ToolResult.ok(f"echo:{kwargs.get('value')}")
 
 
+class FailingTool(BaseTool):
+    name = "fail"
+    description = "Always fails internally."
+    parameters = {}
+    required_params = []
+
+    async def execute(self, **kwargs):
+        raise RuntimeError("boom")
+
+
 def _tool_call(arguments: str) -> dict:
     return {
         "id": "call_1",
@@ -45,6 +55,13 @@ def _tool_call(arguments: str) -> dict:
             "arguments": arguments,
         },
     }
+
+
+def _named_tool_call(name: str, arguments: str, call_id: str = "call_1") -> dict:
+    tc = _tool_call(arguments)
+    tc["id"] = call_id
+    tc["function"]["name"] = name
+    return tc
 
 
 @pytest.mark.asyncio
@@ -101,3 +118,164 @@ def test_parse_tool_call_non_object_json_arguments():
 
     assert parsed.args == {}
     assert parsed.error is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_executes_local_tool_and_continues_to_final_answer():
+    llm = FakeLLM([
+        {"role": "assistant", "content": None, "tool_calls": [_tool_call('{"value": "abc"}')]},
+        {"role": "assistant", "content": "finished"},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[EchoTool()],
+        workspace_dir=".",
+        max_steps=3,
+    )
+
+    result = await runtime.run("hello")
+
+    assert result == "finished"
+    tool_messages = [m for m in ctx.messages if m["role"] == "tool"]
+    assert tool_messages[-1]["content"] == "echo:abc"
+
+
+@pytest.mark.asyncio
+async def test_runtime_records_invalid_json_tool_call_and_continues():
+    llm = FakeLLM([
+        {"role": "assistant", "content": None, "tool_calls": [_tool_call('{"value": ')]},
+        {"role": "assistant", "content": "recovered"},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[EchoTool()],
+        workspace_dir=".",
+        max_steps=3,
+    )
+
+    result = await runtime.run("hello")
+
+    assert result == "recovered"
+    tool_messages = [m for m in ctx.messages if m["role"] == "tool"]
+    assert "Invalid JSON" in tool_messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_records_unknown_tool_as_tool_result():
+    llm = FakeLLM([
+        {"role": "assistant", "content": None, "tool_calls": [_named_tool_call("missing", "{}")]},
+        {"role": "assistant", "content": "finished"},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[EchoTool()],
+        workspace_dir=".",
+        max_steps=3,
+    )
+
+    result = await runtime.run("hello")
+
+    assert result == "finished"
+    tool_messages = [m for m in ctx.messages if m["role"] == "tool"]
+    assert "unknown tool" in tool_messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_converts_tool_exception_to_tool_result():
+    llm = FakeLLM([
+        {"role": "assistant", "content": None, "tool_calls": [_named_tool_call("fail", "{}")]},
+        {"role": "assistant", "content": "finished"},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[FailingTool()],
+        workspace_dir=".",
+        max_steps=3,
+    )
+
+    result = await runtime.run("hello")
+
+    assert result == "finished"
+    tool_messages = [m for m in ctx.messages if m["role"] == "tool"]
+    assert "Internal Tool Error" in tool_messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_streams_tool_call_tool_result_and_done_events():
+    llm = FakeLLM([
+        {"role": "assistant", "content": None, "tool_calls": [_tool_call('{"value": "abc"}')]},
+        {"role": "assistant", "content": "finished"},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[EchoTool()],
+        workspace_dir=".",
+        max_steps=3,
+    )
+
+    events = [event async for event in runtime.run_stream("hello")]
+    event_types = [event.type for event in events]
+
+    assert "thought" in event_types
+    assert "tool_call" in event_types
+    assert "tool_result" in event_types
+    assert event_types[-1] == "done"
+    assert [event.tool_name for event in events if event.type == "tool_call"] == ["echo"]
+    assert [event.content for event in events if event.type == "done"] == ["finished"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_repeated_tool_call_triggers_circuit_breaker():
+    repeated = _tool_call('{"value": "abc"}')
+    llm = FakeLLM([
+        {"role": "assistant", "content": None, "tool_calls": [repeated]},
+        {"role": "assistant", "content": None, "tool_calls": [repeated]},
+        {"role": "assistant", "content": None, "tool_calls": [repeated]},
+        {"role": "assistant", "content": "finished"},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[EchoTool()],
+        workspace_dir=".",
+        max_steps=5,
+    )
+
+    result = await runtime.run("hello")
+
+    assert result == "finished"
+    tool_messages = [m for m in ctx.messages if m["role"] == "tool"]
+    assert "Repeated tool call detected" in tool_messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_stops_at_max_steps():
+    llm = FakeLLM([
+        {"role": "assistant", "content": None, "tool_calls": [_tool_call('{"value": "abc"}')]},
+        {"role": "assistant", "content": None, "tool_calls": [_tool_call('{"value": "def"}')]},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[EchoTool()],
+        workspace_dir=".",
+        max_steps=1,
+    )
+
+    result = await runtime.run("hello")
+
+    assert "maximum step limit" in result
+    assert ctx.messages[-1]["role"] == "assistant"
+    assert "maximum step limit" in ctx.messages[-1]["content"]
