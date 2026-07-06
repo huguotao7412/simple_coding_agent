@@ -138,16 +138,16 @@ CLI smoke check：
 .\.venv\Scripts\python.exe -m cli.main --help
 ```
 
-运行本地 eval benchmark：
+准备本地 eval 任务工作区：
 
 ```bash
-.\.venv\Scripts\python.exe -m evals.run_evals --candidate-root tmp/eval-runs
+sca-eval prepare
 ```
 
-复制初始 fixture，供 agent 或手工修改：
+然后对每个任务运行 `sca --dir tmp/eval-runs/<task_id>`。完成后检查结果：
 
 ```bash
-.\.venv\Scripts\python.exe -m evals.run_evals --candidate-root tmp/eval-runs --copy-fixtures-to tmp/eval-runs
+sca-eval check
 ```
 
 ## 下一步路线

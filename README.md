@@ -171,16 +171,16 @@ CLI smoke check:
 .\.venv\Scripts\python.exe -m cli.main --help
 ```
 
-Run the local eval benchmark checks against completed candidate workspaces:
+Prepare local eval task workspaces:
 
 ```bash
-.\.venv\Scripts\python.exe -m evals.run_evals --candidate-root tmp/eval-runs
+sca-eval prepare
 ```
 
-To create editable copies of the initial fixtures:
+Then run `sca --dir tmp/eval-runs/<task_id>` for each task. When finished, check the results:
 
 ```bash
-.\.venv\Scripts\python.exe -m evals.run_evals --candidate-root tmp/eval-runs --copy-fixtures-to tmp/eval-runs
+sca-eval check
 ```
 
 ## Roadmap

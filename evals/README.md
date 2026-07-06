@@ -26,13 +26,13 @@ Each task checks:
 Copy initial fixtures into a working directory:
 
 ```bash
-python -m evals.run_evals --candidate-root tmp/eval-runs --copy-fixtures-to tmp/eval-runs
+sca-eval prepare
 ```
 
 Run an agent manually against each copied task directory. Then evaluate:
 
 ```bash
-python -m evals.run_evals --candidate-root tmp/eval-runs
+sca-eval check
 ```
 
 The expected candidate layout is:

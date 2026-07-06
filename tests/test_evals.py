@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from evals.cli import main as eval_cli_main
 from evals.run_evals import evaluate_all, evaluate_task, load_tasks
 
 
@@ -43,6 +44,15 @@ def test_eval_runner_rejects_changed_files_outside_allowlist(tmp_path: Path):
 
     assert not result.passed
     assert any("outside allowlist" in failure for failure in result.failures)
+
+
+def test_sca_eval_prepare_command_copies_fixtures(tmp_path: Path):
+    candidate_root = tmp_path / "eval-runs"
+
+    exit_code = eval_cli_main(["prepare", "--candidate-root", str(candidate_root)])
+
+    assert exit_code == 0
+    assert (candidate_root / "fix_failing_pytest" / "math_utils.py").is_file()
 
 
 def _copy_all_fixtures(candidate_root: Path) -> None:

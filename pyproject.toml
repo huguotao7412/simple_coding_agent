@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 sca = "cli.main:main"
+sca-eval = "evals.cli:main"
 sca-web = "web.cli:main"
 
 [project.optional-dependencies]
@@ -24,7 +25,7 @@ web = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["cli*", "core*", "web*"]
+include = ["cli*", "core*", "evals*", "web*"]
 
 [tool.mypy]
 strict = true
