@@ -171,12 +171,23 @@ CLI smoke check:
 .\.venv\Scripts\python.exe -m cli.main --help
 ```
 
+Run the local eval benchmark checks against completed candidate workspaces:
+
+```bash
+.\.venv\Scripts\python.exe -m evals.run_evals --candidate-root tmp/eval-runs
+```
+
+To create editable copies of the initial fixtures:
+
+```bash
+.\.venv\Scripts\python.exe -m evals.run_evals --candidate-root tmp/eval-runs --copy-fixtures-to tmp/eval-runs
+```
+
 ## Roadmap
 
 Near-term:
 
 - Add a structured final report: files touched, tools used, verification run, residual risks.
-- Add small local eval fixtures for repeatable coding-agent benchmarks.
 - Improve verification workflow around test commands and diff summaries.
 - Keep Web UI experimental unless it becomes useful for trace visualization.
 

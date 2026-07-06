@@ -138,9 +138,19 @@ CLI smoke check：
 .\.venv\Scripts\python.exe -m cli.main --help
 ```
 
+运行本地 eval benchmark：
+
+```bash
+.\.venv\Scripts\python.exe -m evals.run_evals --candidate-root tmp/eval-runs
+```
+
+复制初始 fixture，供 agent 或手工修改：
+
+```bash
+.\.venv\Scripts\python.exe -m evals.run_evals --candidate-root tmp/eval-runs --copy-fixtures-to tmp/eval-runs
+```
+
 ## 下一步路线
 
-- 增加结构化 final report：修改文件、工具调用、验证命令、测试结果、剩余风险。
-- 建立小型本地 eval fixtures，用来衡量 agent 是否真的变好。
 - 改进 test/diff/verification workflow。
 - Web 端继续保持 experimental，除非它对 trace 可视化有明显价值。
