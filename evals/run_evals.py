@@ -14,7 +14,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TASKS_PATH = Path(__file__).with_name("tasks.json")
 REPORT_PATH = Path(".sca") / "final_report.md"
-IGNORED_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache"}
+IGNORED_DIRS = {"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".worktrees"}
 
 
 @dataclass
@@ -148,6 +148,31 @@ def copy_fixtures(destination: Path) -> None:
         if dst.exists():
             shutil.rmtree(dst)
         shutil.copytree(src, dst)
+        init_candidate_repo(dst)
+
+
+def init_candidate_repo(path: Path) -> None:
+    """Make a copied fixture a standalone git repo for agent worktree tools."""
+    commands = [
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "sca-eval@example.local"],
+        ["git", "config", "user.name", "SCA Eval"],
+        ["git", "add", "-A"],
+        ["git", "commit", "-q", "-m", "initial eval fixture"],
+    ]
+    for command in commands:
+        result = subprocess.run(
+            command,
+            cwd=path,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise RuntimeError(f"failed to initialize eval git repo at {path}: {detail}")
 
 
 def main(argv: list[str] | None = None) -> int:

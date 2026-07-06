@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import shutil
+import subprocess
 from pathlib import Path
 
 from evals.cli import main as eval_cli_main
-from evals.run_evals import evaluate_all, evaluate_task, load_tasks
+from evals.run_evals import copy_fixtures, evaluate_all, evaluate_task, load_tasks
 
 
 def test_eval_suite_has_five_tasks():
@@ -53,13 +53,20 @@ def test_sca_eval_prepare_command_copies_fixtures(tmp_path: Path):
 
     assert exit_code == 0
     assert (candidate_root / "fix_failing_pytest" / "math_utils.py").is_file()
+    assert (candidate_root / "fix_failing_pytest" / ".git").is_dir()
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=candidate_root / "fix_failing_pytest",
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert status.returncode == 0
+    assert status.stdout == ""
 
 
 def _copy_all_fixtures(candidate_root: Path) -> None:
-    fixtures_root = Path("evals") / "fixtures"
-    candidate_root.mkdir(parents=True)
-    for task in load_tasks():
-        shutil.copytree(fixtures_root / task["id"], candidate_root / task["id"])
+    copy_fixtures(candidate_root)
 
 
 def _solve_all(candidate_root: Path) -> None:
