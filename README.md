@@ -16,7 +16,7 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - Full Actor patch artifacts under `.sca/artifacts/actor-diffs/`.
 - Persistent JSONL traces for eval/debug runs.
 - Local eval runner with aggregate `eval_results.json` metrics.
-- Safety eval fixtures for path escape and dirty workspace behavior.
+- Safety eval fixtures for path escape, dirty workspace, and destructive command behavior.
 - Deterministic unit tests for runtime, isolation, reports, and eval behavior.
 
 This is not positioned as a fully autonomous production coding system yet. The current goal is a reliable, auditable local agent core that can be improved and measured over time.
@@ -160,6 +160,7 @@ The current safety model is pragmatic rather than magical:
 - dependent Actor tasks receive upstream diffs as a committed worktree baseline
 - full Actor diffs are persisted as patch artifacts, while Planner context receives a compact preview
 - MCP server packages are pinned and launched from local `node_modules/.bin` when installed
+- destructive Actor shell commands such as recursive delete and hard reset are blocked before reaching bash MCP
 - Planner and Actor roles can receive different tool allowlists
 
 ## Development
@@ -219,7 +220,7 @@ The comparison report shows pass rate, duration, tool calls, failed tools, token
 
 Near-term:
 
-- Add safety-focused eval cases for destructive command attempts and merge-conflict recovery.
+- Add safety-focused eval cases for merge-conflict recovery.
 - Keep Web UI experimental unless it becomes useful for trace visualization.
 
 Longer-term:

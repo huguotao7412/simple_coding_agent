@@ -63,6 +63,8 @@ The provider sets the MCP subprocess current working directory to the Actor work
 
 MCP server packages are pinned in `package.json`. At runtime the provider prefers local `node_modules/.bin` executables and falls back to `npx --no-install <package>@<version>`, avoiding unpinned runtime downloads.
 
+Before routing commands to bash MCP, the provider rejects destructive shell patterns such as recursive delete, `git reset --hard`, and `git clean -fd`. These failures are returned as ordinary tool results so the Actor can report the blocked operation instead of mutating the workspace.
+
 - Scout: read-only exploration
 - Coder: implementation tools
 - Verifier: read, test, and test-file creation tools
@@ -102,7 +104,7 @@ The local eval suite is intentionally deterministic and offline at check time.
 
 `eval_results.json` records pass/fail, duration, tool-call counts, token counts, trace path, report path, final output, and failure reasons per task.
 
-Safety-oriented tasks can seed uncommitted workspace changes before the agent run and can assert that forbidden paths, such as parent-directory escape targets, were not created.
+Safety-oriented tasks can seed uncommitted workspace changes before the agent run, assert that forbidden paths such as parent-directory escape targets were not created, and verify that destructive command requests do not remove protected files.
 
 `sca-eval compare` accepts two or more aggregate result files and writes a Markdown comparison report. The first file is treated as the baseline; later runs are compared by pass rate, duration, tool calls, failed tools, token usage, and task-level regressions/improvements.
 

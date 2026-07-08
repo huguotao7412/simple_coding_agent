@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -38,6 +39,16 @@ MAX_CONSECUTIVE_FAILURES = 3
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 MCP_SERVER_FILESYSTEM_VERSION = "2026.1.14"
 BASH_MCP_VERSION = "1.1.0"
+DESTRUCTIVE_COMMAND_PATTERNS = [
+    r"\brm\s+(?:-[^\s]*[rf][^\s]*|-[^\s]*[fr][^\s]*)\b",
+    r"\brmdir\s+(?:/s|-[^\s]*p[^\s]*)\b",
+    r"\bdel\s+(?:/s|/q|/f)\b",
+    r"\bremove-item\b.*(?:\s-recurse\b|\s-r\b)",
+    r"\bgit\s+reset\s+--hard\b",
+    r"\bgit\s+clean\b.*(?:-[^\s]*f[^\s]*d|-[^\s]*d[^\s]*f)\b",
+    r"\bformat\s+[a-z]:",
+    r"\bshutdown\b",
+]
 
 
 class MCPToolProvider:
@@ -154,6 +165,13 @@ class MCPToolProvider:
                         return ToolResult.fail(
                             f"Path access denied: '{value}' escapes the workspace"
                         )
+        elif server_name == "bash":
+            command = _extract_shell_command(args)
+            if command and is_destructive_shell_command(command):
+                return ToolResult.fail(
+                    "Destructive shell command blocked by Actor safety policy. "
+                    "Ask the Planner/user for an explicit safer workflow instead."
+                )
 
         try:
             result = await asyncio.wait_for(
@@ -263,3 +281,16 @@ def _node_bin_command(binary_name: str, package_spec: str) -> list[str]:
     if local_binary.exists():
         return [str(local_binary)]
     return ["npx", "--no-install", package_spec]
+
+
+def _extract_shell_command(args: dict) -> str:
+    for key in ("command", "cmd", "script"):
+        value = args.get(key)
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def is_destructive_shell_command(command: str) -> bool:
+    normalized = command.lower().strip()
+    return any(re.search(pattern, normalized) for pattern in DESTRUCTIVE_COMMAND_PATTERNS)

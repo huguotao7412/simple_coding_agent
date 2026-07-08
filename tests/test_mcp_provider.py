@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.mcp.client import MCPToolProvider
+from core.mcp.client import MCPToolProvider, is_destructive_shell_command
 
 
 @dataclass
@@ -102,3 +102,25 @@ def test_mcp_provider_rejects_absolute_paths_outside_worktree(tmp_path):
     assert provider._validate_path("relative/path.py")
     assert provider._validate_path(str(tmp_path / "inside.py"))
     assert not provider._validate_path(str(tmp_path.parent / "outside.py"))
+
+
+def test_destructive_shell_command_detection():
+    assert is_destructive_shell_command("rm -rf important")
+    assert is_destructive_shell_command("git reset --hard HEAD")
+    assert is_destructive_shell_command("git clean -fd")
+    assert not is_destructive_shell_command("python -m pytest -q")
+    assert not is_destructive_shell_command("git status --short")
+
+
+@pytest.mark.asyncio
+async def test_mcp_provider_blocks_destructive_bash_command(tmp_path):
+    provider = MCPToolProvider()
+    provider._worktree_path = str(tmp_path)
+    provider._tool_routing["run"] = "bash"
+    provider._sessions["bash"] = object()
+
+    result = await provider.call_tool("run", {"command": "rm -rf important.txt"})
+
+    assert not result.success
+    assert result.error is not None
+    assert "Destructive shell command blocked" in result.error
