@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -96,6 +97,20 @@ def test_agent_command_can_modify_workspace(tmp_path):
 
     assert result.passed is True
     assert result.changed_files == ["sample.py"]
+
+
+def test_cli_help_exposes_non_interactive_options():
+    completed = subprocess.run(
+        [sys.executable, "-m", "cli.main", "--help"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    assert completed.returncode == 0
+    assert "--prompt" in completed.stdout
+    assert "--workspace" in completed.stdout
 
 
 def _write_case(tmp_path, name: str, source: str, test_source: str) -> Path:

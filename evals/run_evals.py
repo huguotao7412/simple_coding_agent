@@ -159,6 +159,25 @@ def run_case(
     error: str | None = None
 
     try:
+        if not dry_run:
+            git_setup_results = prepare_git_workspace(workspace, case.timeout_seconds)
+            failed_git_setup = next(
+                (result for result in git_setup_results if result.returncode != 0),
+                None,
+            )
+            if failed_git_setup is not None:
+                error = f"Git workspace setup failed: {failed_git_setup.stderr}"
+                return CaseResult(
+                    name=case.name,
+                    passed=False,
+                    verification_passed=False,
+                    dry_run=dry_run,
+                    duration_seconds=round(time.monotonic() - start, 3),
+                    workspace=str(workspace),
+                    prompt=case.prompt,
+                    error=error,
+                )
+
         if not dry_run and agent_command:
             command = agent_command.format(
                 workspace=str(workspace),
@@ -233,6 +252,23 @@ def compare_trees(before: Path, after: Path) -> list[str]:
         elif not filecmp.cmp(before_path, after_path, shallow=False):
             changed.append(rel_path)
     return changed
+
+
+def prepare_git_workspace(workspace: Path, timeout_seconds: int) -> list[CommandResult]:
+    commands = [
+        "git init",
+        "git config user.email sca-eval@example.com",
+        "git config user.name sca-eval",
+        "git add -A",
+        "git commit -m initial-eval-fixture",
+    ]
+    results: list[CommandResult] = []
+    for command in commands:
+        result = run_command(command, workspace, timeout_seconds)
+        results.append(result)
+        if result.returncode != 0:
+            break
+    return results
 
 
 def write_reports(results: list[CaseResult], reports_dir: Path) -> tuple[Path, Path]:
