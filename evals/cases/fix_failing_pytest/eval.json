@@ -1,0 +1,12 @@
+{
+  "name": "fix_failing_pytest",
+  "prompt": "Fix the failing pytest test in this repository. Keep the public function name unchanged.",
+  "verification_commands": [
+    "python -m pytest -q"
+  ],
+  "expected_files": [
+    "math_utils.py",
+    "test_math_utils.py"
+  ],
+  "timeout_seconds": 60
+}

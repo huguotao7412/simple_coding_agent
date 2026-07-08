@@ -22,7 +22,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["cli*", "core*", "web*"]
+include = ["cli*", "core*", "evals*", "web*"]
 
 [tool.mypy]
 strict = true
