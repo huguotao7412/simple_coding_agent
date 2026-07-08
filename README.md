@@ -206,11 +206,18 @@ You can still run tasks manually with `sca --dir tmp/eval-runs/<task_id>`. When 
 sca-eval check
 ```
 
+Compare two or more aggregate eval runs:
+
+```bash
+sca-eval compare eval_results.baseline.json eval_results.candidate.json --output eval_comparison.md
+```
+
+The comparison report shows pass rate, duration, tool calls, failed tools, token usage, and task-level regressions/improvements against the first file as baseline.
+
 ## Roadmap
 
 Near-term:
 
-- Add model/provider comparison reports on top of `eval_results.json`.
 - Add safety-focused eval cases for path escape, destructive commands, and dirty workspaces.
 - Keep Web UI experimental unless it becomes useful for trace visualization.
 

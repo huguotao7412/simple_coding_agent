@@ -48,6 +48,28 @@ class EvalRunResult:
     runtime_error: str | None = None
 
 
+@dataclass
+class EvalComparisonRun:
+    label: str
+    path: str
+    total: int
+    passed: int
+    failed: int
+    pass_rate: float
+    total_duration_ms: int
+    total_tool_calls: int
+    failed_tool_calls: int
+    total_tokens: int
+
+
+@dataclass
+class EvalComparison:
+    baseline: EvalComparisonRun
+    runs: list[EvalComparisonRun]
+    task_regressions: dict[str, list[str]] = field(default_factory=dict)
+    task_improvements: dict[str, list[str]] = field(default_factory=dict)
+
+
 def load_tasks(path: Path = TASKS_PATH) -> list[dict[str, Any]]:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -254,6 +276,91 @@ def print_run_results(results: list[EvalRunResult], results_path: Path) -> None:
             print(f"  - {failure}")
 
 
+def compare_eval_result_files(paths: list[Path]) -> EvalComparison:
+    """Compare two or more aggregate eval result JSON files."""
+    if len(paths) < 2:
+        raise ValueError("compare requires at least two eval result files")
+
+    payloads = [_load_eval_results_payload(path) for path in paths]
+    runs = [
+        _comparison_run_from_payload(path, payload)
+        for path, payload in zip(paths, payloads)
+    ]
+    _dedupe_comparison_labels(runs)
+    baseline = runs[0]
+    baseline_tasks = _task_pass_map(payloads[0])
+
+    regressions: dict[str, list[str]] = {}
+    improvements: dict[str, list[str]] = {}
+    for run, payload in zip(runs[1:], payloads[1:]):
+        current_tasks = _task_pass_map(payload)
+        for task_id, baseline_passed in baseline_tasks.items():
+            if task_id not in current_tasks:
+                continue
+            current_passed = current_tasks[task_id]
+            if baseline_passed and not current_passed:
+                regressions.setdefault(run.label, []).append(task_id)
+            elif not baseline_passed and current_passed:
+                improvements.setdefault(run.label, []).append(task_id)
+
+    return EvalComparison(
+        baseline=baseline,
+        runs=runs,
+        task_regressions=regressions,
+        task_improvements=improvements,
+    )
+
+
+def render_eval_comparison_markdown(comparison: EvalComparison) -> str:
+    """Render a deterministic Markdown comparison report."""
+    lines = [
+        "# Simple Coding Agent Eval Comparison",
+        "",
+        "| Run | Passed | Pass Rate | Duration ms | Tool Calls | Failed Tools | Tokens |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for run in comparison.runs:
+        lines.append(
+            f"| {run.label} | {run.passed}/{run.total} | {run.pass_rate:.2%} | "
+            f"{run.total_duration_ms} | {run.total_tool_calls} | "
+            f"{run.failed_tool_calls} | {run.total_tokens} |"
+        )
+
+    lines.extend(["", "## Changes vs Baseline", ""])
+    any_changes = False
+    for run in comparison.runs[1:]:
+        regressions = comparison.task_regressions.get(run.label, [])
+        improvements = comparison.task_improvements.get(run.label, [])
+        lines.append(f"### {run.label}")
+        if regressions:
+            any_changes = True
+            lines.append(f"- Regressions: {', '.join(regressions)}")
+        else:
+            lines.append("- Regressions: none")
+        if improvements:
+            any_changes = True
+            lines.append(f"- Improvements: {', '.join(improvements)}")
+        else:
+            lines.append("- Improvements: none")
+        lines.append("")
+
+    if not any_changes and len(comparison.runs) > 1:
+        lines.append("No task pass/fail changes detected.")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_eval_comparison(paths: list[Path], output_path: Path) -> Path:
+    comparison = compare_eval_result_files(paths)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        render_eval_comparison_markdown(comparison),
+        encoding="utf-8",
+    )
+    return output_path
+
+
 def _event_to_trace_record(event) -> dict[str, Any]:
     record: dict[str, Any] = {
         "type": event.type,
@@ -298,6 +405,8 @@ def _collect_changed(left: Path, right: Path, rel: Path, paths: set[str]) -> Non
         return
     if rel.as_posix().startswith(".sca/traces"):
         return
+    if rel.as_posix().startswith(".sca/artifacts"):
+        return
 
     left_exists = left.exists()
     right_exists = right.exists()
@@ -326,6 +435,61 @@ def _iter_children(path: Path) -> list[Path]:
     if not path.is_dir():
         return []
     return [child for child in path.iterdir() if child.name not in IGNORED_DIRS]
+
+
+def _load_eval_results_payload(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"missing eval results file: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if "summary" not in payload or "tasks" not in payload:
+        raise ValueError(f"invalid eval results file: {path}")
+    return payload
+
+
+def _comparison_run_from_payload(path: Path, payload: dict[str, Any]) -> EvalComparisonRun:
+    summary = payload["summary"]
+    tasks = payload.get("tasks", [])
+    label = _comparison_label(path, payload)
+    return EvalComparisonRun(
+        label=label,
+        path=str(path),
+        total=int(summary.get("total", len(tasks)) or 0),
+        passed=int(summary.get("passed", 0) or 0),
+        failed=int(summary.get("failed", 0) or 0),
+        pass_rate=float(summary.get("pass_rate", 0.0) or 0.0),
+        total_duration_ms=int(summary.get("total_duration_ms", 0) or 0),
+        total_tool_calls=int(summary.get("total_tool_calls", 0) or 0),
+        failed_tool_calls=sum(int(task.get("failed_tool_calls", 0) or 0) for task in tasks),
+        total_tokens=int(summary.get("total_tokens", 0) or 0),
+    )
+
+
+def _comparison_label(path: Path, payload: dict[str, Any]) -> str:
+    models = sorted({
+        str(task.get("model"))
+        for task in payload.get("tasks", [])
+        if task.get("model")
+    })
+    if len(models) == 1:
+        return models[0]
+    return path.stem
+
+
+def _dedupe_comparison_labels(runs: list[EvalComparisonRun]) -> None:
+    seen: dict[str, int] = {}
+    for run in runs:
+        count = seen.get(run.label, 0)
+        seen[run.label] = count + 1
+        if count:
+            run.label = f"{run.label} ({count + 1})"
+
+
+def _task_pass_map(payload: dict[str, Any]) -> dict[str, bool]:
+    return {
+        str(task["task_id"]): bool(task.get("passed"))
+        for task in payload.get("tasks", [])
+        if "task_id" in task
+    }
 
 
 def copy_fixtures(destination: Path) -> None:

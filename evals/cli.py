@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .run_evals import (
     copy_fixtures,
+    write_eval_comparison,
     evaluate_all,
     print_results,
     print_run_results,
@@ -15,6 +16,7 @@ from .run_evals import (
 
 DEFAULT_CANDIDATE_ROOT = Path("tmp") / "eval-runs"
 DEFAULT_RESULTS_PATH = Path("eval_results.json")
+DEFAULT_COMPARE_PATH = Path("eval_comparison.md")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -60,6 +62,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Reuse existing candidate workspaces instead of copying fresh fixtures first.",
     )
 
+    compare = subparsers.add_parser("compare", help="Compare two or more eval_results.json files.")
+    compare.add_argument(
+        "results",
+        nargs="+",
+        type=Path,
+        help="Eval result JSON files. The first file is the baseline.",
+    )
+    compare.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_COMPARE_PATH,
+        help=f"Markdown comparison report path. Default: {DEFAULT_COMPARE_PATH}",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "prepare":
@@ -84,6 +100,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         print_run_results(results, args.results_path)
         return 0 if all(result.passed for result in results) else 1
+
+    if args.command == "compare":
+        try:
+            output_path = write_eval_comparison(args.results, args.output)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"Error: {e}")
+            return 1
+        print(f"Wrote eval comparison to {output_path}")
+        return 0
 
     parser.error(f"unknown command: {args.command}")
     return 2

@@ -8,10 +8,12 @@ from pathlib import Path
 from evals.cli import main as eval_cli_main
 from evals.run_evals import (
     EvalRunResult,
+    compare_eval_result_files,
     copy_fixtures,
     evaluate_all,
     evaluate_task,
     load_tasks,
+    render_eval_comparison_markdown,
     run_eval_suite,
     write_eval_results,
 )
@@ -89,6 +91,26 @@ def test_eval_runner_ignores_trace_artifacts(tmp_path: Path):
     assert result.passed
 
 
+def test_eval_runner_ignores_actor_diff_artifacts(tmp_path: Path):
+    candidate_root = tmp_path / "candidates"
+    _copy_all_fixtures(candidate_root)
+    _solve_fix_failing_pytest(candidate_root / "fix_failing_pytest")
+    artifact_dir = (
+        candidate_root
+        / "fix_failing_pytest"
+        / ".sca"
+        / "artifacts"
+        / "actor-diffs"
+    )
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "task_abc.patch").write_text("diff --git a/x b/x\n", encoding="utf-8")
+
+    task = next(task for task in load_tasks() if task["id"] == "fix_failing_pytest")
+    result = evaluate_task(task, candidate_root)
+
+    assert result.passed
+
+
 def test_write_eval_results_json(tmp_path: Path):
     output_path = tmp_path / "eval_results.json"
     write_eval_results([
@@ -116,6 +138,72 @@ def test_write_eval_results_json(tmp_path: Path):
     assert payload["summary"]["total_tool_calls"] == 4
     assert payload["summary"]["total_tokens"] == 15
     assert payload["tasks"][0]["trace_path"].endswith("run_trace.jsonl")
+
+
+def test_compare_eval_results_reports_regressions_and_improvements(tmp_path: Path):
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+    _write_eval_payload(
+        baseline,
+        model="model-a",
+        tasks=[
+            {"task_id": "task_passed_then_failed", "passed": True},
+            {"task_id": "task_failed_then_passed", "passed": False},
+            {"task_id": "stable_pass", "passed": True},
+        ],
+    )
+    _write_eval_payload(
+        candidate,
+        model="model-b",
+        tasks=[
+            {"task_id": "task_passed_then_failed", "passed": False},
+            {"task_id": "task_failed_then_passed", "passed": True},
+            {"task_id": "stable_pass", "passed": True},
+        ],
+    )
+
+    comparison = compare_eval_result_files([baseline, candidate])
+    markdown = render_eval_comparison_markdown(comparison)
+
+    assert comparison.baseline.label == "model-a"
+    assert comparison.runs[1].label == "model-b"
+    assert comparison.task_regressions == {"model-b": ["task_passed_then_failed"]}
+    assert comparison.task_improvements == {"model-b": ["task_failed_then_passed"]}
+    assert "| model-b | 2/3 | 66.67% |" in markdown
+    assert "- Regressions: task_passed_then_failed" in markdown
+    assert "- Improvements: task_failed_then_passed" in markdown
+
+
+def test_compare_eval_results_deduplicates_same_model_labels(tmp_path: Path):
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    _write_eval_payload(first, model="same-model", tasks=[{"task_id": "a", "passed": True}])
+    _write_eval_payload(second, model="same-model", tasks=[{"task_id": "a", "passed": False}])
+
+    comparison = compare_eval_result_files([first, second])
+
+    assert [run.label for run in comparison.runs] == ["same-model", "same-model (2)"]
+    assert comparison.task_regressions == {"same-model (2)": ["a"]}
+
+
+def test_sca_eval_compare_command_writes_markdown(tmp_path: Path):
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    output = tmp_path / "comparison.md"
+    _write_eval_payload(first, model="alpha", tasks=[{"task_id": "a", "passed": True}])
+    _write_eval_payload(second, model="beta", tasks=[{"task_id": "a", "passed": True}])
+
+    exit_code = eval_cli_main([
+        "compare",
+        str(first),
+        str(second),
+        "--output",
+        str(output),
+    ])
+
+    assert exit_code == 0
+    assert output.is_file()
+    assert "Simple Coding Agent Eval Comparison" in output.read_text(encoding="utf-8")
 
 
 def test_run_eval_suite_writes_results_with_injected_runner(monkeypatch, tmp_path: Path):
@@ -217,6 +305,45 @@ def _write_report(task_dir: Path) -> None:
         "Files changed: listed\nTests: passed\nRisk: low\n",
         encoding="utf-8",
     )
+
+
+def _write_eval_payload(path: Path, model: str, tasks: list[dict]) -> None:
+    normalized_tasks = []
+    for i, task in enumerate(tasks):
+        passed = bool(task["passed"])
+        normalized_tasks.append({
+            "task_id": task["task_id"],
+            "title": task["task_id"],
+            "model": model,
+            "passed": passed,
+            "duration_ms": 100 + i,
+            "tool_calls": 2,
+            "failed_tool_calls": 0 if passed else 1,
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "trace_path": f"trace-{i}.jsonl",
+            "report_path": f"report-{i}.md",
+            "failures": [] if passed else ["failed"],
+            "final_output": "",
+            "runtime_error": None,
+        })
+    passed_count = sum(1 for task in normalized_tasks if task["passed"])
+    payload = {
+        "summary": {
+            "total": len(normalized_tasks),
+            "passed": passed_count,
+            "failed": len(normalized_tasks) - passed_count,
+            "pass_rate": passed_count / len(normalized_tasks),
+            "total_duration_ms": sum(task["duration_ms"] for task in normalized_tasks),
+            "total_tool_calls": sum(task["tool_calls"] for task in normalized_tasks),
+            "total_prompt_tokens": sum(task["prompt_tokens"] for task in normalized_tasks),
+            "total_completion_tokens": sum(task["completion_tokens"] for task in normalized_tasks),
+            "total_tokens": sum(task["total_tokens"] for task in normalized_tasks),
+        },
+        "tasks": normalized_tasks,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _solve_fix_failing_pytest(task_dir: Path) -> None:
