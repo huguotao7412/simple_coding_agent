@@ -16,6 +16,7 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - Full Actor patch artifacts under `.sca/artifacts/actor-diffs/`.
 - Persistent JSONL traces for eval/debug runs.
 - Local eval runner with aggregate `eval_results.json` metrics.
+- Safety eval fixtures for path escape and dirty workspace behavior.
 - Deterministic unit tests for runtime, isolation, reports, and eval behavior.
 
 This is not positioned as a fully autonomous production coding system yet. The current goal is a reliable, auditable local agent core that can be improved and measured over time.
@@ -218,7 +219,7 @@ The comparison report shows pass rate, duration, tool calls, failed tools, token
 
 Near-term:
 
-- Add safety-focused eval cases for path escape, destructive commands, and dirty workspaces.
+- Add safety-focused eval cases for destructive command attempts and merge-conflict recovery.
 - Keep Web UI experimental unless it becomes useful for trace visualization.
 
 Longer-term:

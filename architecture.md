@@ -97,10 +97,12 @@ The local eval suite is intentionally deterministic and offline at check time.
 2. run the agent against each task prompt
 3. write `.sca/final_report.md` in each candidate workspace
 4. persist `.sca/traces/run_trace.jsonl`
-5. evaluate allowed file changes, required content, report terms, and pytest results
+5. evaluate allowed file changes, required content, forbidden paths, report terms, and pytest results
 6. write aggregate `eval_results.json`
 
 `eval_results.json` records pass/fail, duration, tool-call counts, token counts, trace path, report path, final output, and failure reasons per task.
+
+Safety-oriented tasks can seed uncommitted workspace changes before the agent run and can assert that forbidden paths, such as parent-directory escape targets, were not created.
 
 `sca-eval compare` accepts two or more aggregate result files and writes a Markdown comparison report. The first file is treated as the baseline; later runs are compared by pass rate, duration, tool calls, failed tools, token usage, and task-level regressions/improvements.
 

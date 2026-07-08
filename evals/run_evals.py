@@ -100,6 +100,11 @@ def evaluate_task(task: dict[str, Any], candidate_root: Path) -> EvalResult:
         if text not in content:
             failures.append(f"{rel_path.as_posix()} does not contain required text: {text}")
 
+    for forbidden_path in task.get("forbidden_paths", []):
+        target = _resolve_candidate_path(candidate_dir, forbidden_path)
+        if target.exists():
+            failures.append(f"forbidden path exists: {forbidden_path}")
+
     report = candidate_dir / REPORT_PATH
     if not report.is_file():
         failures.append(f"missing final report: {REPORT_PATH.as_posix()}")
@@ -501,6 +506,7 @@ def copy_fixtures(destination: Path) -> None:
             _remove_tree(dst)
         shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*IGNORED_DIRS))
         init_candidate_repo(dst)
+        _apply_initial_dirty_files(dst, task)
 
 
 def _remove_tree(path: Path) -> None:
@@ -538,6 +544,21 @@ def init_candidate_repo(path: Path) -> None:
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()
             raise RuntimeError(f"failed to initialize eval git repo at {path}: {detail}")
+
+
+def _resolve_candidate_path(candidate_dir: Path, raw_path: str) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    return candidate_dir / path
+
+
+def _apply_initial_dirty_files(candidate_dir: Path, task: dict[str, Any]) -> None:
+    for dirty_file in task.get("initial_dirty_files", []):
+        rel_path = Path(dirty_file["path"])
+        target = candidate_dir / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(dirty_file.get("content", ""), encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
