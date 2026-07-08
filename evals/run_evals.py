@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import filecmp
 import json
 import os
@@ -8,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TASKS_PATH = Path(__file__).with_name("tasks.json")
 REPORT_PATH = Path(".sca") / "final_report.md"
+TRACE_PATH = Path(".sca") / "traces" / "run_trace.jsonl"
 IGNORED_DIRS = {"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".worktrees"}
 
 
@@ -24,6 +27,25 @@ class EvalResult:
     task_id: str
     passed: bool
     failures: list[str] = field(default_factory=list)
+
+
+@dataclass
+class EvalRunResult:
+    task_id: str
+    title: str
+    model: str | None
+    passed: bool
+    duration_ms: int
+    tool_calls: int
+    failed_tool_calls: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    trace_path: str
+    report_path: str
+    failures: list[str] = field(default_factory=list)
+    final_output: str = ""
+    runtime_error: str | None = None
 
 
 def load_tasks(path: Path = TASKS_PATH) -> list[dict[str, Any]]:
@@ -88,6 +110,168 @@ def print_results(results: list[EvalResult]) -> None:
             print(f"  - {failure}")
 
 
+def write_eval_results(results: list[EvalRunResult], output_path: Path) -> Path:
+    """Write aggregate eval run results to a deterministic JSON file."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    passed = sum(1 for result in results if result.passed)
+    payload = {
+        "summary": {
+            "total": len(results),
+            "passed": passed,
+            "failed": len(results) - passed,
+            "pass_rate": (passed / len(results)) if results else 0.0,
+            "total_duration_ms": sum(result.duration_ms for result in results),
+            "total_tool_calls": sum(result.tool_calls for result in results),
+            "total_prompt_tokens": sum(result.prompt_tokens for result in results),
+            "total_completion_tokens": sum(result.completion_tokens for result in results),
+            "total_tokens": sum(result.total_tokens for result in results),
+        },
+        "tasks": [
+            {
+                "task_id": result.task_id,
+                "title": result.title,
+                "model": result.model,
+                "passed": result.passed,
+                "duration_ms": result.duration_ms,
+                "tool_calls": result.tool_calls,
+                "failed_tool_calls": result.failed_tool_calls,
+                "prompt_tokens": result.prompt_tokens,
+                "completion_tokens": result.completion_tokens,
+                "total_tokens": result.total_tokens,
+                "trace_path": result.trace_path,
+                "report_path": result.report_path,
+                "failures": result.failures,
+                "final_output": result.final_output,
+                "runtime_error": result.runtime_error,
+            }
+            for result in results
+        ],
+    }
+    output_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return output_path
+
+
+async def run_eval_suite(
+    candidate_root: Path,
+    model: str | None = None,
+    results_path: Path = Path("eval_results.json"),
+    prepare: bool = True,
+    tasks: list[dict[str, Any]] | None = None,
+) -> list[EvalRunResult]:
+    """Run the agent against each eval fixture and write aggregate results."""
+    selected_tasks = tasks or load_tasks()
+    if prepare:
+        copy_fixtures(candidate_root)
+
+    results: list[EvalRunResult] = []
+    for task in selected_tasks:
+        results.append(await run_eval_task(task, candidate_root, model=model))
+
+    write_eval_results(results, results_path)
+    return results
+
+
+async def run_eval_task(
+    task: dict[str, Any],
+    candidate_root: Path,
+    model: str | None = None,
+) -> EvalRunResult:
+    """Run one eval task through the real Planner and persist its trace."""
+    from cli.report import RunReport
+    from cli.main import build_planner
+
+    task_id = task["id"]
+    candidate_dir = candidate_root / task_id
+    trace_path = candidate_dir / TRACE_PATH
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+
+    report = RunReport()
+    final_output = ""
+    runtime_error: str | None = None
+    start = time.perf_counter()
+
+    with trace_path.open("w", encoding="utf-8") as trace_file:
+        try:
+            planner = build_planner(str(candidate_dir), model=model)
+            async for event in planner.run_stream(task["prompt"]):
+                report.observe(event)
+                trace_record = _event_to_trace_record(event)
+                trace_record["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
+                trace_file.write(json.dumps(trace_record, ensure_ascii=False) + "\n")
+                if event.type == "done":
+                    final_output = event.content
+                elif event.type == "error" and not final_output:
+                    final_output = event.content
+        except Exception as e:
+            runtime_error = str(e)
+            trace_file.write(json.dumps({
+                "type": "runner_error",
+                "content": runtime_error,
+                "elapsed_ms": int((time.perf_counter() - start) * 1000),
+            }, ensure_ascii=False) + "\n")
+
+    duration_ms = int((time.perf_counter() - start) * 1000)
+    report_path = report.write_final_report(candidate_dir)
+    eval_result = evaluate_task(task, candidate_root)
+    failures = list(eval_result.failures)
+    if runtime_error:
+        failures.insert(0, f"runtime error: {runtime_error}")
+
+    return EvalRunResult(
+        task_id=task_id,
+        title=task.get("title", task_id),
+        model=model,
+        passed=not failures,
+        duration_ms=duration_ms,
+        tool_calls=len(report.tool_calls),
+        failed_tool_calls=report.failed_tool_count,
+        prompt_tokens=report.prompt_tokens,
+        completion_tokens=report.completion_tokens,
+        total_tokens=report.total_tokens,
+        trace_path=str(trace_path),
+        report_path=str(report_path),
+        failures=failures,
+        final_output=final_output or report.final_output,
+        runtime_error=runtime_error,
+    )
+
+
+def print_run_results(results: list[EvalRunResult], results_path: Path) -> None:
+    passed = sum(1 for result in results if result.passed)
+    total = len(results)
+    print(f"Eval run results: {passed}/{total} passed")
+    print(f"Wrote aggregate results to {results_path}")
+    for result in results:
+        status = "PASS" if result.passed else "FAIL"
+        print(
+            f"[{status}] {result.task_id} "
+            f"({result.duration_ms} ms, tools={result.tool_calls}, tokens={result.total_tokens})"
+        )
+        for failure in result.failures:
+            print(f"  - {failure}")
+
+
+def _event_to_trace_record(event) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "type": event.type,
+        "content": event.content,
+        "token": event.token,
+        "actor_id": event.actor_id,
+        "tool_name": event.tool_name,
+        "tool_args": event.tool_args,
+    }
+    if event.tool_result is not None:
+        record["tool_result"] = {
+            "success": event.tool_result.success,
+            "content": event.tool_result.content,
+            "error": event.tool_result.error,
+        }
+    return record
+
+
 def _run_test_command(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     if not command:
         return subprocess.CompletedProcess(command, 0, "", "")
@@ -111,6 +295,8 @@ def _changed_files(left: Path, right: Path) -> set[str]:
 
 def _collect_changed(left: Path, right: Path, rel: Path, paths: set[str]) -> None:
     if rel.name in IGNORED_DIRS:
+        return
+    if rel.as_posix().startswith(".sca/traces"):
         return
 
     left_exists = left.exists()
@@ -204,12 +390,36 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Copy initial fixtures to this directory and exit.",
     )
+    parser.add_argument(
+        "--run-agent",
+        action="store_true",
+        help="Run the agent against each fixture before checking.",
+    )
+    parser.add_argument("--model", default=None, help="Model name to pass to the agent.")
+    parser.add_argument(
+        "--results-path",
+        type=Path,
+        default=Path("eval_results.json"),
+        help="Path for aggregate eval run JSON when --run-agent is used.",
+    )
     args = parser.parse_args(argv)
 
     if args.copy_fixtures_to is not None:
         copy_fixtures(args.copy_fixtures_to)
         print(f"Copied fixtures to {args.copy_fixtures_to}")
         return 0
+
+    if args.run_agent:
+        results = asyncio.run(
+            run_eval_suite(
+                candidate_root=args.candidate_root,
+                model=args.model,
+                results_path=args.results_path,
+                prepare=True,
+            )
+        )
+        print_run_results(results, args.results_path)
+        return 0 if all(result.passed for result in results) else 1
 
     results = evaluate_all(args.candidate_root)
     print_results(results)

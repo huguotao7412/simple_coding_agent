@@ -1,21 +1,24 @@
 # Simple Coding Agent
 
-Simple Coding Agent 是一个 **CLI 优先的本地 Coding Agent Runtime**，重点是透明工具调用、隔离执行和可验证代码修改。
+Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重点是透明工具调用、隔离执行、可验证代码修改和可衡量 eval。
 
-这个项目面向习惯使用终端、Git 仓库和测试套件的开发者。Web UI 仍然保留，但目前定位为实验性入口，不是核心产品面。
+项目面向习惯使用终端、Git 仓库和测试套件的开发者。Web UI 仍然保留，但目前是实验入口，不是核心产品面。
 
 ## 项目展示重点
 
-- Planner 和 Actor 共享一套 ReAct Runtime，而不是复制两套循环。
-- 透明事件流：模型输出、工具调用、工具结果、错误、token 统计和任务状态更新。
-- 集中化 tool-call JSON 解析，并能从格式错误中恢复。
-- 最大步数限制、重复动作熔断等运行时安全控制。
-- Planner/Actor 编排和角色化工具权限。
-- MCP 文件与 shell 工具集成。
+- Planner 和 Actor 共享同一套 ReAct runtime。
+- 透明事件流：模型输出、工具调用、工具结果、错误、token 使用和任务状态更新。
+- 集中式 tool-call JSON 解析，并能把格式错误作为可恢复反馈。
+- 运行时安全控制：最大步数、重复动作熔断、上下文压缩。
+- Planner/Actor 编排，以及基于角色的工具 allowlist。
+- MCP 文件和 shell 工具集成，并绑定到 Actor worktree。
 - 使用 git worktree 隔离委派给 Actor 的子任务。
-- 用 deterministic tests 验证 runtime 行为，并保留 MCP 集成 smoke tests。
+- 依赖任务的 diff 会作为下游 Actor 的 baseline，Verifier 能验证真实 Coder 改动。
+- eval/debug 运行会持久化 JSONL trace。
+- 本地 eval runner 会输出聚合的 `eval_results.json` 指标。
+- 单元测试覆盖 runtime、隔离、报告和 eval 行为。
 
-当前目标是打磨一个可靠、可审计、可持续评测的本地 agent 核心，而不是宣称它已经是全自动生产级软件工程系统。
+当前目标不是宣称它已经是完全自治的生产级 coding system，而是打磨一个可靠、可审计、可持续评测的本地 agent 核心。
 
 ## 当前状态
 
@@ -25,7 +28,7 @@ Simple Coding Agent 是一个 **CLI 优先的本地 Coding Agent Runtime**，重
 
 实验入口：
 
-- `sca-web`：Streamlit 可视化面板。它适合未来做 trace 可视化，但不是当前核心里程碑。
+- `sca-web`：Streamlit 可视化面板，适合未来做 trace 展示。
 
 ## 架构
 
@@ -38,15 +41,17 @@ Simple Coding Agent 是一个 **CLI 优先的本地 Coding Agent Runtime**，重
   -> tool executor
   -> context observation
   -> transparent event stream
-  -> CLI renderer
+  -> CLI renderer / eval trace writer
 ```
 
-代码仍然保留 Planner/Actor 分层：
+代码保持 Planner/Actor 分层：
 
-- `Planner` 负责拆解任务，并可以委派子任务。
-- `ActorAgent` 使用角色化权限执行隔离子任务。
-- `AgentRuntime` 负责共享执行循环：LLM 调用、工具解析、工具执行、上下文压缩、步数限制、重复动作检测和事件发射。
-- `GlobalState` 记录任务状态和 Actor 更新。
+- `Planner` 负责拆解任务、委派子任务、接收 Actor summary/diff，并合成最终回复。
+- `ActorAgent` 在隔离 worktree 中执行单个子任务。
+- `AgentRuntime` 负责共享执行循环：LLM 调用、工具解析、工具执行、上下文压缩、步数限制、重复动作检测和事件输出。
+- `GlobalState` 记录任务树、任务状态和 Actor 更新。
+
+更完整的架构说明见 [architecture.md](architecture.md) 和 [architecture_CN.md](architecture_CN.md)。
 
 ## 项目结构
 
@@ -55,10 +60,10 @@ core/
   runtime.py        共享 ReAct runtime 和 AgentEvent 协议
   planner.py        Planner 对 AgentRuntime 的封装
   agent.py          ActorAgent 对 AgentRuntime 的封装
-  context.py        对话上下文和上下文压缩
+  context.py        对话上下文和压缩
   llm.py            OpenAI-compatible 异步流式客户端
   state.py          任务账本和状态快照
-  mcp/              MCP 工具 provider
+  mcp/              MCP tool provider
   tools/            本地 Planner/Actor 工具
 
 cli/
@@ -66,18 +71,24 @@ cli/
   bridge.py         runtime event -> terminal UI bridge
   ui.py             Rich 终端渲染
 
+evals/
+  cli.py            sca-eval 命令
+  run_evals.py      fixture 复制、agent 运行、结果检查和 JSON 汇总
+
 web/
   experimental Streamlit UI
 
 tests/
-  test_runtime.py          deterministic runtime tests
-  test_role_config.py      角色和工具权限测试
-  test_mcp_integration.py  MCP smoke test
+  test_runtime.py          runtime 行为测试
+  test_cli_report.py       final report 审计测试
+  test_delegate_baseline.py 依赖 diff baseline 测试
+  test_evals.py            eval runner 测试
+  test_mcp_provider.py     MCP provider 隔离测试
 ```
 
 ## 安装
 
-需要 Python 3.12+。如果要使用 MCP Actor 工具，还需要 Node.js 18+。
+需要 Python 3.12+。如果使用 MCP Actor 工具，还需要 Node.js 18+。
 
 ```powershell
 python -m venv .venv
@@ -86,7 +97,7 @@ pip install -e ".[dev]"
 npm install
 ```
 
-实验性 Web UI：
+实验 Web UI：
 
 ```powershell
 pip install -e ".[web]"
@@ -120,10 +131,42 @@ sca
 sca --dir C:\path\to\project
 ```
 
-实验性 Web UI：
+实验 Web UI：
 
 ```powershell
 sca-web
+```
+
+## Eval
+
+准备本地 eval 工作区：
+
+```powershell
+sca-eval prepare
+```
+
+运行完整可衡量 eval：
+
+```powershell
+sca-eval run --model deepseek-v4-pro
+```
+
+默认输出：
+
+- 根目录 `eval_results.json`
+- 每个任务工作区的 `.sca/final_report.md`
+- 每个任务工作区的 `.sca/traces/run_trace.jsonl`
+
+也可以手动运行某个任务：
+
+```powershell
+sca --dir tmp/eval-runs/<task_id>
+```
+
+然后检查结果：
+
+```powershell
+sca-eval check
 ```
 
 ## CLI 事件透明性
@@ -138,7 +181,7 @@ CLI 会渲染 runtime 事件流：
 - token 使用统计
 - 错误和最终输出
 
-目标是让每次运行都可检查，而不是把 agent 当成黑盒。
+eval runner 会把同一条事件流写成 JSONL trace，方便调试、复盘和展示。
 
 ## 安全模型
 
@@ -148,7 +191,8 @@ CLI 会渲染 runtime 事件流：
 - 重复的相同工具调用会触发熔断。
 - 最大步数限制防止无限循环。
 - 本地工具和 MCP provider 都会校验文件访问边界。
-- 委派给 Actor 的任务使用独立 git worktree。
+- Actor 任务使用独立 git worktree。
+- 下游 Actor 会接收上游 diff baseline，避免 Verifier 验证空代码。
 - Planner 和 Actor 可以使用不同工具 allowlist。
 
 这些机制能降低风险，但不是完整沙箱。请只在你愿意让 agent 修改的仓库和环境中运行。
@@ -173,38 +217,19 @@ CLI smoke check：
 .\.venv\Scripts\python.exe -m cli.main --help
 ```
 
-准备本地 eval 任务工作区：
-
-```powershell
-sca-eval prepare
-```
-
-然后对每个任务运行：
-
-```powershell
-sca --dir tmp/eval-runs/<task_id>
-```
-
-完成后检查结果：
-
-```powershell
-sca-eval check
-```
-
 ## 路线图
 
 近期：
 
-- 增加结构化 final report：修改文件、使用工具、验证命令、残余风险。
-- 改进测试命令和 diff summary 周围的验证工作流。
+- 基于 `eval_results.json` 增加模型/provider 对比报告。
+- 增加 path escape、破坏性命令、dirty workspace 等安全 eval。
 - Web UI 继续保持实验状态，除非它能真正服务 trace 可视化。
 
 长期：
 
 - 更好的 Actor diff 合并和冲突处理流程。
 - 更稳健的模型/provider 路由。
-- 持久化 run traces，用于调试和 eval 对比。
-- 对破坏性或高风险操作增加人工审批。
+- 对破坏性或高风险操作增加人工审批门。
 
 ## License
 

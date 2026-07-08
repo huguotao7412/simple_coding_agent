@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from pathlib import Path
 
-from .run_evals import copy_fixtures, evaluate_all, print_results
+from .run_evals import (
+    copy_fixtures,
+    evaluate_all,
+    print_results,
+    print_run_results,
+    run_eval_suite,
+)
 
 
 DEFAULT_CANDIDATE_ROOT = Path("tmp") / "eval-runs"
+DEFAULT_RESULTS_PATH = Path("eval_results.json")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -32,6 +40,26 @@ def main(argv: list[str] | None = None) -> int:
         help=f"Candidate directory. Default: {DEFAULT_CANDIDATE_ROOT}",
     )
 
+    run = subparsers.add_parser("run", help="Run the agent against all eval fixtures and check results.")
+    run.add_argument(
+        "--candidate-root",
+        type=Path,
+        default=DEFAULT_CANDIDATE_ROOT,
+        help=f"Candidate directory. Default: {DEFAULT_CANDIDATE_ROOT}",
+    )
+    run.add_argument("--model", default=None, help="Model name (overrides .env).")
+    run.add_argument(
+        "--results-path",
+        type=Path,
+        default=DEFAULT_RESULTS_PATH,
+        help=f"Aggregate JSON output path. Default: {DEFAULT_RESULTS_PATH}",
+    )
+    run.add_argument(
+        "--no-prepare",
+        action="store_true",
+        help="Reuse existing candidate workspaces instead of copying fresh fixtures first.",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "prepare":
@@ -43,6 +71,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "check":
         results = evaluate_all(args.candidate_root)
         print_results(results)
+        return 0 if all(result.passed for result in results) else 1
+
+    if args.command == "run":
+        results = asyncio.run(
+            run_eval_suite(
+                candidate_root=args.candidate_root,
+                model=args.model,
+                results_path=args.results_path,
+                prepare=not args.no_prepare,
+            )
+        )
+        print_run_results(results, args.results_path)
         return 0 if all(result.passed for result in results) else 1
 
     parser.error(f"unknown command: {args.command}")

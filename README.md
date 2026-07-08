@@ -13,7 +13,9 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - Planner/Actor orchestration with role-specific tool access.
 - MCP-backed file and shell tools for isolated Actor execution.
 - Git worktree isolation for delegated Actor tasks.
-- Deterministic unit tests for runtime behavior, plus MCP integration smoke tests.
+- Persistent JSONL traces for eval/debug runs.
+- Local eval runner with aggregate `eval_results.json` metrics.
+- Deterministic unit tests for runtime, isolation, reports, and eval behavior.
 
 This is not positioned as a fully autonomous production coding system yet. The current goal is a reliable, auditable local agent core that can be improved and measured over time.
 
@@ -76,6 +78,8 @@ tests/
   test_evals.py            local eval runner tests
   test_mcp_provider.py     MCP provider isolation tests
 ```
+
+See [architecture.md](architecture.md) and [architecture_CN.md](architecture_CN.md) for the Planner/Actor lifecycle, worktree isolation, MCP boundary, and eval design.
 
 ## Installation
 
@@ -180,7 +184,19 @@ Prepare local eval task workspaces:
 sca-eval prepare
 ```
 
-Then run `sca --dir tmp/eval-runs/<task_id>` for each task. When finished, check the results:
+Run the full measurable eval loop against every fixture:
+
+```bash
+sca-eval run --model deepseek-v4-pro
+```
+
+This writes:
+
+- `eval_results.json` at the repository root by default
+- `.sca/final_report.md` inside each candidate task workspace
+- `.sca/traces/run_trace.jsonl` inside each candidate task workspace
+
+You can still run tasks manually with `sca --dir tmp/eval-runs/<task_id>`. When finished, check the results:
 
 ```bash
 sca-eval check
@@ -190,13 +206,12 @@ sca-eval check
 
 Near-term:
 
-- Automate `sca-eval run` so fixtures can execute the agent and collect pass-rate metrics.
-- Persist run traces for debugging and eval comparison.
+- Add model/provider comparison reports on top of `eval_results.json`.
+- Add safety-focused eval cases for path escape, destructive commands, and dirty workspaces.
 - Keep Web UI experimental unless it becomes useful for trace visualization.
 
 Longer-term:
 
 - Better merge/conflict workflows for Actor diffs.
 - More robust model/provider routing.
-- Persistent run traces for debugging and eval comparison.
 - Human approval gates for destructive or high-risk operations.

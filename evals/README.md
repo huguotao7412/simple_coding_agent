@@ -29,7 +29,19 @@ Copy initial fixtures into a working directory:
 sca-eval prepare
 ```
 
-Run an agent manually against each copied task directory. Then evaluate:
+Run the full agent eval loop:
+
+```bash
+sca-eval run --model deepseek-v4-pro
+```
+
+This writes:
+
+- `eval_results.json` at the repository root by default
+- `.sca/final_report.md` in each task workspace
+- `.sca/traces/run_trace.jsonl` in each task workspace
+
+You can also run an agent manually against each copied task directory. Then evaluate:
 
 ```bash
 sca-eval check

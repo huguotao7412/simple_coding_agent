@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import subprocess
 from pathlib import Path
 
 from evals.cli import main as eval_cli_main
-from evals.run_evals import copy_fixtures, evaluate_all, evaluate_task, load_tasks
+from evals.run_evals import (
+    EvalRunResult,
+    copy_fixtures,
+    evaluate_all,
+    evaluate_task,
+    load_tasks,
+    run_eval_suite,
+    write_eval_results,
+)
 
 
 def test_eval_suite_has_five_tasks():
@@ -63,6 +73,129 @@ def test_sca_eval_prepare_command_copies_fixtures(tmp_path: Path):
     )
     assert status.returncode == 0
     assert status.stdout == ""
+
+
+def test_eval_runner_ignores_trace_artifacts(tmp_path: Path):
+    candidate_root = tmp_path / "candidates"
+    _copy_all_fixtures(candidate_root)
+    _solve_fix_failing_pytest(candidate_root / "fix_failing_pytest")
+    trace_dir = candidate_root / "fix_failing_pytest" / ".sca" / "traces"
+    trace_dir.mkdir(parents=True)
+    (trace_dir / "run_trace.jsonl").write_text('{"type":"done"}\n', encoding="utf-8")
+
+    task = next(task for task in load_tasks() if task["id"] == "fix_failing_pytest")
+    result = evaluate_task(task, candidate_root)
+
+    assert result.passed
+
+
+def test_write_eval_results_json(tmp_path: Path):
+    output_path = tmp_path / "eval_results.json"
+    write_eval_results([
+        EvalRunResult(
+            task_id="task_a",
+            title="Task A",
+            model="demo-model",
+            passed=True,
+            duration_ms=123,
+            tool_calls=4,
+            failed_tool_calls=1,
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            trace_path="tmp/eval-runs/task_a/.sca/traces/run_trace.jsonl",
+            report_path="tmp/eval-runs/task_a/.sca/final_report.md",
+            failures=[],
+            final_output="done",
+        )
+    ], output_path)
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert payload["summary"]["passed"] == 1
+    assert payload["summary"]["total_tool_calls"] == 4
+    assert payload["summary"]["total_tokens"] == 15
+    assert payload["tasks"][0]["trace_path"].endswith("run_trace.jsonl")
+
+
+def test_run_eval_suite_writes_results_with_injected_runner(monkeypatch, tmp_path: Path):
+    async def fake_run_eval_task(task, candidate_root, model=None):
+        return EvalRunResult(
+            task_id=task["id"],
+            title=task["title"],
+            model=model,
+            passed=True,
+            duration_ms=7,
+            tool_calls=2,
+            failed_tool_calls=0,
+            prompt_tokens=3,
+            completion_tokens=4,
+            total_tokens=7,
+            trace_path=str(candidate_root / task["id"] / ".sca" / "traces" / "run_trace.jsonl"),
+            report_path=str(candidate_root / task["id"] / ".sca" / "final_report.md"),
+        )
+
+    monkeypatch.setattr("evals.run_evals.run_eval_task", fake_run_eval_task)
+    results_path = tmp_path / "eval_results.json"
+    tasks = [{
+        "id": "demo_task",
+        "title": "Demo Task",
+        "prompt": "Do the task",
+        "fixture": "fixtures/fix_failing_pytest",
+    }]
+
+    results = asyncio.run(
+        run_eval_suite(
+            candidate_root=tmp_path / "runs",
+            model="demo-model",
+            results_path=results_path,
+            prepare=False,
+            tasks=tasks,
+        )
+    )
+
+    payload = json.loads(results_path.read_text(encoding="utf-8"))
+    assert results[0].model == "demo-model"
+    assert payload["tasks"][0]["task_id"] == "demo_task"
+
+
+def test_sca_eval_run_command_uses_runner(monkeypatch, tmp_path: Path):
+    async def fake_run_eval_suite(candidate_root, model=None, results_path=None, prepare=True):
+        assert candidate_root == tmp_path / "runs"
+        assert model == "demo-model"
+        assert results_path == tmp_path / "eval_results.json"
+        assert prepare is False
+        return [
+            EvalRunResult(
+                task_id="demo_task",
+                title="Demo Task",
+                model=model,
+                passed=True,
+                duration_ms=1,
+                tool_calls=0,
+                failed_tool_calls=0,
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+                trace_path="trace.jsonl",
+                report_path="final_report.md",
+            )
+        ]
+
+    monkeypatch.setattr("evals.cli.run_eval_suite", fake_run_eval_suite)
+
+    exit_code = eval_cli_main([
+        "run",
+        "--candidate-root",
+        str(tmp_path / "runs"),
+        "--model",
+        "demo-model",
+        "--results-path",
+        str(tmp_path / "eval_results.json"),
+        "--no-prepare",
+    ])
+
+    assert exit_code == 0
 
 
 def _copy_all_fixtures(candidate_root: Path) -> None:
