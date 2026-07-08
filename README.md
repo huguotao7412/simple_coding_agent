@@ -71,8 +71,10 @@ web/
 
 tests/
   test_runtime.py          deterministic runtime tests
-  test_role_config.py      role and tool access tests
-  test_mcp_integration.py  MCP smoke test
+  test_cli_report.py       final report audit tests
+  test_delegate_baseline.py dependency diff baseline tests
+  test_evals.py            local eval runner tests
+  test_mcp_provider.py     MCP provider isolation tests
 ```
 
 ## Installation
@@ -149,6 +151,7 @@ The current safety model is pragmatic rather than magical:
 - max-step limits prevent unbounded loops
 - file operations validate workspace boundaries in local tools and MCP providers
 - delegated Actor tasks use isolated git worktrees
+- dependent Actor tasks receive upstream diffs as a committed worktree baseline
 - Planner and Actor roles can receive different tool allowlists
 
 ## Development
@@ -187,8 +190,8 @@ sca-eval check
 
 Near-term:
 
-- Add a structured final report: files touched, tools used, verification run, residual risks.
-- Improve verification workflow around test commands and diff summaries.
+- Automate `sca-eval run` so fixtures can execute the agent and collect pass-rate metrics.
+- Persist run traces for debugging and eval comparison.
 - Keep Web UI experimental unless it becomes useful for trace visualization.
 
 Longer-term:

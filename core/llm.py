@@ -33,22 +33,17 @@ class LLMClient:
         self._tokenizer = ds_token
 
     def count_tokens(self, text: str) -> int:
-        """Count tokens in a single string using DeepSeek's tokenizer.
-        Falls back to character heuristic if tokenizer unavailable.
-        """
+        """Count tokens in a single string using the configured tokenizer."""
         if self._tokenizer is not None:
             return len(self._tokenizer.encode(text))
-        # Fallback heuristic
         return max(1, len(text.encode("utf-8", errors="ignore")) // 3)
 
     def count_messages_tokens(self, messages: list[dict]) -> int:
-        """Count tokens across a full messages array.
-        Includes per-message format overhead (~4 tokens per message).
-        """
+        """Count tokens across a full messages array with small format overhead."""
         total = 0
         for msg in messages:
-            total += 4  # role + formatting overhead
-            for key, value in msg.items():
+            total += 4
+            for value in msg.values():
                 if isinstance(value, str):
                     total += self.count_tokens(value)
                 elif isinstance(value, list):
@@ -69,18 +64,7 @@ class LLMClient:
         tools: list[dict] | None = None,
         on_token: Callable[[str], None] | None = None,
     ) -> dict:
-        """Send a chat completion request. Returns the full response message dict.
-
-        When streaming, on_token is called for each content delta.
-        The returned dict always has the non-streaming format:
-        {"role": "assistant", "content": "...", "tool_calls": [...]}
-
-        Retry strategy:
-        - 429 (Rate Limit): read Retry-After header, wait, retry up to 5 times
-        - 5xx (Server Error): exponential backoff 1s/2s/4s/8s, retry up to 4 times
-        - Network error: exponential backoff 1s/2s/4s, retry up to 3 times
-        - 4xx (except 429): no retry, raise immediately
-        """
+        """Send a streaming chat completion request and return one message dict."""
         body: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -99,14 +83,13 @@ class LLMClient:
             for attempt in range(max(max_retries_network, max_retries_server, max_retries_rate)):
                 try:
                     async with client.stream(
-                            "POST",
-                            f"{self.base_url}/chat/completions",
-                            headers=self._headers(),
-                            json=body,
+                        "POST",
+                        f"{self.base_url}/chat/completions",
+                        headers=self._headers(),
+                        json=body,
                     ) as response:
                         if response.status_code == 200:
                             result = await self._parse_stream(response, on_token)
-                            # Attach estimated token usage
                             result["_usage"] = {
                                 "prompt_tokens": self.count_messages_tokens(messages),
                                 "completion_tokens": self.count_tokens(result.get("content") or ""),
@@ -116,7 +99,6 @@ class LLMClient:
                         text = await response.aread()
                         error_body = text.decode()[:500]
 
-                        # 429 Rate Limit — wait for Retry-After header
                         if response.status_code == 429:
                             if attempt >= max_retries_rate - 1:
                                 raise LLMAPIError(response.status_code, error_body)
@@ -128,26 +110,29 @@ class LLMClient:
                             await asyncio.sleep(wait)
                             continue
 
-                        # 5xx Server Error — exponential backoff
                         if response.status_code >= 500:
                             if attempt >= max_retries_server - 1:
                                 raise LLMAPIError(response.status_code, error_body)
                             await asyncio.sleep(2 ** attempt)
                             continue
 
-                        # 4xx (except 429) — no retry
                         raise LLMAPIError(response.status_code, error_body)
 
                 except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError) as e:
                     if attempt >= max_retries_network - 1:
-                        error_detail = f"{type(e).__name__}: {str(e) or 'Connection dropped or timed out'}"
+                        error_detail = (
+                            f"{type(e).__name__}: "
+                            f"{str(e) or 'Connection dropped or timed out'}"
+                        )
                         raise LLMAPIError(0, error_detail) from e
                     await asyncio.sleep(2 ** attempt)
 
+        raise LLMAPIError(0, "LLM request exhausted retry loop without a response")
+
     async def _parse_stream(
-            self,
-            response: httpx.Response,
-            on_token: Callable[[str], None] | None,
+        self,
+        response: httpx.Response,
+        on_token: Callable[[str], None] | None,
     ) -> dict:
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -157,7 +142,6 @@ class LLMClient:
         reasoning_started = False
         content_started = False
 
-        import httpx  # 确保能捕获 httpx 异常
         try:
             async for line in response.aiter_lines():
                 if not line.startswith("data: "):
@@ -169,7 +153,10 @@ class LLMClient:
                 try:
                     chunk = json.loads(data)
                 except json.JSONDecodeError:
-                    logging.getLogger(__name__).debug("Failed to parse SSE data line: %s", data[:200])
+                    logging.getLogger(__name__).debug(
+                        "Failed to parse SSE data line: %s",
+                        data[:200],
+                    )
                     continue
 
                 choices = chunk.get("choices")
@@ -179,17 +166,15 @@ class LLMClient:
                 choice = choices[0] if isinstance(choices, list) else choices
                 delta = choice.get("delta", {})
 
-                # Reasoning content delta (DeepSeek thinking mode)
                 if "reasoning_content" in delta and delta["reasoning_content"]:
                     token = delta["reasoning_content"]
                     reasoning_parts.append(token)
                     if on_token:
                         if not reasoning_started:
-                            on_token("> 🧠 **Thinking...**\n> ")
+                            on_token("> Thinking...\n> ")
                             reasoning_started = True
                         on_token(token.replace("\n", "\n> "))
 
-                # Content delta
                 if "content" in delta and delta["content"]:
                     token = delta["content"]
                     content_parts.append(token)
@@ -199,31 +184,30 @@ class LLMClient:
                         content_started = True
                         on_token(token)
 
-                # Tool call delta
                 if "tool_calls" in delta:
-                    for tc in delta["tool_calls"]:
-                        idx = tc.get("index", 0)
+                    for tool_call in delta["tool_calls"]:
+                        idx = tool_call.get("index", 0)
                         if idx not in tool_call_buf:
-                            tool_call_buf[idx] = {"id": "", "function": {"name": "", "arguments": ""}}
-                        if "id" in tc and tc["id"]:
-                            tool_call_buf[idx]["id"] = tc["id"]
-                        if "function" in tc:
-                            if "name" in tc["function"] and tc["function"]["name"]:
-                                tool_call_buf[idx]["function"]["name"] = tc["function"]["name"]
-                            if "arguments" in tc["function"]:
-                                tool_call_buf[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                            tool_call_buf[idx] = {
+                                "id": "",
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        if "id" in tool_call and tool_call["id"]:
+                            tool_call_buf[idx]["id"] = tool_call["id"]
+                        if "function" in tool_call:
+                            function = tool_call["function"]
+                            if function.get("name"):
+                                tool_call_buf[idx]["function"]["name"] = function["name"]
+                            if "arguments" in function:
+                                tool_call_buf[idx]["function"]["arguments"] += function["arguments"]
         except httpx.HTTPError as e:
-                                # 极简防御：如果服务端异常掐断了流
-             if not content_parts and not tool_call_buf:
-                                    # 如果什么数据都没拿到就断开了（比如彻底超时），必须抛出异常让 UI 知道
-                     raise LLMAPIError(0, f"Stream connection dropped or timed out: {e}")
-             pass
+            if not content_parts and not tool_call_buf:
+                raise LLMAPIError(0, f"Stream connection dropped or timed out: {e}") from e
 
-        # Build tool_calls list from buffer
         for idx in sorted(tool_call_buf.keys()):
-            tc = tool_call_buf[idx]
-            tc["type"] = "function"
-            tool_calls.append(tc)
+            tool_call = tool_call_buf[idx]
+            tool_call["type"] = "function"
+            tool_calls.append(tool_call)
 
         result: dict = {
             "role": "assistant",

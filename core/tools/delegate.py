@@ -4,6 +4,8 @@ import asyncio
 import logging
 import os
 import shutil
+import subprocess
+import tempfile
 import time
 
 from .base import BaseTool, ToolResult
@@ -14,6 +16,80 @@ from ..role_config import ActorRole, get_role_config
 MAX_CONCURRENT_ACTORS = int(os.getenv("SCA_MAX_ACTORS", "4"))
 
 logger = logging.getLogger(__name__)
+
+
+def _run_git(*args: str, cwd: str, timeout: int = 30) -> tuple[int, str, str]:
+    result = subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=cwd,
+        timeout=timeout,
+    )
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+
+def _apply_dependency_diffs_to_worktree(
+    worktree_path: str,
+    dependency_ids: list[str],
+    state: GlobalState,
+) -> list[str]:
+    """Apply completed dependency diffs as the baseline for this Actor worktree."""
+    applied: list[str] = []
+    for dependency_id in dependency_ids:
+        dependency = state.task_tree.get(dependency_id)
+        if dependency is None or not dependency.diff:
+            continue
+
+        patch_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".patch",
+                delete=False,
+                encoding="utf-8",
+                newline="",
+            ) as patch_file:
+                patch_file.write(dependency.diff)
+                patch_path = patch_file.name
+
+            rc, _, stderr = _run_git("apply", "--check", patch_path, cwd=worktree_path)
+            if rc != 0:
+                raise RuntimeError(
+                    f"dependency {dependency_id} patch does not apply: {stderr}"
+                )
+
+            rc, _, stderr = _run_git("apply", patch_path, cwd=worktree_path)
+            if rc != 0:
+                raise RuntimeError(f"dependency {dependency_id} apply failed: {stderr}")
+
+            applied.append(dependency_id)
+        finally:
+            if patch_path:
+                try:
+                    os.unlink(patch_path)
+                except OSError:
+                    pass
+
+    if applied:
+        rc, _, stderr = _run_git("add", "-A", cwd=worktree_path)
+        if rc != 0:
+            raise RuntimeError(f"failed to stage dependency baseline: {stderr}")
+
+        rc, _, stderr = _run_git(
+            "commit",
+            "-q",
+            "-m",
+            "Apply dependency diffs for actor baseline",
+            cwd=worktree_path,
+        )
+        if rc != 0:
+            raise RuntimeError(f"failed to commit dependency baseline: {stderr}")
+
+    return applied
+
 
 class DelegateTool(BaseTool):
     name = "delegate"
@@ -75,7 +151,7 @@ class DelegateTool(BaseTool):
         from ..context import ContextManager
         state = GlobalState.get()
 
-        # 动态提取最新的 workspace_dir，回退兜底为初始缓存
+        # Resolve the latest workspace_dir, falling back to the constructor value.
         current_workspace = kwargs.get("workspace_dir", self._workspace_dir)
 
         # Clean up any orphaned worktrees from previous crashes
@@ -113,6 +189,8 @@ class DelegateTool(BaseTool):
 
             context_files = subtask.get("context_files", [])
             context_summaries = subtask.get("context_summaries", [])
+            task_node = state.task_tree.get(tid)
+            dependencies = list(task_node.dependencies) if task_node else []
 
             async with semaphore:
                 # --- 1. Read context from MAIN workspace before worktree creation ---
@@ -139,14 +217,25 @@ class DelegateTool(BaseTool):
                 start_time = time.monotonic()
                 try:
                     wt_path = setup_worktree(current_workspace, tid)
+                    applied_deps = _apply_dependency_diffs_to_worktree(
+                        wt_path,
+                        dependencies,
+                        state,
+                    )
                     logger.info("actor_start task_id=%s worktree=%s", tid, wt_path)
+                    if applied_deps:
+                        logger.info(
+                            "actor_baseline task_id=%s dependencies=%s",
+                            tid,
+                            ",".join(applied_deps),
+                        )
                 except Exception as e:
                     await state.update_task(tid, status="failed")
-                    await state.add_summary(tid, f"ERROR: worktree setup failed: {e}")
+                    await state.add_summary(tid, f"ERROR: worktree setup/baseline failed: {e}")
                     return {
                         "task_id": tid,
                         "status": "failed",
-                        "error": f"worktree setup: {str(e)}",
+                        "error": f"worktree setup/baseline: {str(e)}",
                     }
 
                 # --- 3. Resolve role configuration ---
@@ -196,8 +285,8 @@ class DelegateTool(BaseTool):
                     actor = ActorAgent(
                         llm_client=self._llm,
                         context_manager=actor_ctx,
-                        tools=None,      # 不使用本地工具
-                        tool_provider=tool_provider,     # MCP 模式
+                        tools=None,
+                        tool_provider=tool_provider,
                         workspace_dir=wt_path,
                         actor_id=tid,
                         task_context=description,
@@ -205,7 +294,9 @@ class DelegateTool(BaseTool):
                     )
 
                     # --- 6. Execute Actor ---
-                    trigger_prompt = "请基于上述提供的上下文和目标，开始执行你负责的子任务。"
+                    trigger_prompt = (
+                        "Use the provided context and objective to execute your assigned subtask."
+                    )
                     summary = await actor.run(trigger_prompt)
 
                     # Extract diff from worktree changes
