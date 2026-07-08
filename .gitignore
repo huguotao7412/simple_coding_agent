@@ -14,3 +14,4 @@ package-lock.json
 /.agents/
 evals/reports/
 tmp/
+state.db

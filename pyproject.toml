@@ -44,6 +44,5 @@ norecursedirs = [
     ".venv",
     ".worktrees",
     "node_modules",
-    "evals/cases/*/repo",
     "evals/fixtures",
 ]

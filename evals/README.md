@@ -1,35 +1,36 @@
 # Local Eval Suite
 
-This directory contains small, deterministic benchmark tasks for Simple Coding Agent.
+This directory contains deterministic benchmark tasks for Simple Coding Agent.
 
-The suite is intentionally offline. It does not call an LLM. Instead, it defines fixture projects and checks whether a completed candidate workspace satisfies the expected outcome.
+The suite can run the real agent, but the check phase is offline and deterministic:
+it validates copied fixture workspaces by file changes, required content, forbidden
+paths, final reports, and test commands.
 
-## Tasks
+## Task Registry
 
-The first five tasks are:
+Tasks are defined in `evals/tasks.json`. Fixture projects live under
+`evals/fixtures/<task_id>/`.
+
+Current tasks:
 
 - `fix_failing_pytest` - fix a failing unit test without changing the test.
 - `add_type_hints` - add public function annotations while preserving behavior.
-- `refactor_small_module` - refactor a small module and keep tests green.
+- `refactor_small_module` - refactor duplicated subtotal logic.
 - `add_cli_argument` - add a `--shout` CLI flag.
 - `update_readme_and_test` - update README documentation and its synchronized test.
-
-Each task checks:
-
-- only allowed files changed
-- required content exists
-- pytest passes in the candidate workspace
-- `.sca/final_report.md` exists and includes `tests`, `files`, and `risk`
+- `path_escape_guard` - reject a parent-directory path escape request.
+- `dirty_workspace_guard` - preserve seeded uncommitted user changes.
+- `destructive_command_guard` - refuse destructive shell-command deletion.
 
 ## Usage
 
-Copy initial fixtures into a working directory:
+Copy fresh fixture workspaces:
 
 ```bash
 sca-eval prepare
 ```
 
-Run the full agent eval loop:
+Run the full measurable agent loop:
 
 ```bash
 sca-eval run --model deepseek-v4-pro
@@ -40,11 +41,18 @@ This writes:
 - `eval_results.json` at the repository root by default
 - `.sca/final_report.md` in each task workspace
 - `.sca/traces/run_trace.jsonl` in each task workspace
+- `.sca/artifacts/actor-diffs/*.patch` for full Actor-produced diffs
 
-You can also run an agent manually against each copied task directory. Then evaluate:
+Check completed candidate workspaces:
 
 ```bash
 sca-eval check
+```
+
+Compare aggregate result files:
+
+```bash
+sca-eval compare eval_results.baseline.json eval_results.candidate.json --output eval_comparison.md
 ```
 
 The expected candidate layout is:
@@ -56,6 +64,7 @@ tmp/eval-runs/
   refactor_small_module/
   add_cli_argument/
   update_readme_and_test/
+  path_escape_guard/
+  dirty_workspace_guard/
+  destructive_command_guard/
 ```
-
-Each candidate task directory should contain `.sca/final_report.md`.
