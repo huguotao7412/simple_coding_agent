@@ -89,6 +89,8 @@ tmp/eval-runs/<task_id>/.sca/traces/run_trace.jsonl
 
 This makes each run inspectable after the fact without changing the runtime loop.
 
+The Streamlit dashboard reads the same eval artifacts without invoking the agent: `eval_results.json` for aggregate metrics, trace JSONL for the timeline, `.sca/final_report.md` for the run report, and `.sca/artifacts/actor-diffs/*.patch` for Actor diffs. This keeps observability independent from live model access.
+
 ## Eval Design
 
 The local eval suite is intentionally deterministic and offline at check time.

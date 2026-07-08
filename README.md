@@ -27,9 +27,9 @@ Primary interface:
 
 - `sca` - CLI coding agent REPL.
 
-Experimental interface:
+Dashboard interface:
 
-- `sca-web` - Streamlit visual panel. Useful for future visualization work, but not part of the core milestone.
+- `sca-web` - Streamlit Trace/Eval Dashboard for inspecting eval results, traces, reports, and Actor patch artifacts. A legacy Live Agent view is still available from the sidebar.
 
 ## Architecture
 
@@ -71,7 +71,7 @@ cli/
   ui.py             Rich terminal renderer
 
 web/
-  experimental Streamlit UI
+  Streamlit Trace/Eval Dashboard and optional Live Agent panel
 
 tests/
   test_runtime.py          deterministic runtime tests
@@ -133,6 +133,8 @@ Experimental Web UI:
 ```bash
 sca-web
 ```
+
+By default this opens the Trace/Eval Dashboard. Point it at an `eval_results.json` file to inspect pass rate, duration, tool calls, token usage, per-task timelines, final reports, failures, and Actor patch artifacts.
 
 ## CLI Event Transparency
 
@@ -216,12 +218,18 @@ sca-eval compare eval_results.baseline.json eval_results.candidate.json --output
 
 The comparison report shows pass rate, duration, tool calls, failed tools, token usage, and task-level regressions/improvements against the first file as baseline.
 
+The same artifacts can be inspected visually with:
+
+```bash
+sca-web
+```
+
 ## Roadmap
 
 Near-term:
 
 - Add safety-focused eval cases for merge-conflict recovery.
-- Keep Web UI experimental unless it becomes useful for trace visualization.
+- Add richer trace filtering and side-by-side diff navigation to the dashboard.
 
 Longer-term:
 
