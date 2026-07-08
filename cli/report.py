@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from core.runtime import AgentEvent
@@ -71,6 +72,95 @@ class RunReport:
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def observed_test_commands(self) -> list[str]:
+        commands: list[str] = []
+        for call in self.tool_calls:
+            command = call.args.get("command")
+            if not isinstance(command, str):
+                continue
+            lowered = command.lower()
+            if "pytest" in lowered or " test" in lowered or lowered.startswith("test"):
+                commands.append(command)
+        return commands
+
+    @property
+    def outcome(self) -> str:
+        return "failed" if self.errors or self.failed_tool_count else "completed"
+
+    def to_markdown(self) -> str:
+        """Render a deterministic audit report suitable for eval checks."""
+        lines = [
+            "# Simple Coding Agent Final Report",
+            "",
+            "## Outcome",
+            "",
+            f"Status: {self.outcome}",
+            "",
+            "## Files",
+            "",
+        ]
+
+        if self.files_referenced:
+            for path in sorted(self.files_referenced):
+                lines.append(f"- {path}")
+        else:
+            lines.append("- No file paths were observed in tool arguments.")
+
+        lines.extend(["", "## Tools", ""])
+        if self.tool_calls:
+            for call in self.tool_calls:
+                status = "unknown"
+                if call.success is True:
+                    status = "ok"
+                elif call.success is False:
+                    status = "failed"
+                lines.append(f"- {call.name}: {status}")
+        else:
+            lines.append("- No tool calls were observed.")
+
+        lines.extend(["", "## Tests", ""])
+        test_commands = self.observed_test_commands
+        if test_commands:
+            for command in test_commands:
+                lines.append(f"- Observed test command: `{command}`")
+        else:
+            lines.append("- No test command was observed in this run.")
+
+        lines.extend(["", "## Risk", ""])
+        if self.errors:
+            lines.append("- Review required: runtime errors were observed.")
+        elif self.failed_tool_count:
+            lines.append("- Review required: at least one tool call failed.")
+        else:
+            lines.append("- Low: no runtime errors or failed tool calls were observed.")
+
+        if self.total_tokens:
+            lines.extend([
+                "",
+                "## Token Usage",
+                "",
+                f"- Prompt tokens: {self.prompt_tokens}",
+                f"- Completion tokens: {self.completion_tokens}",
+                f"- Total tokens: {self.total_tokens}",
+            ])
+
+        if self.final_output:
+            lines.extend([
+                "",
+                "## Final Output",
+                "",
+                self.final_output.strip(),
+            ])
+
+        return "\n".join(lines).rstrip() + "\n"
+
+    def write_final_report(self, workspace_dir: str | Path) -> Path:
+        report_path = Path(workspace_dir) / ".sca" / "final_report.md"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(self.to_markdown(), encoding="utf-8")
+        return report_path
 
     def _record_file_args(self, args: dict[str, Any]) -> None:
         for key in FILE_ARG_KEYS:

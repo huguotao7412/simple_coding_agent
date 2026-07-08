@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import filecmp
 import json
+import os
 import shutil
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -146,9 +148,22 @@ def copy_fixtures(destination: Path) -> None:
         src = REPO_ROOT / "evals" / task["fixture"]
         dst = destination / task["id"]
         if dst.exists():
-            shutil.rmtree(dst)
+            _remove_tree(dst)
         shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*IGNORED_DIRS))
         init_candidate_repo(dst)
+
+
+def _remove_tree(path: Path) -> None:
+    """Remove a tree that may contain read-only git objects on Windows."""
+
+    def on_error(func, failed_path, exc_info):
+        try:
+            os.chmod(failed_path, stat.S_IWRITE)
+            func(failed_path)
+        except OSError:
+            raise
+
+    shutil.rmtree(path, onerror=on_error)
 
 
 def init_candidate_repo(path: Path) -> None:

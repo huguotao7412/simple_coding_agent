@@ -48,8 +48,19 @@ def build_planner(workspace_dir: str, model: str | None = None):
 
 
 async def run_once(prompt: str, workspace_dir: str, model: str | None = None) -> str:
+    from cli.report import RunReport
+
     planner = build_planner(workspace_dir=workspace_dir, model=model)
-    return await planner.run(prompt)
+    report = RunReport()
+    final_output = ""
+    async for event in planner.run_stream(prompt):
+        report.observe(event)
+        if event.type == "done":
+            final_output = event.content
+        elif event.type == "error" and not final_output:
+            final_output = event.content
+    report.write_final_report(workspace_dir)
+    return final_output or report.final_output
 
 
 def main() -> None:

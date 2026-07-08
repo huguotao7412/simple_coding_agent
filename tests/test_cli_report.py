@@ -61,3 +61,28 @@ def test_run_report_tracks_failed_tools_and_actor_statuses():
     assert report.failed_tool_count == 1
     assert report.actor_status_counts == {"done": 2, "failed": 1}
     assert report.compactions == 1
+
+
+def test_run_report_renders_and_writes_eval_friendly_markdown(tmp_path):
+    report = RunReport()
+    report.observe(AgentEvent(
+        type="tool_call",
+        tool_name="run",
+        tool_args={"command": "python -m pytest -q", "path": "tests/test_sample.py"},
+    ))
+    report.observe(AgentEvent(
+        type="tool_result",
+        tool_name="run",
+        tool_result=ToolResult.ok("1 passed"),
+    ))
+    report.observe(AgentEvent(type="done", content="All set."))
+
+    markdown = report.to_markdown()
+    report_path = report.write_final_report(tmp_path)
+
+    assert "## Files" in markdown
+    assert "## Tests" in markdown
+    assert "## Risk" in markdown
+    assert "python -m pytest -q" in markdown
+    assert report_path == tmp_path / ".sca" / "final_report.md"
+    assert report_path.read_text(encoding="utf-8") == markdown
