@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 from contextlib import AsyncExitStack
+from pathlib import Path
 from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
@@ -33,6 +35,9 @@ MCP_ERROR_MAP: dict[str, str] = {
 
 DEFAULT_TOOL_TIMEOUT = 120
 MAX_CONSECUTIVE_FAILURES = 3
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+MCP_SERVER_FILESYSTEM_VERSION = "2026.1.14"
+BASH_MCP_VERSION = "1.1.0"
 
 
 class MCPToolProvider:
@@ -63,11 +68,17 @@ class MCPToolProvider:
         servers: list[tuple[str, list[str]]] = [
             (
                 "filesystem",
-                ["npx", "-y", "@modelcontextprotocol/server-filesystem", self._worktree_path],
+                [
+                    *_node_bin_command(
+                        "mcp-server-filesystem",
+                        f"@modelcontextprotocol/server-filesystem@{MCP_SERVER_FILESYSTEM_VERSION}",
+                    ),
+                    self._worktree_path,
+                ],
             ),
             (
                 "bash",
-                ["npx", "-y", "bash-mcp"],
+                _node_bin_command("bash-mcp", f"bash-mcp@{BASH_MCP_VERSION}"),
             ),
         ]
 
@@ -244,3 +255,11 @@ class MCPToolProvider:
             return resolved.startswith(worktree_real + os.sep) or resolved == worktree_real
         except (ValueError, OSError):
             return False
+
+
+def _node_bin_command(binary_name: str, package_spec: str) -> list[str]:
+    extension = ".cmd" if sys.platform == "win32" else ""
+    local_binary = PACKAGE_ROOT / "node_modules" / ".bin" / f"{binary_name}{extension}"
+    if local_binary.exists():
+        return [str(local_binary)]
+    return ["npx", "--no-install", package_spec]

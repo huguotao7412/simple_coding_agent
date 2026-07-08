@@ -4,9 +4,14 @@ import asyncio
 import subprocess
 from pathlib import Path
 
-from core.git_utils import extract_diff, setup_worktree, teardown_worktree
+from core.git_utils import (
+    extract_diff,
+    parse_diff_file_paths,
+    setup_worktree,
+    teardown_worktree,
+)
 from core.state import GlobalState
-from core.tools.delegate import _apply_dependency_diffs_to_worktree
+from core.tools.delegate import _apply_dependency_diffs_to_worktree, _write_diff_artifact
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -72,3 +77,27 @@ def test_dependency_diffs_become_actor_baseline(tmp_path: Path):
         assert "diff --git a/module.py b/module.py" not in verifier_diff
     finally:
         teardown_worktree(str(worktree_path))
+
+
+def test_diff_paths_and_artifact_are_recorded(tmp_path: Path):
+    diff = (
+        "diff --git a/src/app.py b/src/app.py\n"
+        "index 1111111..2222222 100644\n"
+        "--- a/src/app.py\n"
+        "+++ b/src/app.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+        "diff --git a/tests/test_app.py b/tests/test_app.py\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/tests/test_app.py\n"
+        "@@ -0,0 +1 @@\n"
+        "+def test_app(): pass\n"
+    )
+
+    artifact = _write_diff_artifact(str(tmp_path), "task:demo/1", diff)
+
+    assert parse_diff_file_paths(diff) == ["src/app.py", "tests/test_app.py"]
+    assert artifact == ".sca/artifacts/actor-diffs/task_demo_1.patch"
+    assert (tmp_path / artifact).read_text(encoding="utf-8").endswith("\n")

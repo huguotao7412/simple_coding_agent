@@ -19,7 +19,7 @@ User prompt
 
 The Planner owns orchestration. It decomposes work, records tasks in `GlobalState`, delegates isolated subtasks, receives Actor summaries and diffs, applies selected patches, and synthesizes the final response.
 
-Actors own execution. Each Actor receives one concrete task plus scoped context, runs in its own git worktree, and reports a summary plus an extracted diff.
+Actors own execution. Each Actor receives one concrete task plus scoped context, runs in its own git worktree, and reports a summary plus an extracted diff. The full extracted diff is persisted as a patch artifact, while compact previews and file lists are sent back through Planner-visible state.
 
 ## Planner / Actor Flow
 
@@ -30,7 +30,8 @@ Actors own execution. Each Actor receives one concrete task plus scoped context,
 5. Dependency diffs are applied to dependent Actor worktrees as a committed baseline.
 6. The Actor runs with role-specific prompts and tool allowlists.
 7. The Actor worktree diff is extracted with `git diff --cached --binary`.
-8. The Planner reviews and applies successful diffs to the main workspace.
+8. The diff is stored under `.sca/artifacts/actor-diffs/`, and the task state records the artifact path plus modified files.
+9. The Planner reviews and applies successful diffs to the main workspace.
 
 The dependency baseline matters because verifier tasks must see the coder changes they are validating, while their own final diff should contain only verifier-created artifacts such as tests.
 
@@ -48,6 +49,8 @@ This provides:
 
 The main workspace remains the merge point. `apply_patch` applies selected Actor diffs to the working tree but does not commit automatically, so users can inspect changes before deciding how to version them.
 
+Full Actor patches are also retained under `.sca/artifacts/actor-diffs/`. This gives the Planner a compact context preview without losing the complete artifact needed for audit, retry, and conflict-resolution workflows.
+
 ## MCP Tool Boundary
 
 Actor tools are served through MCP providers bound to the Actor worktree:
@@ -57,6 +60,8 @@ Actor tools are served through MCP providers bound to the Actor worktree:
 - local helper tools for code search, outlines, and directory listing
 
 The provider sets the MCP subprocess current working directory to the Actor worktree and performs defense-in-depth path validation for absolute filesystem paths. Actor roles receive different allowlists:
+
+MCP server packages are pinned in `package.json`. At runtime the provider prefers local `node_modules/.bin` executables and falls back to `npx --no-install <package>@<version>`, avoiding unpinned runtime downloads.
 
 - Scout: read-only exploration
 - Coder: implementation tools

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -10,12 +11,20 @@ import time
 
 from .base import BaseTool, ToolResult
 from ..state import GlobalState
-from ..git_utils import setup_worktree, teardown_worktree, extract_diff, cleanup_orphans
+from ..git_utils import (
+    setup_worktree,
+    teardown_worktree,
+    extract_diff,
+    cleanup_orphans,
+    parse_diff_file_paths,
+)
 from ..role_config import ActorRole, get_role_config
 
 MAX_CONCURRENT_ACTORS = int(os.getenv("SCA_MAX_ACTORS", "4"))
 
 logger = logging.getLogger(__name__)
+
+ARTIFACT_DIR = os.path.join(".sca", "artifacts", "actor-diffs")
 
 
 def _run_git(*args: str, cwd: str, timeout: int = 30) -> tuple[int, str, str]:
@@ -89,6 +98,22 @@ def _apply_dependency_diffs_to_worktree(
             raise RuntimeError(f"failed to commit dependency baseline: {stderr}")
 
     return applied
+
+
+def _write_diff_artifact(workspace_dir: str, task_id: str, diff: str) -> str:
+    """Persist the full Actor diff and return a workspace-relative path."""
+    if not diff.strip():
+        return ""
+
+    safe_task_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", task_id).strip("._") or "task"
+    artifact_rel = os.path.join(ARTIFACT_DIR, f"{safe_task_id}.patch")
+    artifact_abs = os.path.join(workspace_dir, artifact_rel)
+    os.makedirs(os.path.dirname(artifact_abs), exist_ok=True)
+    with open(artifact_abs, "w", encoding="utf-8", newline="\n") as artifact_file:
+        artifact_file.write(diff)
+        if not diff.endswith("\n"):
+            artifact_file.write("\n")
+    return artifact_rel.replace(os.sep, "/")
 
 
 class DelegateTool(BaseTool):
@@ -301,25 +326,36 @@ class DelegateTool(BaseTool):
 
                     # Extract diff from worktree changes
                     diff = ""
+                    files_modified: list[str] = []
+                    diff_artifact = ""
                     try:
                         diff = await extract_diff(wt_path)
+                        files_modified = parse_diff_file_paths(diff)
+                        diff_artifact = _write_diff_artifact(current_workspace, tid, diff)
                     except Exception:
                         logger.warning(f"Failed to extract diff for {tid}")
 
-                    await state.add_summary(tid, summary.key_findings or "Task completed.", diff=diff)
+                    await state.add_summary(
+                        tid,
+                        summary.key_findings or "Task completed.",
+                        diff=diff,
+                        files_modified=files_modified,
+                        diff_artifact=diff_artifact or None,
+                    )
                     await state.update_task(tid, status=summary.status)
                     duration_ms = int((time.monotonic() - start_time) * 1000)
                     logger.info(
                         "actor_end task_id=%s duration_ms=%d outcome=%s files_modified=%d",
-                        tid, duration_ms, summary.status, len(summary.files_modified),
+                        tid, duration_ms, summary.status, len(files_modified),
                     )
                     return {
                         "task_id": tid,
                         "status": summary.status,
-                        "files_modified": summary.files_modified,
+                        "files_modified": files_modified,
                         "bugs_found": summary.bugs_found,
                         "key_findings": (summary.key_findings or "")[:2000],
                         "suggested_next_steps": summary.suggested_next_steps,
+                        "diff_artifact": diff_artifact,
                         "diff": diff[:8000],  # truncate for Planner context
                     }
                 except Exception as e:
@@ -433,5 +469,12 @@ class DelegateTool(BaseTool):
             else:
                 status_icon = "FAIL"
             detail = r.get("key_findings", r.get("error", ""))[:200]
-            lines.append(f"  [{status_icon}] {r['task_id']}: {detail}")
+            artifact = r.get("diff_artifact")
+            files = ", ".join(r.get("files_modified", [])[:5])
+            suffix = ""
+            if files:
+                suffix += f" files={files}"
+            if artifact:
+                suffix += f" artifact={artifact}"
+            lines.append(f"  [{status_icon}] {r['task_id']}: {detail}{suffix}")
         return ToolResult.ok("\n".join(lines))

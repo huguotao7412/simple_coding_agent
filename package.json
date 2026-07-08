@@ -4,7 +4,7 @@
   "private": true,
   "description": "Node.js MCP Server dependencies for Simple Coding Agent's Actor runtime",
   "dependencies": {
-    "@modelcontextprotocol/server-filesystem": "latest",
-    "bash-mcp": "latest"
+    "@modelcontextprotocol/server-filesystem": "2026.1.14",
+    "bash-mcp": "1.1.0"
   }
 }

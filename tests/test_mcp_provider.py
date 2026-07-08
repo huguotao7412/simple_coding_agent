@@ -51,13 +51,48 @@ async def test_mcp_servers_start_with_worktree_cwd(monkeypatch, tmp_path):
 
     monkeypatch.setattr("core.mcp.client.stdio_client", fake_stdio_client)
     monkeypatch.setattr("core.mcp.client.ClientSession", FakeSession)
+    monkeypatch.setattr("core.mcp.client.PACKAGE_ROOT", tmp_path / "without_node_modules")
 
     provider = MCPToolProvider()
     await provider.start(str(tmp_path))
     await provider.shutdown()
 
     assert [params.command for params in captured_params] == ["npx", "npx"]
+    assert captured_params[0].args[:2] == [
+        "--no-install",
+        "@modelcontextprotocol/server-filesystem@2026.1.14",
+    ]
+    assert captured_params[1].args[:2] == ["--no-install", "bash-mcp@1.1.0"]
     assert [params.cwd for params in captured_params] == [str(tmp_path), str(tmp_path)]
+
+
+@pytest.mark.asyncio
+async def test_mcp_servers_prefer_local_node_bins(monkeypatch, tmp_path):
+    captured_params = []
+    bin_dir = tmp_path / "node_modules" / ".bin"
+    bin_dir.mkdir(parents=True)
+    suffix = ".cmd" if __import__("sys").platform == "win32" else ""
+    fs_bin = bin_dir / f"mcp-server-filesystem{suffix}"
+    bash_bin = bin_dir / f"bash-mcp{suffix}"
+    fs_bin.write_text("", encoding="utf-8")
+    bash_bin.write_text("", encoding="utf-8")
+
+    def fake_stdio_client(params):
+        captured_params.append(params)
+        return FakeStdioContext()
+
+    monkeypatch.setattr("core.mcp.client.PACKAGE_ROOT", tmp_path)
+    monkeypatch.setattr("core.mcp.client.stdio_client", fake_stdio_client)
+    monkeypatch.setattr("core.mcp.client.ClientSession", FakeSession)
+
+    provider = MCPToolProvider()
+    await provider.start(str(tmp_path))
+    await provider.shutdown()
+
+    assert captured_params[0].command == str(fs_bin)
+    assert captured_params[0].args == [str(tmp_path)]
+    assert captured_params[1].command == str(bash_bin)
+    assert captured_params[1].args == []
 
 
 def test_mcp_provider_rejects_absolute_paths_outside_worktree(tmp_path):

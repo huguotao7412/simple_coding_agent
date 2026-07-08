@@ -13,6 +13,7 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - Planner/Actor orchestration with role-specific tool access.
 - MCP-backed file and shell tools for isolated Actor execution.
 - Git worktree isolation for delegated Actor tasks.
+- Full Actor patch artifacts under `.sca/artifacts/actor-diffs/`.
 - Persistent JSONL traces for eval/debug runs.
 - Local eval runner with aggregate `eval_results.json` metrics.
 - Deterministic unit tests for runtime, isolation, reports, and eval behavior.
@@ -156,6 +157,8 @@ The current safety model is pragmatic rather than magical:
 - file operations validate workspace boundaries in local tools and MCP providers
 - delegated Actor tasks use isolated git worktrees
 - dependent Actor tasks receive upstream diffs as a committed worktree baseline
+- full Actor diffs are persisted as patch artifacts, while Planner context receives a compact preview
+- MCP server packages are pinned and launched from local `node_modules/.bin` when installed
 - Planner and Actor roles can receive different tool allowlists
 
 ## Development
@@ -195,6 +198,7 @@ This writes:
 - `eval_results.json` at the repository root by default
 - `.sca/final_report.md` inside each candidate task workspace
 - `.sca/traces/run_trace.jsonl` inside each candidate task workspace
+- `.sca/artifacts/actor-diffs/*.patch` for full Actor-produced diffs
 
 You can still run tasks manually with `sca --dir tmp/eval-runs/<task_id>`. When finished, check the results:
 

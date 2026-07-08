@@ -9,11 +9,13 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+import re
 import subprocess
 import time
 
 
 WORKTREES_DIR = ".worktrees"
+DIFF_GIT_PATH_RE = re.compile(r"^diff --git a/(.+?) b/(.+)$")
 
 
 def _run_git(*args: str, cwd: str | None = None, timeout: int = 30) -> tuple[int, str, str]:
@@ -129,6 +131,19 @@ async def extract_diff(worktree_path: str) -> str:
         return ""
 
     return stdout
+
+
+def parse_diff_file_paths(diff: str) -> list[str]:
+    """Return modified file paths mentioned by a git unified diff."""
+    paths: set[str] = set()
+    for line in diff.splitlines():
+        match = DIFF_GIT_PATH_RE.match(line)
+        if not match:
+            continue
+        for path in match.groups():
+            if path != "/dev/null":
+                paths.add(path)
+    return sorted(paths)
 
 
 def cleanup_orphans(base_dir: str) -> list[str]:

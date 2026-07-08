@@ -15,6 +15,8 @@ class TaskNode:
     dependencies: list[str] = field(default_factory=list)
     result_summary: str | None = None
     diff: str | None = None  # unified diff from Actor's worktree changes
+    files_modified: list[str] = field(default_factory=list)
+    diff_artifact: str | None = None
 
 
 @dataclass
@@ -80,14 +82,31 @@ class GlobalState:
                 timestamp=time.time(), payload=kwargs,
             ))
 
-    async def add_summary(self, task_id: str, summary: str, diff: str = "") -> None:
+    async def add_summary(
+        self,
+        task_id: str,
+        summary: str,
+        diff: str = "",
+        files_modified: list[str] | None = None,
+        diff_artifact: str | None = None,
+    ) -> None:
         import time
         async with self._lock:
             self.task_tree[task_id].result_summary = summary
             self.task_tree[task_id].diff = diff or None
+            if files_modified is not None:
+                self.task_tree[task_id].files_modified = files_modified
+            self.task_tree[task_id].diff_artifact = diff_artifact
             self.change_log.append(ChangeRecord(
-                type="summary_added", task_id=task_id,
-                timestamp=time.time(), payload={"summary": summary, "diff": diff},
+                type="summary_added",
+                task_id=task_id,
+                timestamp=time.time(),
+                payload={
+                    "summary": summary,
+                    "diff": diff,
+                    "files_modified": files_modified or [],
+                    "diff_artifact": diff_artifact,
+                },
             ))
 
     async def consume_changes(self) -> list[ChangeRecord]:
@@ -108,6 +127,8 @@ class GlobalState:
                         "dependencies": t.dependencies,
                         "result_summary": t.result_summary,
                         "diff": (t.diff or "")[:500],  # truncate for context window
+                        "files_modified": t.files_modified,
+                        "diff_artifact": t.diff_artifact,
                     }
                     for tid, t in self.task_tree.items()
                 },
