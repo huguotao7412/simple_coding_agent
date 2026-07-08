@@ -33,3 +33,13 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["deepseek_tokenizer", "streamlit", "dotenv", "rich"]
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+    ".git",
+    ".venv",
+    ".worktrees",
+    "node_modules",
+    "evals/cases/*/repo",
+]
