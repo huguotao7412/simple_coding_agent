@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 from rich.console import Console
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.live import Live
 from rich.status import Status
 from rich.table import Table
 
+from cli.report import RunReport
+
 SCA_LOGO = r"""
-  [cyan] ▄██████▄    ▄██████▄     ▄██▄    [/]
-  [cyan]██▀    ▀██  ██▀    ▀██   ██▀▀██   [/]
-  [cyan]██          ██          ██▄  ▄██  [/]
-  [cyan] ▀██████▄   ██          ████████  [/]
-  [cyan]       ▀██  ██          ██▀  ▀██  [/]
-  [cyan]██▄    ▄██  ██▄    ▄██  ██    ██  [/]
-  [cyan] ▀██████▀    ▀██████▀   ██    ██  [/]
+  [cyan]  ____    ____      _     [/]
+  [cyan] / ___|  / ___|    / \    [/]
+  [cyan] \___ \ | |       / _ \   [/]
+  [cyan]  ___) || |___   / ___ \  [/]
+  [cyan] |____/  \____| /_/   \_\ [/]
 """
 
 
@@ -34,47 +34,43 @@ class UI:
         return LiveMarkdownStream(self.console)
 
     def clear_tool_status(self) -> None:
-        """停止并清除工具执行的临时状态"""
+        """Stop and clear the transient tool spinner."""
         if self._tool_status:
             self._tool_status.stop()
             self._tool_status = None
 
     def clear_actor_status(self) -> None:
-        """停止并清除并发任务状态表"""
+        """Stop and clear the concurrent task table."""
         if self._actor_table:
             self._actor_table.stop()
             self._actor_table = None
 
     def render_actor_status(self, task_tree: dict) -> None:
-        """渲染并发 Actor 执行状态表。
-
-        Bridge 收到 actor_update 事件时调用。
-        同一批 delegate 内的多次调用会原地更新表格。
-        """
+        """Render concurrent Actor task status."""
         if not task_tree:
             return
 
         status_styles = {
-            "pending":    ("..", "dim yellow"),
-            "running":    (">>", "bold cyan"),
-            "verifying":  ("\U0001F50D", "bold magenta"),
-            "done":       ("OK", "bold green"),
-            "failed":     ("!!", "bold red"),
-            "blocked":    ("\U0001F6AB", "dim"),
+            "pending": ("..", "dim yellow"),
+            "running": (">>", "bold cyan"),
+            "verifying": ("??", "bold magenta"),
+            "done": ("OK", "bold green"),
+            "failed": ("!!", "bold red"),
+            "blocked": ("--", "dim"),
         }
 
         table = Table(
-            title="并发任务状态",
+            title="Actor Tasks",
             title_style="bold blue",
             show_header=True,
             header_style="bold",
         )
         table.add_column("Task ID", style="dim", width=14)
-        table.add_column("任务描述", width=40)
-        table.add_column("状态", width=12)
+        table.add_column("Description", width=40)
+        table.add_column("Status", width=12)
 
         for tid, task in task_tree.items():
-            icon, style = status_styles.get(task.get("status", ""), ("❓", ""))
+            icon, style = status_styles.get(task.get("status", ""), ("??", ""))
             status_text = f"{icon} {task['status']}"
             desc = (task.get("description", "") or "")[:38]
             table.add_row(tid, desc, f"[{style}]{status_text}[/]")
@@ -91,20 +87,48 @@ class UI:
             self._actor_table.start()
 
     def render_tool_status(self, name: str, status: str) -> None:
-        """Show a one-line tool execution status."""
+        """Show a transient one-line tool execution status."""
         if status == "running":
-            msg = f"[dim cyan]⚡ 正在执行工具:[/] [bold cyan]{name}[/]"
+            msg = f"[dim cyan]running tool:[/] [bold cyan]{name}[/]"
             if not self._tool_status:
                 self._tool_status = self.console.status(msg, spinner="dots")
                 self._tool_status.start()
             else:
                 self._tool_status.update(msg)
-        elif status == "failed":
-            if self._tool_status:
-                self._tool_status.update(f"[red]❌ 工具 {name} 执行失败，等待修正...[/]")
+        elif status == "failed" and self._tool_status:
+            self._tool_status.update(f"[red]tool {name} failed[/]")
+
+    def render_tool_call(self, name: str, args: dict | None) -> None:
+        """Render an auditable tool-call line before execution."""
+        args = args or {}
+        arg_bits = []
+        for key, value in list(args.items())[:3]:
+            text = repr(value)
+            if len(text) > 80:
+                text = text[:77] + "..."
+            arg_bits.append(f"{key}={text}")
+        suffix = f" ({', '.join(arg_bits)})" if arg_bits else ""
+        self.console.print(f"[dim]tool call[/] [bold cyan]{name}[/]{suffix}")
+
+    def render_tool_result(self, name: str, success: bool, detail: str = "") -> None:
+        """Render a compact, persistent tool result."""
+        style = "green" if success else "red"
+        label = "ok" if success else "failed"
+        if detail:
+            detail = detail.replace("\n", " ")
+            if len(detail) > 160:
+                detail = detail[:157] + "..."
+            detail = f" - {detail}"
+        self.console.print(f"[{style}]tool {label}[/] [bold]{name}[/]{detail}")
+
+    def render_compaction(self, mode: str = "") -> None:
+        text = "Context compressed"
+        if mode:
+            text += f" ({mode})"
+        self.console.print(f"[dim]{text}[/dim]")
 
     def render_error(self, msg: str) -> None:
-        self.console.print(f"[red]✗ {msg}[/red]")
+        self.console.print(f"[red]ERROR: {msg}[/red]")
 
     def render_info(self, msg: str) -> None:
         self.console.print(f"[dim]{msg}[/dim]")
@@ -113,10 +137,60 @@ class UI:
         """Render a compact token consumption summary line."""
         total = prompt_tokens + completion_tokens
         self.console.print(
-            f"\n[dim]💡 Token: prompt={prompt_tokens:,} "
+            f"\n[dim]Tokens: prompt={prompt_tokens:,} "
             f"completion={completion_tokens:,} "
             f"total={total:,}[/]"
         )
+
+    def render_run_report(self, report: RunReport) -> None:
+        """Render a final per-run audit summary."""
+        table = Table(
+            title="Run Report",
+            title_style="bold blue",
+            show_header=False,
+            box=None,
+            padding=(0, 1),
+        )
+        table.add_column("Key", style="dim", width=18)
+        table.add_column("Value")
+
+        tool_count = len(report.tool_calls)
+        failed_tools = report.failed_tool_count
+        table.add_row("Tools", f"{tool_count} call(s), {failed_tools} failed")
+
+        if report.files_referenced:
+            files = sorted(report.files_referenced)
+            rendered = ", ".join(files[:5])
+            if len(files) > 5:
+                rendered += f", +{len(files) - 5} more"
+            table.add_row("Files referenced", rendered)
+        else:
+            table.add_row("Files referenced", "none observed")
+
+        if report.actor_status_counts:
+            actor_summary = ", ".join(
+                f"{status}={count}"
+                for status, count in sorted(report.actor_status_counts.items())
+            )
+            table.add_row("Actor tasks", actor_summary)
+
+        if report.total_tokens:
+            table.add_row(
+                "Tokens",
+                f"prompt={report.prompt_tokens:,}, completion={report.completion_tokens:,}, total={report.total_tokens:,}",
+            )
+
+        if report.compactions:
+            table.add_row("Compactions", str(report.compactions))
+
+        if report.errors:
+            table.add_row("Errors", str(len(report.errors)))
+
+        outcome = "failed" if report.errors or failed_tools else "completed"
+        table.add_row("Outcome", outcome)
+
+        self.console.print()
+        self.console.print(table)
 
     def render_user_prompt(self) -> str:
         """Display the prompt and read user input."""
@@ -127,18 +201,18 @@ class UI:
         self.console.print(SCA_LOGO)
         self.console.print(
             Panel.fit(
-                "Simple Coding Agent — type your request or [bold]exit[/bold] to quit",
+                "Simple Coding Agent - type your request or [bold]exit[/bold] to quit",
                 border_style="blue",
             )
         )
 
 
 class LiveMarkdownStream:
-    """使用 Rich Live 真正实现流式 Markdown 渲染。"""
+    """Rich-backed live Markdown stream."""
+
     def __init__(self, console: Console):
         self.console = console
         self._buffer = ""
-        # refresh_per_second 适度调高保证流畅，但不要太高以防止终端卡顿
         self._live = Live(console=self.console, refresh_per_second=12, transient=False)
 
     def __enter__(self):
@@ -151,5 +225,4 @@ class LiveMarkdownStream:
 
     def add_token(self, token: str) -> None:
         self._buffer += token
-        # 每次接到新 token，就更新 Live 面板中的 Markdown 渲染
         self._live.update(Markdown(self._buffer))

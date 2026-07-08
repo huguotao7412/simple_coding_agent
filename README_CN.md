@@ -1,154 +1,210 @@
 # Simple Coding Agent
 
-一个本地 Coding Agent 原型，核心围绕 Planner-Actor 编排、git worktree 隔离、MCP 工具接入、上下文管理和 fixture-based eval 反馈闭环构建。
+Simple Coding Agent 是一个 **CLI 优先的本地 Coding Agent Runtime**，重点是透明工具调用、隔离执行和可验证代码修改。
 
-这个项目的目标不是做一个花哨聊天界面，而是探索一个可解释、可验证、可演进的自主编程系统：如何拆任务、如何隔离执行、如何管理工具权限、如何合并补丁、如何用评测证明能力没有退化。
+这个项目面向习惯使用终端、Git 仓库和测试套件的开发者。Web UI 仍然保留，但目前定位为实验性入口，不是核心产品面。
+
+## 项目展示重点
+
+- Planner 和 Actor 共享一套 ReAct Runtime，而不是复制两套循环。
+- 透明事件流：模型输出、工具调用、工具结果、错误、token 统计和任务状态更新。
+- 集中化 tool-call JSON 解析，并能从格式错误中恢复。
+- 最大步数限制、重复动作熔断等运行时安全控制。
+- Planner/Actor 编排和角色化工具权限。
+- MCP 文件与 shell 工具集成。
+- 使用 git worktree 隔离委派给 Actor 的子任务。
+- 用 deterministic tests 验证 runtime 行为，并保留 MCP 集成 smoke tests。
+
+当前目标是打磨一个可靠、可审计、可持续评测的本地 agent 核心，而不是宣称它已经是全自动生产级软件工程系统。
 
 ## 当前状态
 
-这是一个工程 MVP，不是最终产品。项目已经具备核心架构和第一版 eval runner。下一阶段重点是结构化 Actor 输出、Planner 自动合并与验证闭环，以及更完整的 eval suite。
+主要入口：
 
-## 架构概览
+- `sca`：CLI coding agent REPL。
+
+实验入口：
+
+- `sca-web`：Streamlit 可视化面板。它适合未来做 trace 可视化，但不是当前核心里程碑。
+
+## 架构
 
 ```text
 用户请求
   -> Planner
-      - 拆解任务
-      - 更新 GlobalState
-      - 分发独立子任务
-      - 汇总结果
-  -> Actor workers
-      - 在独立 git worktree 中执行
-      - 使用角色化工具权限
-      - 通过 MCP 调用文件系统和 shell 工具
-  -> Planner
-      - 接收 summary 和 diff
-      - 应用 patch
-      - 返回最终结果
+  -> AgentRuntime
+  -> LLM response
+  -> tool-call parser
+  -> tool executor
+  -> context observation
+  -> transparent event stream
+  -> CLI renderer
 ```
 
-核心模块：
+代码仍然保留 Planner/Actor 分层：
 
-- `core/planner.py`：顶层编排循环。
-- `core/agent.py`：Actor ReAct 执行循环。
-- `core/state.py`：任务状态账本和变更日志。
-- `core/tools/delegate.py`：并发 Actor 分发和依赖处理。
-- `core/git_utils.py`：worktree 创建、diff 提取和清理。
-- `core/mcp/client.py`：MCP server 生命周期、工具路由、超时和熔断。
-- `evals/run_evals.py`：fixture-based eval runner。
-- `cli/main.py`：命令行入口。
-- `web/main.py`：Streamlit Web UI 入口。
+- `Planner` 负责拆解任务，并可以委派子任务。
+- `ActorAgent` 使用角色化权限执行隔离子任务。
+- `AgentRuntime` 负责共享执行循环：LLM 调用、工具解析、工具执行、上下文压缩、步数限制、重复动作检测和事件发射。
+- `GlobalState` 记录任务状态和 Actor 更新。
 
-## 主要能力
+## 项目结构
 
-- Planner-Actor 任务编排。
-- 可配置的并发 Actor 执行。
-- 每个 Actor 使用独立 git worktree 隔离修改。
-- 通过 MCP 接入文件系统和 shell 工具。
-- scout、coder、verifier 三类角色化工具权限。
-- GlobalState 维护任务树、快照和变更记录。
-- 上下文压缩和大工具输出截断。
-- 支持 Actor diff 提取和 patch 应用。
-- 提供 CLI、非交互 CLI 和 Streamlit UI。
-- 提供 fixture-based eval runner，输出 JSON 和 Markdown 报告。
+```text
+core/
+  runtime.py        共享 ReAct runtime 和 AgentEvent 协议
+  planner.py        Planner 对 AgentRuntime 的封装
+  agent.py          ActorAgent 对 AgentRuntime 的封装
+  context.py        对话上下文和上下文压缩
+  llm.py            OpenAI-compatible 异步流式客户端
+  state.py          任务账本和状态快照
+  mcp/              MCP 工具 provider
+  tools/            本地 Planner/Actor 工具
 
-## 快速开始
+cli/
+  main.py           CLI 入口
+  bridge.py         runtime event -> terminal UI bridge
+  ui.py             Rich 终端渲染
 
-要求：
+web/
+  experimental Streamlit UI
 
-- Python 3.12+
-- Node.js 和 npm，用于 MCP server 依赖
-- Git
+tests/
+  test_runtime.py          deterministic runtime tests
+  test_role_config.py      角色和工具权限测试
+  test_mcp_integration.py  MCP smoke test
+```
 
-安装 Python 依赖：
+## 安装
+
+需要 Python 3.12+。如果要使用 MCP Actor 工具，还需要 Node.js 18+。
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .[dev]
-```
-
-安装 MCP server 依赖：
-
-```powershell
+.\.venv\Scripts\activate
+pip install -e ".[dev]"
 npm install
 ```
 
-创建本地配置：
+实验性 Web UI：
 
 ```powershell
-Copy-Item .env.example .env
+pip install -e ".[web]"
 ```
 
-编辑 `.env`，填入 `SCA_API_KEY`。
+## 配置
 
-运行 CLI：
+在仓库根目录创建 `.env`：
+
+```bash
+SCA_API_KEY=your-api-key
+SCA_API_BASE=https://api.deepseek.com
+SCA_MODEL=deepseek-v4-pro
+SCA_MAX_TOKENS=128000
+SCA_MAX_ACTORS=4
+```
+
+客户端使用 OpenAI-compatible chat completions API。
+
+## 使用
+
+在当前仓库运行 CLI：
 
 ```powershell
-.\.venv\Scripts\python.exe -m cli.main --workspace . --prompt "Inspect this repository and summarize the architecture."
+sca
 ```
 
-运行 Streamlit UI：
+指定其他工作区：
 
 ```powershell
-.\.venv\Scripts\sca-web
+sca --dir C:\path\to\project
 ```
 
-## 配置项
-
-- `SCA_API_KEY`：OpenAI-compatible 模型服务 API key。
-- `SCA_API_BASE`：API base URL，默认 `https://api.deepseek.com`。
-- `SCA_MODEL`：模型名称，默认 `deepseek-v4-pro`。
-- `SCA_MAX_TOKENS`：模型上下文/token 预算，默认 `128000`。
-- `SCA_WORKSPACE`：Web UI 使用的工作区路径，默认 `./workspaces`。
-- `SCA_MAX_ACTORS`：最大并发 Actor 数，默认 `4`。
-
-## 测试
-
-运行单元测试：
+实验性 Web UI：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+sca-web
 ```
 
-`evals/cases/*/repo` 下的样例仓库故意包含失败或未完成代码，不参与普通 pytest 收集；它们应该通过 eval runner 执行。
+## CLI 事件透明性
 
-只做 eval 发现和报告生成，不调用 agent：
+CLI 会渲染 runtime 事件流：
+
+- 流式模型输出
+- 工具调用名称和精简参数
+- 工具成功/失败摘要
+- Actor 任务更新
+- 上下文压缩提示
+- token 使用统计
+- 错误和最终输出
+
+目标是让每次运行都可检查，而不是把 agent 当成黑盒。
+
+## 安全模型
+
+当前安全模型是务实的工程防护：
+
+- 工具调用集中解析，格式错误会作为可恢复反馈返回给模型。
+- 重复的相同工具调用会触发熔断。
+- 最大步数限制防止无限循环。
+- 本地工具和 MCP provider 都会校验文件访问边界。
+- 委派给 Actor 的任务使用独立 git worktree。
+- Planner 和 Actor 可以使用不同工具 allowlist。
+
+这些机制能降低风险，但不是完整沙箱。请只在你愿意让 agent 修改的仓库和环境中运行。
+
+## 开发
+
+运行全部测试：
 
 ```powershell
-.\.venv\Scripts\python.exe -m evals.run_evals --dry-run
+.\.venv\Scripts\python.exe -m pytest
 ```
 
-运行单个 eval：
+编译检查：
 
 ```powershell
-.\.venv\Scripts\python.exe -m evals.run_evals --case fix_failing_pytest --agent-command ".\.venv\Scripts\python.exe -m cli.main --workspace {workspace} --prompt ""{prompt}"""
+.\.venv\Scripts\python.exe -m compileall core cli web evals tests
 ```
 
-报告输出到：
+CLI smoke check：
 
-- `evals/reports/latest.json`
-- `evals/reports/latest.md`
+```powershell
+.\.venv\Scripts\python.exe -m cli.main --help
+```
 
-## 安全边界
+准备本地 eval 任务工作区：
 
-项目目前包含这些防护：
+```powershell
+sca-eval prepare
+```
 
-- Actor 修改先发生在临时 git worktree 中。
-- MCP filesystem server 绑定到 Actor worktree。
-- 额外路径校验会拒绝访问 worktree 外部的绝对路径。
-- 工具有超时和 provider 级熔断。
-- 上下文管理会截断过大的工具输出，减少 token 失控。
+然后对每个任务运行：
 
-这些机制可以降低风险，但不是完整沙箱。请只在你愿意让 agent 修改的仓库和环境中运行。
+```powershell
+sca --dir tmp/eval-runs/<task_id>
+```
+
+完成后检查结果：
+
+```powershell
+sca-eval check
+```
 
 ## 路线图
 
-- 结构化 Actor JSON summary。
-- 确定性的 Planner 合并、验证和重试协议。
-- 更多 eval cases 和通过率追踪。
-- Trace 持久化与回放。
-- CI 发布 eval 报告。
-- 更强的命令策略和审计日志。
+近期：
+
+- 增加结构化 final report：修改文件、使用工具、验证命令、残余风险。
+- 改进测试命令和 diff summary 周围的验证工作流。
+- Web UI 继续保持实验状态，除非它能真正服务 trace 可视化。
+
+长期：
+
+- 更好的 Actor diff 合并和冲突处理流程。
+- 更稳健的模型/provider 路由。
+- 持久化 run traces，用于调试和 eval 对比。
+- 对破坏性或高风险操作增加人工审批。
 
 ## License
 

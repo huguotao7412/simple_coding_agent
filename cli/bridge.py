@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
-from core.planner import Planner
+from cli.report import RunReport
 from cli.ui import UI
+from core.planner import Planner
 
 
 class Bridge:
-    """Connects the core Agent to the terminal UI. Runs the REPL loop."""
+    """Connects the core Planner to the terminal UI. Runs the REPL loop."""
 
     def __init__(self, agent: Planner, ui: UI):
         self.agent = agent
@@ -17,7 +19,6 @@ class Bridge:
         self.ui.render_welcome()
         while True:
             try:
-                import asyncio
                 user_input = await asyncio.to_thread(self.ui.render_user_prompt)
             except (EOFError, KeyboardInterrupt):
                 self.ui.render_info("\nGoodbye.")
@@ -31,33 +32,48 @@ class Bridge:
                 break
 
             stream = None
+            streamed_anything = False
+            report = RunReport()
             try:
                 async for event in self.agent.run_stream(user_input):
+                    report.observe(event)
+
                     if event.type == "thought":
-                        self.ui.clear_tool_status()  # 💡收到大模型思考时，清除工具的动画
+                        self.ui.clear_tool_status()
                         if stream is None:
                             stream = self.ui.stream_markdown()
-                            stream.__enter__()  # Markdown
+                            stream.__enter__()
                         stream.add_token(event.token)
+                        streamed_anything = True
+
                     elif event.type == "tool_call":
                         if stream:
                             stream.__exit__(None, None, None)
                             stream = None
+                        self.ui.render_tool_call(event.tool_name or "tool", event.tool_args)
                         self.ui.render_tool_status(event.tool_name or "tool", "running")
+
                     elif event.type == "tool_result":
-                        status = "done" if event.tool_result and event.tool_result.success else "failed"
-                        self.ui.render_tool_status(event.tool_name or "tool", status)
+                        if stream:
+                            stream.__exit__(None, None, None)
+                            stream = None
+                        self.ui.clear_tool_status()
+                        success = bool(event.tool_result and event.tool_result.success)
+                        detail = ""
+                        if event.tool_result:
+                            detail = event.tool_result.content if success else (event.tool_result.error or "")
+                        self.ui.render_tool_result(event.tool_name or "tool", success=success, detail=detail)
+
                     elif event.type == "actor_update":
                         if stream:
                             stream.__exit__(None, None, None)
                             stream = None
                         try:
                             snapshot = json.loads(event.content)
-                            self.ui.render_actor_status(
-                                snapshot.get("task_tree", {})
-                            )
+                            self.ui.render_actor_status(snapshot.get("task_tree", {}))
                         except Exception:
-                            pass  # best-effort rendering
+                            pass
+
                     elif event.type == "token_stats":
                         if stream:
                             stream.__exit__(None, None, None)
@@ -70,17 +86,28 @@ class Bridge:
                             )
                         except Exception:
                             pass
+
                     elif event.type == "compaction":
                         self.ui.clear_tool_status()
-                        self.ui.render_info("\n[系统：上下文已自动压缩]")
+                        self.ui.render_compaction(event.content)
+
                     elif event.type == "error":
                         self.ui.clear_tool_status()
                         if stream:
                             stream.__exit__(None, None, None)
                             stream = None
                         self.ui.render_error(f"Agent Error: {event.content}")
+
+                    elif event.type == "done":
+                        self.ui.clear_tool_status()
+                        if stream:
+                            stream.__exit__(None, None, None)
+                            stream = None
+                        if event.content and not streamed_anything:
+                            self.ui.render_markdown(event.content)
             finally:
-                self.ui.clear_tool_status()  # 确保一轮对话结束时，不残留工具动画
-                self.ui.clear_actor_status()  # 清理并发任务状态表
+                self.ui.clear_tool_status()
+                self.ui.clear_actor_status()
                 if stream:
                     stream.__exit__(None, None, None)
+                self.ui.render_run_report(report)

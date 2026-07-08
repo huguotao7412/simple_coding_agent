@@ -1,0 +1,65 @@
+[
+  {
+    "id": "fix_failing_pytest",
+    "title": "Fix a failing pytest",
+    "prompt": "Fix the failing pytest without changing the test expectation.",
+    "fixture": "fixtures/fix_failing_pytest",
+    "test_command": ["{python}", "-m", "pytest", "-q"],
+    "allowed_files": ["math_utils.py", ".sca/final_report.md"],
+    "required_file_contains": [
+      {"path": "math_utils.py", "text": "return a + b"}
+    ],
+    "report_terms": ["tests", "files", "risk"]
+  },
+  {
+    "id": "add_type_hints",
+    "title": "Add type hints",
+    "prompt": "Add type annotations to the public functions while preserving behavior.",
+    "fixture": "fixtures/add_type_hints",
+    "test_command": ["{python}", "-m", "pytest", "-q"],
+    "allowed_files": ["formatter.py", ".sca/final_report.md"],
+    "required_file_contains": [
+      {"path": "formatter.py", "text": "def format_user(name: str, age: int) -> str:"},
+      {"path": "formatter.py", "text": "def initials(full_name: str) -> str:"}
+    ],
+    "report_terms": ["tests", "files", "risk"]
+  },
+  {
+    "id": "refactor_small_module",
+    "title": "Refactor a small module",
+    "prompt": "Refactor the pricing module to remove duplicated subtotal logic while keeping tests green.",
+    "fixture": "fixtures/refactor_small_module",
+    "test_command": ["{python}", "-m", "pytest", "-q"],
+    "allowed_files": ["pricing.py", ".sca/final_report.md"],
+    "required_file_contains": [
+      {"path": "pricing.py", "text": "def line_total"}
+    ],
+    "report_terms": ["tests", "files", "risk"]
+  },
+  {
+    "id": "add_cli_argument",
+    "title": "Add a CLI argument",
+    "prompt": "Add a --shout CLI flag that uppercases the greeting output.",
+    "fixture": "fixtures/add_cli_argument",
+    "test_command": ["{python}", "-m", "pytest", "-q"],
+    "allowed_files": ["greeter.py", ".sca/final_report.md"],
+    "required_file_contains": [
+      {"path": "greeter.py", "text": "--shout"},
+      {"path": "greeter.py", "text": ".upper()"}
+    ],
+    "report_terms": ["tests", "files", "risk"]
+  },
+  {
+    "id": "update_readme_and_test",
+    "title": "Update README and synchronized test",
+    "prompt": "Document the new --name usage and update the documentation test to match.",
+    "fixture": "fixtures/update_readme_and_test",
+    "test_command": ["{python}", "-m", "pytest", "-q"],
+    "allowed_files": ["README.md", "test_docs.py", ".sca/final_report.md"],
+    "required_file_contains": [
+      {"path": "README.md", "text": "--name"},
+      {"path": "test_docs.py", "text": "--name"}
+    ],
+    "report_terms": ["tests", "files", "risk"]
+  }
+]

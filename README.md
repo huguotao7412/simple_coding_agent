@@ -1,157 +1,199 @@
 # Simple Coding Agent
 
-A local coding-agent prototype built around Planner-Actor orchestration, isolated git worktrees, MCP-backed tools, context management, and fixture-based evaluations.
+Simple Coding Agent is a **CLI-first local coding agent runtime** focused on transparent tool use, isolated execution, and verifiable code changes.
 
-The project is intentionally small enough to inspect, but it exercises the same concerns that matter in larger autonomous coding systems: task decomposition, isolated execution, tool safety, state tracking, patch merging, and measurable regression tests.
+The project is intentionally aimed at developers who work in terminals, Git repositories, and test suites. The Web UI still exists, but it is experimental and not the primary product surface.
+
+## What This Project Demonstrates
+
+- A shared ReAct-style agent runtime for Planner and Actor agents.
+- Transparent streaming events for thoughts, tool calls, tool results, errors, token usage, and task updates.
+- Centralized tool-call parsing with malformed JSON recovery.
+- Runtime safety controls such as max-step limits and repeated-action circuit breaking.
+- Planner/Actor orchestration with role-specific tool access.
+- MCP-backed file and shell tools for isolated Actor execution.
+- Git worktree isolation for delegated Actor tasks.
+- Deterministic unit tests for runtime behavior, plus MCP integration smoke tests.
+
+This is not positioned as a fully autonomous production coding system yet. The current goal is a reliable, auditable local agent core that can be improved and measured over time.
 
 ## Current Status
 
-This repository is an engineering MVP, not a finished product. The core architecture is in place and the first eval harness exists. The next milestones are structured Actor summaries, stronger Planner merge/verify loops, and a larger eval suite.
+Primary interface:
+
+- `sca` - CLI coding agent REPL.
+
+Experimental interface:
+
+- `sca-web` - Streamlit visual panel. Useful for future visualization work, but not part of the core milestone.
 
 ## Architecture
 
 ```text
 User request
   -> Planner
-      - decomposes work
-      - updates GlobalState
-      - delegates independent tasks
-      - synthesizes results
-  -> Actor workers
-      - run in isolated git worktrees
-      - use role-specific tool access
-      - call MCP-backed filesystem and shell tools
-  -> Planner
-      - receives summaries and diffs
-      - applies patches
-      - reports final result
+  -> AgentRuntime
+  -> LLM response
+  -> tool-call parser
+  -> tool executor
+  -> context observation
+  -> transparent event stream
+  -> CLI renderer
 ```
 
-Key modules:
+The codebase keeps the Planner/Actor split:
 
-- `core/planner.py`: top-level orchestration loop.
-- `core/agent.py`: Actor ReAct execution loop.
-- `core/state.py`: shared task ledger and change log.
-- `core/tools/delegate.py`: concurrent Actor dispatch with dependency handling.
-- `core/git_utils.py`: worktree setup, diff extraction, and cleanup.
-- `core/mcp/client.py`: MCP server lifecycle, tool routing, timeout handling, and circuit breaker.
-- `evals/run_evals.py`: fixture-based eval runner.
-- `cli/main.py`: command-line entry point.
-- `web/main.py`: Streamlit UI entry point.
+- `Planner` decides how to break down work and can delegate subtasks.
+- `ActorAgent` executes isolated subtasks with role-specific permissions.
+- `AgentRuntime` owns the shared loop: LLM calls, tool parsing, tool execution, context compaction, step limits, repeated-action detection, and event emission.
+- `GlobalState` records task state and Actor updates.
 
-## Features
+## Project Layout
 
-- Planner-Actor task orchestration.
-- Concurrent Actor execution with a configurable maximum actor count.
-- Per-Actor git worktree isolation.
-- MCP tool integration for filesystem and shell operations.
-- Role-based tool allowlists for scout, coder, and verifier Actors.
-- Global task state ledger with snapshots and change records.
-- Context compression and large tool-result truncation.
-- Patch extraction and application support.
-- CLI, non-interactive CLI, and Streamlit UI surfaces.
-- Fixture-based eval runner with JSON and Markdown reports.
+```text
+core/
+  runtime.py        shared ReAct runtime and AgentEvent protocol
+  planner.py        Planner wrapper around AgentRuntime
+  agent.py          ActorAgent wrapper around AgentRuntime
+  context.py        conversation and context compression
+  llm.py            OpenAI-compatible async streaming client
+  state.py          task ledger and state snapshots
+  mcp/              MCP tool provider
+  tools/            local planner/actor tools
 
-## Quick Start
+cli/
+  main.py           CLI entrypoint
+  bridge.py         runtime event -> terminal UI bridge
+  ui.py             Rich terminal renderer
 
-Requirements:
+web/
+  experimental Streamlit UI
 
-- Python 3.12+
-- Node.js and npm, for MCP server dependencies
-- Git
+tests/
+  test_runtime.py          deterministic runtime tests
+  test_role_config.py      role and tool access tests
+  test_mcp_integration.py  MCP smoke test
+```
 
-Install Python dependencies:
+## Installation
 
-```powershell
+Requires Python 3.12+ and Node.js 18+ if you want MCP Actor tools.
+
+```bash
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .[dev]
-```
-
-Install MCP server dependencies:
-
-```powershell
+.\.venv\Scripts\activate
+pip install -e ".[dev]"
 npm install
 ```
 
-Create local configuration:
+For the experimental Web UI:
 
-```powershell
-Copy-Item .env.example .env
-```
-
-Edit `.env` and set `SCA_API_KEY`.
-
-Run the CLI:
-
-```powershell
-.\.venv\Scripts\python.exe -m cli.main --workspace . --prompt "Inspect this repository and summarize the architecture."
-```
-
-Run the Streamlit UI:
-
-```powershell
-.\.venv\Scripts\sca-web
+```bash
+pip install -e ".[web]"
 ```
 
 ## Configuration
 
-Environment variables:
+Create `.env` in the repository root:
 
-- `SCA_API_KEY`: API key for the OpenAI-compatible model provider.
-- `SCA_API_BASE`: API base URL. Defaults to `https://api.deepseek.com`.
-- `SCA_MODEL`: model name. Defaults to `deepseek-v4-pro`.
-- `SCA_MAX_TOKENS`: model context/token budget. Defaults to `128000`.
-- `SCA_WORKSPACE`: workspace shown by the web UI. Defaults to `./workspaces`.
-- `SCA_MAX_ACTORS`: maximum concurrent Actors. Defaults to `4`.
-
-## Testing
-
-Run unit tests:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+```bash
+SCA_API_KEY=your-api-key
+SCA_API_BASE=https://api.deepseek.com
+SCA_MODEL=deepseek-v4-pro
+SCA_MAX_TOKENS=128000
+SCA_MAX_ACTORS=4
 ```
 
-The eval fixture repositories under `evals/cases/*/repo` intentionally contain failing or incomplete sample projects. They are excluded from normal pytest collection and are executed through the eval runner instead.
+The client uses an OpenAI-compatible chat completions API.
 
-Run eval discovery and report generation without calling the agent:
+## Usage
 
-```powershell
-.\.venv\Scripts\python.exe -m evals.run_evals --dry-run
+Run the CLI in the current repository:
+
+```bash
+sca
 ```
 
-Run one eval with an agent command template:
+Run against another workspace:
 
-```powershell
-.\.venv\Scripts\python.exe -m evals.run_evals --case fix_failing_pytest --agent-command ".\.venv\Scripts\python.exe -m cli.main --workspace {workspace} --prompt ""{prompt}"""
+```bash
+sca --dir C:\path\to\project
 ```
 
-Reports are written to:
+Experimental Web UI:
 
-- `evals/reports/latest.json`
-- `evals/reports/latest.md`
+```bash
+sca-web
+```
+
+## CLI Event Transparency
+
+The CLI renders the runtime event stream:
+
+- streamed model output
+- tool call names and compact arguments
+- tool success/failure summaries
+- Actor task updates
+- context compaction notices
+- token usage summaries
+- errors and final output
+
+The goal is to make each run inspectable instead of treating the agent as a black box.
 
 ## Safety Model
 
-The project uses several guardrails:
+The current safety model is pragmatic rather than magical:
 
-- Actor changes happen in disposable git worktrees before being merged.
-- Filesystem access is bound to the Actor worktree through MCP server configuration.
-- Additional path validation rejects absolute paths outside the active worktree.
-- Tool calls have timeouts and a provider-level circuit breaker.
-- Context storage truncates large tool results to reduce runaway token usage.
+- tool calls are parsed centrally and malformed JSON is handled as recoverable feedback
+- repeated identical tool calls are circuit-broken
+- max-step limits prevent unbounded loops
+- file operations validate workspace boundaries in local tools and MCP providers
+- delegated Actor tasks use isolated git worktrees
+- Planner and Actor roles can receive different tool allowlists
 
-These guardrails reduce risk, but they are not a complete sandbox. Run the agent only against repositories and environments you are comfortable modifying.
+## Development
+
+Run all tests:
+
+```bash
+.\.venv\Scripts\python.exe -m pytest
+```
+
+Compile-check Python modules:
+
+```bash
+.\.venv\Scripts\python.exe -m compileall core cli web tests
+```
+
+CLI smoke check:
+
+```bash
+.\.venv\Scripts\python.exe -m cli.main --help
+```
+
+Prepare local eval task workspaces:
+
+```bash
+sca-eval prepare
+```
+
+Then run `sca --dir tmp/eval-runs/<task_id>` for each task. When finished, check the results:
+
+```bash
+sca-eval check
+```
 
 ## Roadmap
 
-- Structured Actor JSON summaries.
-- Deterministic Planner merge, verify, and retry protocol.
-- More eval cases with pass-rate tracking.
-- Trace persistence and replay.
-- CI-published eval reports.
-- Stronger command policy and audit logging.
+Near-term:
 
-## License
+- Add a structured final report: files touched, tools used, verification run, residual risks.
+- Improve verification workflow around test commands and diff summaries.
+- Keep Web UI experimental unless it becomes useful for trace visualization.
 
-MIT. See `LICENSE`.
+Longer-term:
+
+- Better merge/conflict workflows for Actor diffs.
+- More robust model/provider routing.
+- Persistent run traces for debugging and eval comparison.
+- Human approval gates for destructive or high-risk operations.

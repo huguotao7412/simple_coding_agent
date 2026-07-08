@@ -1,1 +1,1 @@
-"""Evaluation utilities for Simple Coding Agent."""
+"""Local benchmark fixtures and runner for Simple Coding Agent."""

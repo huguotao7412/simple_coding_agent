@@ -26,5 +26,5 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q core cli web evals tests
 
-      - name: Validate eval discovery
-        run: python -m evals.run_evals --dry-run
+      - name: Validate eval fixture preparation
+        run: python -m evals.cli prepare
