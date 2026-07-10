@@ -7,10 +7,11 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 ## What This Project Demonstrates
 
 - A shared ReAct-style agent runtime for Planner and Actor agents.
-- Transparent streaming events for thoughts, tool calls, tool results, errors, token usage, and task updates.
+- One correlated event stream for Planner and nested Actor thoughts, tool calls, results, errors, usage, and task updates.
 - Centralized tool-call parsing with malformed JSON recovery.
 - Runtime safety controls such as max-step limits and repeated-action circuit breaking.
-- Planner/Actor orchestration with role-specific tool access.
+- Run-scoped task state and correlation IDs, without process-global Planner state.
+- Planner/Actor orchestration with execution-time role tool authorization.
 - MCP-backed file and shell tools for isolated Actor execution.
 - Git worktree isolation for delegated Actor tasks.
 - Full Actor patch artifacts under `.sca/artifacts/actor-diffs/`.
@@ -145,7 +146,7 @@ The CLI renders the runtime event stream:
 - tool success/failure summaries
 - Actor task updates
 - context compaction notices
-- token usage summaries
+- whole-run token usage summaries, labeled as provider-reported or estimated
 - errors and final output
 
 The goal is to make each run inspectable instead of treating the agent as a black box.
@@ -163,7 +164,9 @@ The current safety model is pragmatic rather than magical:
 - full Actor diffs are persisted as patch artifacts, while Planner context receives a compact preview
 - MCP server packages are pinned and launched from local `node_modules/.bin` when installed
 - destructive Actor shell commands such as recursive delete and hard reset are blocked before reaching bash MCP
-- Planner and Actor roles can receive different tool allowlists
+- Actor role allowlists are enforced again immediately before local or MCP tool dispatch
+
+Git worktrees provide version-control and working-directory separation, not an operating-system sandbox. Shell processes still run with the permissions of the current user, so only run the agent against repositories and environments you are willing to modify.
 
 ## Development
 
@@ -171,6 +174,12 @@ Run all tests:
 
 ```bash
 .\.venv\Scripts\python.exe -m pytest
+```
+
+Type-check the trusted runtime boundary:
+
+```bash
+.\.venv\Scripts\python.exe -m mypy core/policy.py core/events.py core/run_context.py core/runtime.py core/planner.py core/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py evals/run_evals.py
 ```
 
 Compile-check Python modules:

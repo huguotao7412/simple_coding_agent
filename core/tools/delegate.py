@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from typing import Any, cast
 
 from .base import BaseTool, ToolResult
 from ..state import GlobalState
@@ -20,6 +21,7 @@ from ..git_utils import (
 )
 from ..role_config import ActorRole, get_role_config
 from ..policy import ToolPolicy
+from ..run_context import RunContext
 
 MAX_CONCURRENT_ACTORS = int(os.getenv("SCA_MAX_ACTORS", "4"))
 
@@ -168,22 +170,30 @@ class DelegateTool(BaseTool):
 
     def __init__(
         self,
-        llm_client=None,
+        llm_client: Any | None = None,
         workspace_dir: str = "",
         state: GlobalState | None = None,
-        run_context=None,
-    ):
+        run_context: RunContext | None = None,
+    ) -> None:
         super().__init__()
         self._llm = llm_client
         self._workspace_dir = workspace_dir
         self._state = state
         self._run_context = run_context
 
-    async def execute(self, subtasks: list[dict], **kwargs) -> ToolResult:
+    async def execute(self, **kwargs: Any) -> ToolResult:
         """Dispatch subtasks to Actors concurrently with asyncio gate."""
         from ..agent import ActorAgent
         from ..context import ContextManager
+        if self._llm is None:
+            return ToolResult.fail("Delegate tool is not configured with an LLM client")
+        llm = self._llm
         state = self._state or GlobalState.get()
+
+        raw_subtasks = kwargs.pop("subtasks", [])
+        if not isinstance(raw_subtasks, list):
+            return ToolResult.fail("'subtasks' must be a list")
+        subtasks = cast(list[dict[str, Any]], raw_subtasks)
 
         # Resolve the latest workspace_dir, falling back to the constructor value.
         current_workspace = kwargs.get("workspace_dir", self._workspace_dir)
@@ -210,7 +220,7 @@ class DelegateTool(BaseTool):
 
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_ACTORS)
 
-        async def run_one(subtask: dict) -> dict:
+        async def run_one(subtask: dict[str, Any]) -> dict[str, Any]:
             tid = subtask.get("task_id", "")
             if not tid:
                 return {"task_id": "unknown", "status": "failed", "error": "LLM failed to provide task_id"}
@@ -321,12 +331,12 @@ class DelegateTool(BaseTool):
                     max_steps = subtask.get("max_steps", role_cfg.default_max_steps)
                     actor_ctx = ContextManager(
                         system_prompt=role_cfg.system_prompt,
-                        max_tokens=self._llm.max_tokens,
+                        max_tokens=llm.max_tokens,
                     )
                     actor_ctx.add_user_message(injected_context)
 
                     actor = ActorAgent(
-                        llm_client=self._llm,
+                        llm_client=llm,
                         context_manager=actor_ctx,
                         tools=None,
                         tool_provider=tool_provider,
@@ -406,13 +416,13 @@ class DelegateTool(BaseTool):
         # Failed tasks DO NOT unlock their dependents — they are cascaded as "blocked".
         completed: set[str] = set()       # task_ids that succeeded (status == "done")
         failed: set[str] = set()          # task_ids that failed (status != "done")
-        all_results: list[dict] = []
+        all_results: list[dict[str, Any]] = []
         remaining = {st["task_id"]: st for st in subtasks}
 
         while remaining:
             # Find tasks whose dependencies are all completed (not just done OR failed,
             # but only "done" — a failed dependency blocks downstream tasks)
-            ready: dict[str, dict] = {}
+            ready: dict[str, dict[str, Any]] = {}
             for tid, st in remaining.items():
                 node = state.task_tree.get(tid)
                 deps = set(node.dependencies) if node else set()
@@ -449,10 +459,10 @@ class DelegateTool(BaseTool):
                 *[run_one(st) for st in ready_items],
                 return_exceptions=True,
             )
-            batch_results: list[dict] = []
+            batch_results: list[dict[str, Any]] = []
             for st, result in zip(ready_items, raw_results):
                 tid = st["task_id"]
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException):
                     logger.error("run_one crashed for %s: %s", tid, result)
                     batch_results.append({
                         "task_id": tid,

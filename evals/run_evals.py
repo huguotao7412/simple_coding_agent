@@ -12,7 +12,9 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, cast
+
+from core.events import AgentEvent
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -71,7 +73,10 @@ class EvalComparison:
 
 
 def load_tasks(path: Path = TASKS_PATH) -> list[dict[str, Any]]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+        raise ValueError(f"invalid eval task file: {path}")
+    return cast(list[dict[str, Any]], payload)
 
 
 def evaluate_task(task: dict[str, Any], candidate_root: Path) -> EvalResult:
@@ -376,7 +381,7 @@ def write_eval_comparison(paths: list[Path], output_path: Path) -> Path:
     return output_path
 
 
-def _event_to_trace_record(event) -> dict[str, Any]:
+def _event_to_trace_record(event: AgentEvent) -> dict[str, Any]:
     record: dict[str, Any] = {
         "type": event.type,
         "content": event.content,
@@ -461,7 +466,10 @@ def _iter_children(path: Path) -> list[Path]:
 def _load_eval_results_payload(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"missing eval results file: {path}")
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw_payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw_payload, dict):
+        raise ValueError(f"invalid eval results file: {path}")
+    payload = cast(dict[str, Any], raw_payload)
     if "summary" not in payload or "tasks" not in payload:
         raise ValueError(f"invalid eval results file: {path}")
     return payload
@@ -528,7 +536,11 @@ def copy_fixtures(destination: Path) -> None:
 def _remove_tree(path: Path) -> None:
     """Remove a tree that may contain read-only git objects on Windows."""
 
-    def on_error(func, failed_path, exc_info):
+    def on_error(
+        func: Callable[[str], Any],
+        failed_path: str,
+        exc_info: Any,
+    ) -> None:
         try:
             os.chmod(failed_path, stat.S_IWRITE)
             func(failed_path)
@@ -611,7 +623,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.run_agent:
-        results = asyncio.run(
+        run_results = asyncio.run(
             run_eval_suite(
                 candidate_root=args.candidate_root,
                 model=args.model,
@@ -619,12 +631,12 @@ def main(argv: list[str] | None = None) -> int:
                 prepare=True,
             )
         )
-        print_run_results(results, args.results_path)
-        return 0 if all(result.passed for result in results) else 1
+        print_run_results(run_results, args.results_path)
+        return 0 if all(result.passed for result in run_results) else 1
 
-    results = evaluate_all(args.candidate_root)
-    print_results(results)
-    return 0 if all(result.passed for result in results) else 1
+    check_results = evaluate_all(args.candidate_root)
+    print_results(check_results)
+    return 0 if all(result.passed for result in check_results) else 1
 
 
 if __name__ == "__main__":

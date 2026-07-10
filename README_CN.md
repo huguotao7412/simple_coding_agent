@@ -7,10 +7,11 @@ Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重
 ## 项目展示重点
 
 - Planner 和 Actor 共享同一套 ReAct runtime。
-- 透明事件流：模型输出、工具调用、工具结果、错误、token 使用和任务状态更新。
+- Planner 与嵌套 Actor 共用关联事件流：模型输出、工具调用、工具结果、错误、token 使用和任务状态更新。
 - 集中式 tool-call JSON 解析，并能把格式错误作为可恢复反馈。
 - 运行时安全控制：最大步数、重复动作熔断、上下文压缩。
-- Planner/Actor 编排，以及基于角色的工具 allowlist。
+- Run 级任务状态和关联 ID，不再依赖进程级 Planner 全局状态。
+- Planner/Actor 编排，以及在执行入口强制校验的角色工具 allowlist。
 - MCP 文件和 shell 工具集成，并绑定到 Actor worktree。
 - 使用 git worktree 隔离委派给 Actor 的子任务。
 - 依赖任务的 diff 会作为下游 Actor 的 baseline，Verifier 能验证真实 Coder 改动。
@@ -178,7 +179,7 @@ CLI 会渲染 runtime 事件流：
 - 工具成功/失败摘要
 - Actor 任务更新
 - 上下文压缩提示
-- token 使用统计
+- 整个 Planner/Actor 执行树的 token 统计，并标注 provider 原始值或本地估算值
 - 错误和最终输出
 
 eval runner 会把同一条事件流写成 JSONL trace，方便调试、复盘和展示。
@@ -193,9 +194,9 @@ eval runner 会把同一条事件流写成 JSONL trace，方便调试、复盘�
 - 本地工具和 MCP provider 都会校验文件访问边界。
 - Actor 任务使用独立 git worktree。
 - 下游 Actor 会接收上游 diff baseline，避免 Verifier 验证空代码。
-- Planner 和 Actor 可以使用不同工具 allowlist。
+- Actor 角色 allowlist 会在本地或 MCP 工具真正执行前再次强制校验。
 
-这些机制能降低风险，但不是完整沙箱。请只在你愿意让 agent 修改的仓库和环境中运行。
+Git worktree 提供版本控制和默认工作目录隔离，不是操作系统沙箱。Actor 子进程仍拥有当前用户的系统权限。这些机制能降低风险，但不能替代进程级沙箱；请只在你愿意让 agent 修改的仓库和环境中运行。
 
 ## 开发
 
@@ -203,6 +204,12 @@ eval runner 会把同一条事件流写成 JSONL trace，方便调试、复盘�
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
+```
+
+对可信运行时边界执行类型检查：
+
+```powershell
+.\.venv\Scripts\python.exe -m mypy core/policy.py core/events.py core/run_context.py core/runtime.py core/planner.py core/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py evals/run_evals.py
 ```
 
 编译检查：

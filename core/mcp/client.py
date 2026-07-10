@@ -20,8 +20,8 @@ from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from ..tools import ACTOR_TOOLS
-from ..tools.base import ToolResult
+from ..tools import ListDirTool, ReadOutlineTool, SearchCodebaseTool
+from ..tools.base import BaseTool, ToolResult
 from ..policy import ToolPolicy
 from ..events import AgentEvent
 from ..run_context import RunContext
@@ -71,8 +71,13 @@ class MCPToolProvider:
         self._sessions: dict[str, ClientSession] = {}
         self._stdio_ctxs: list[Any] = []
         self._tool_routing: dict[str, str] = {}
-        self._tool_schemas: list[dict] = []
-        self._local_tools = {tool_cls.name: tool_cls() for tool_cls in ACTOR_TOOLS}
+        self._tool_schemas: list[dict[str, Any]] = []
+        local_tools: list[BaseTool] = [
+            SearchCodebaseTool(),
+            ReadOutlineTool(),
+            ListDirTool(),
+        ]
+        self._local_tools = {tool.name: tool for tool in local_tools}
         self._failure_count: int = 0
         self._circuit_open: bool = False
         self._worktree_path: str = ""
@@ -139,7 +144,7 @@ class MCPToolProvider:
 
         await self._build_routing_table()
 
-    async def list_tools(self) -> list[dict]:
+    async def list_tools(self) -> list[dict[str, Any]]:
         """Return cached tool schemas in OpenAI function-calling format."""
         if not self._tool_schemas:
             await self._build_routing_table()
@@ -151,7 +156,7 @@ class MCPToolProvider:
             if tool.get("function", {}).get("name") in self._policy.allowed_tools
         ]
 
-    async def call_tool(self, name: str, args: dict) -> ToolResult:
+    async def call_tool(self, name: str, args: dict[str, Any]) -> ToolResult:
         """Route a tool call to the correct MCP server and return the result."""
         decision = self._policy.authorize(name)
         if not decision.allowed:
@@ -248,7 +253,9 @@ class MCPToolProvider:
 
     async def _build_routing_table(self) -> None:
         """Fetch tools from connected servers and build routing plus schema cache."""
-        all_schemas: list[dict] = [tool.schema for tool in self._local_tools.values()]
+        all_schemas: list[dict[str, Any]] = [
+            tool.schema for tool in self._local_tools.values()
+        ]
 
         for server_name, session in self._sessions.items():
             try:
@@ -315,7 +322,7 @@ def _node_bin_command(binary_name: str, package_spec: str) -> list[str]:
     return ["npx", "--no-install", package_spec]
 
 
-def _extract_shell_command(args: dict) -> str:
+def _extract_shell_command(args: dict[str, Any]) -> str:
     for key in ("command", "cmd", "script"):
         value = args.get(key)
         if isinstance(value, str):

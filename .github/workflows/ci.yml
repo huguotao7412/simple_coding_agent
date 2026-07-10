@@ -23,6 +23,14 @@ jobs:
       - name: Run unit tests
         run: python -m pytest -q
 
+      - name: Type check trusted runtime modules
+        run: >-
+          python -m mypy
+          core/policy.py core/events.py core/run_context.py core/runtime.py
+          core/planner.py core/agent.py core/mcp/client.py
+          core/tools/update_state.py core/tools/delegate.py
+          cli/report.py evals/run_evals.py
+
       - name: Compile Python sources
         run: python -m compileall -q core cli web evals tests
 

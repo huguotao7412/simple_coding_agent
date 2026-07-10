@@ -17,6 +17,7 @@ sca-web = "web.cli:main"
 
 [project.optional-dependencies]
 dev = [
+    "mypy>=1.10",
     "pytest>=8",
     "pytest-asyncio>=0.25",
 ]
@@ -30,6 +31,7 @@ include = ["cli*", "core*", "evals*", "web*"]
 [tool.mypy]
 strict = true
 python_version = "3.12"
+follow_imports = "silent"
 exclude = [".venv", ".worktrees", "__pycache__"]
 ignore_missing_imports = true
 

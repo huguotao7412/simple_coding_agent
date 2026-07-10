@@ -31,7 +31,7 @@ class GlobalState:
     _instance: ClassVar[GlobalState | None] = None
     _instance_lock: ClassVar[threading.Lock] = threading.Lock()
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.task_tree: dict[str, TaskNode] = {}
         self.change_log: list[ChangeRecord] = []
         self._last_consumed: int = 0

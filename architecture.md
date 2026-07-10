@@ -17,7 +17,7 @@ User prompt
 
 `AgentRuntime` is the shared ReAct loop. Planner and Actor agents both use it, so step limits, tool-call parsing, malformed JSON recovery, repeated-action circuit breaking, context compression, token reporting, and event emission live in one place.
 
-The Planner owns orchestration. It decomposes work, records tasks in `GlobalState`, delegates isolated subtasks, receives Actor summaries and diffs, applies selected patches, and synthesizes the final response.
+The Planner owns orchestration. Each Planner receives a `RunContext` with an independent task ledger, run ID, event queue, and usage accumulator. It decomposes work, delegates isolated subtasks, receives Actor summaries and diffs, applies selected patches, and synthesizes the final response.
 
 Actors own execution. Each Actor receives one concrete task plus scoped context, runs in its own git worktree, and reports a summary plus an extracted diff. The full extracted diff is persisted as a patch artifact, while compact previews and file lists are sent back through Planner-visible state.
 
@@ -28,7 +28,7 @@ Actors own execution. Each Actor receives one concrete task plus scoped context,
 3. For code changes, it creates coder tasks and verifier tasks.
 4. `delegate` creates one worktree per Actor.
 5. Dependency diffs are applied to dependent Actor worktrees as a committed baseline.
-6. The Actor runs with role-specific prompts and tool allowlists.
+6. The Actor runs with role-specific prompts and an execution-time enforced tool policy.
 7. The Actor worktree diff is extracted with `git diff --cached --binary`.
 8. The diff is stored under `.sca/artifacts/actor-diffs/`, and the task state records the artifact path plus modified files.
 9. The Planner reviews and applies successful diffs to the main workspace.
@@ -59,11 +59,13 @@ Actor tools are served through MCP providers bound to the Actor worktree:
 - bash MCP server for shell execution
 - local helper tools for code search, outlines, and directory listing
 
-The provider sets the MCP subprocess current working directory to the Actor worktree and performs defense-in-depth path validation for absolute filesystem paths. Actor roles receive different allowlists:
+The provider sets the MCP subprocess current working directory to the Actor worktree and performs defense-in-depth path validation for absolute filesystem paths. Actor roles receive different allowlists. The allowlist filters schemas for model guidance and is checked again inside `call_tool()` before local or MCP dispatch, so a directly constructed hidden tool call is denied.
 
 MCP server packages are pinned in `package.json`. At runtime the provider prefers local `node_modules/.bin` executables and falls back to `npx --no-install <package>@<version>`, avoiding unpinned runtime downloads.
 
 Before routing commands to bash MCP, the provider rejects destructive shell patterns such as recursive delete, `git reset --hard`, and `git clean -fd`. These failures are returned as ordinary tool results so the Actor can report the blocked operation instead of mutating the workspace.
+
+A worktree is not an OS sandbox. It isolates branches, diffs, and default working directories, but Actor subprocesses still have the current user's operating-system permissions. The command and path policies are defense-in-depth controls, not a claim of complete process containment.
 
 - Scout: read-only exploration
 - Coder: implementation tools
@@ -75,11 +77,14 @@ The runtime emits `AgentEvent` records for:
 
 - streamed thought/content tokens
 - tool calls and tool results
+- policy denials
 - Actor task updates
 - context compaction
-- token usage
+- per-call model usage and whole-run token totals
 - errors
 - final completion
+
+Every event carries a `run_id` plus task/Actor correlation metadata. Planner and nested Actors publish to the same run-scoped queue, so the CLI and eval trace see the full execution tree. Usage prefers provider-reported counts; when a provider omits usage, the locally counted fallback is persisted with `usage_estimated=true`.
 
 The CLI uses this stream for transparent terminal rendering. The eval runner persists the same stream as JSONL at:
 

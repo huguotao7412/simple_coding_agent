@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from .tools.base import ToolResult
+if TYPE_CHECKING:
+    from .tools.base import ToolResult
 
 
 @dataclass
@@ -12,7 +13,7 @@ class AgentEvent:
     type: str
     content: str = ""
     tool_name: str | None = None
-    tool_args: dict | None = None
+    tool_args: dict[str, Any] | None = None
     tool_result: ToolResult | None = None
     token: str = ""
     actor_id: str = ""

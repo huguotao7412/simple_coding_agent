@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from .base import BaseTool, ToolResult
 from ..state import GlobalState
 
@@ -46,7 +48,8 @@ class UpdateStateTool(BaseTool):
         super().__init__()
         self._state = state
 
-    async def execute(self, action: str, **kwargs) -> ToolResult:
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        action = str(kwargs.pop("action", ""))
         state = self._state or GlobalState.get()
 
         if action == "add_task":

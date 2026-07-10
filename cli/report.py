@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from core.runtime import AgentEvent
+from core.events import AgentEvent
 
 
 FILE_ARG_KEYS = ("path", "file_path", "filepath", "source", "destination")

@@ -6,7 +6,7 @@ import asyncio
 from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from .context import ContextManager
 from .events import AgentEvent
@@ -33,11 +33,11 @@ WORKSPACE_AWARE_TOOLS = {
 @dataclass
 class ParsedToolCall:
     tool_name: str
-    args: dict
+    args: dict[str, Any]
     error: str | None = None
 
 
-def parse_tool_call(tc: dict) -> ParsedToolCall:
+def parse_tool_call(tc: dict[str, Any]) -> ParsedToolCall:
     """Parse an OpenAI-style tool call into a tool name and object args."""
     function = tc.get("function", {})
     tool_name = function.get("name", "")
@@ -63,7 +63,7 @@ def parse_tool_call(tc: dict) -> ParsedToolCall:
     if not isinstance(args, dict):
         args = {}
 
-    return ParsedToolCall(tool_name=tool_name, args=args)
+    return ParsedToolCall(tool_name=tool_name, args=cast(dict[str, Any], args))
 
 
 class AgentRuntime:
@@ -78,7 +78,7 @@ class AgentRuntime:
         max_steps: int = 30,
         tool_provider: Any | None = None,
         actor_id: str = "",
-        dynamic_context_builder: Callable[[], dict] | None = None,
+        dynamic_context_builder: Callable[[], dict[str, Any]] | None = None,
         after_tool_call: Callable[[str, ToolResult], Awaitable[list[AgentEvent]]] | None = None,
         emit_token_stats: bool = False,
         run_context: RunContext | None = None,
@@ -97,17 +97,20 @@ class AgentRuntime:
         self._recent_actions: deque[int] = deque(maxlen=10)
         self.last_result_success = True
 
-    async def _list_tool_schemas(self) -> list[dict]:
+    async def _list_tool_schemas(self) -> list[dict[str, Any]]:
         if self.tool_provider is not None:
-            return await self.tool_provider.list_tools()
+            return cast(list[dict[str, Any]], await self.tool_provider.list_tools())
         return [t.schema for t in self.tools_by_name.values()]
 
-    def _payload_messages(self) -> list[dict]:
+    def _payload_messages(self) -> list[dict[str, Any]]:
         if self.dynamic_context_builder is None:
             return self.ctx.messages
         return self.ctx.messages + [self.dynamic_context_builder()]
 
-    async def _execute_single_tool(self, tc: dict) -> tuple[str, dict, ToolResult, bool]:
+    async def _execute_single_tool(
+        self,
+        tc: dict[str, Any],
+    ) -> tuple[str, dict[str, Any], ToolResult, bool]:
         parsed = parse_tool_call(tc)
         tool_name = parsed.tool_name
         args = parsed.args
@@ -187,7 +190,11 @@ class AgentRuntime:
             usage_estimated=usage.estimated,
         ))
 
-    async def run(self, user_input: str, on_token=None) -> str:
+    async def run(
+        self,
+        user_input: str,
+        on_token: Callable[[str], None] | None = None,
+    ) -> str:
         final_content = ""
         async for event in self.run_stream(user_input):
             if event.type == "thought" and on_token is not None:

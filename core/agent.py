@@ -10,7 +10,8 @@ from typing import Any, Literal
 
 from .context import ContextManager
 from .llm import LLMClient
-from .runtime import AgentEvent, AgentRuntime
+from .events import AgentEvent
+from .runtime import AgentRuntime
 from .run_context import RunContext
 from .tools.base import BaseTool
 
@@ -126,7 +127,7 @@ class ActorAgent:
         self.tools_by_name = {t.name: t for t in tools} if tools else {}
         self.ctx = context_manager
 
-    def _build_dynamic_context_msg(self) -> dict:
+    def _build_dynamic_context_msg(self) -> dict[str, str]:
         content = (
             f"<workspace_context>\n{get_workspace_tree(self.workspace_dir)}\n</workspace_context>\n"
             f"<environment_context>\n{get_runtime_env()}\n</environment_context>"
