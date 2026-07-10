@@ -166,16 +166,24 @@ class DelegateTool(BaseTool):
     }
     required_params = ["subtasks"]
 
-    def __init__(self, llm_client=None, workspace_dir: str = ""):
+    def __init__(
+        self,
+        llm_client=None,
+        workspace_dir: str = "",
+        state: GlobalState | None = None,
+        run_context=None,
+    ):
         super().__init__()
         self._llm = llm_client
         self._workspace_dir = workspace_dir
+        self._state = state
+        self._run_context = run_context
 
     async def execute(self, subtasks: list[dict], **kwargs) -> ToolResult:
         """Dispatch subtasks to Actors concurrently with asyncio gate."""
         from ..agent import ActorAgent
         from ..context import ContextManager
-        state = GlobalState.get()
+        state = self._state or GlobalState.get()
 
         # Resolve the latest workspace_dir, falling back to the constructor value.
         current_workspace = kwargs.get("workspace_dir", self._workspace_dir)

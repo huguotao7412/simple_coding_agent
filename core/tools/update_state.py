@@ -42,8 +42,12 @@ class UpdateStateTool(BaseTool):
     }
     required_params = ["action"]
 
+    def __init__(self, state: GlobalState | None = None):
+        super().__init__()
+        self._state = state
+
     async def execute(self, action: str, **kwargs) -> ToolResult:
-        state = GlobalState.get()
+        state = self._state or GlobalState.get()
 
         if action == "add_task":
             description = kwargs.get("description", "")

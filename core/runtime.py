@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .context import ContextManager
+from .events import AgentEvent
 from .exceptions import LLMAPIError
 from .llm import LLMClient
 from .tools.base import BaseTool, ToolResult
@@ -33,17 +34,6 @@ class ParsedToolCall:
     tool_name: str
     args: dict
     error: str | None = None
-
-
-@dataclass
-class AgentEvent:
-    type: str
-    content: str = ""
-    tool_name: str | None = None
-    tool_args: dict | None = None
-    tool_result: ToolResult | None = None
-    token: str = ""
-    actor_id: str = ""
 
 
 def parse_tool_call(tc: dict) -> ParsedToolCall:

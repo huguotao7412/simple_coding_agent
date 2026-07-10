@@ -25,11 +25,9 @@ def build_planner(workspace_dir: str, model: str | None = None):
     from core.context import ContextManager
     from core.llm import LLMClient
     from core.planner import Planner
-    from core.state import GlobalState
+    from core.run_context import RunContext
     from core.system_prompt import PLANNER_SYSTEM_PROMPT
     from core.tools import PLANNER_TOOLS
-
-    GlobalState.reset()
 
     llm = LLMClient(
         api_key=api_key,
@@ -44,6 +42,7 @@ def build_planner(workspace_dir: str, model: str | None = None):
         context_manager=ctx,
         tools=tools,
         workspace_dir=workspace_dir,
+        run_context=RunContext.create(),
     )
 
 

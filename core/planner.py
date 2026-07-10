@@ -6,7 +6,7 @@ from collections.abc import AsyncGenerator, Callable
 from .context import ContextManager
 from .llm import LLMClient
 from .runtime import AgentEvent, AgentRuntime
-from .state import GlobalState
+from .run_context import RunContext
 from .tools.base import BaseTool, ToolResult
 
 
@@ -20,17 +20,23 @@ class Planner:
         tools: list[BaseTool],
         workspace_dir: str,
         max_steps: int = 50,
+        run_context: RunContext | None = None,
     ):
         self.llm = llm_client
         self.workspace_dir = workspace_dir
         self.max_steps = max_steps
         self.ctx = context_manager
-        self.state = GlobalState.get()
+        self.run_context = run_context or RunContext.create()
+        self.state = self.run_context.state
 
         for tool in tools:
             if tool.name == "delegate":
                 tool._llm = self.llm
                 tool._workspace_dir = self.workspace_dir
+                tool._state = self.state
+                tool._run_context = self.run_context
+            elif tool.name == "update_state":
+                tool._state = self.state
 
         self.tools_by_name = {tool.name: tool for tool in tools}
 
