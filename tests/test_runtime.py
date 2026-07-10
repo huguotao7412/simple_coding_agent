@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from core.context import ContextManager
+from core.events import AgentEvent
 from core.agent import ActorAgent
 from core.planner import Planner
 from core.runtime import AgentRuntime, parse_tool_call
@@ -58,6 +59,26 @@ class FakeDelegateTool(BaseTool):
 
     async def execute(self, **kwargs):
         return ToolResult.ok("delegated")
+
+
+class FakeNestedEventTool(BaseTool):
+    name = "delegate"
+    description = "Emit one nested Actor event while the parent tool is running."
+    parameters = {}
+    required_params = []
+
+    def __init__(self):
+        super().__init__()
+        self._run_context = None
+
+    async def execute(self, **kwargs):
+        await self._run_context.emit(AgentEvent(
+            type="tool_call",
+            tool_name="child_read",
+            actor_id="task_child",
+            task_id="task_child",
+        ))
+        return ToolResult.ok("nested event emitted")
 
 
 def _tool_call(arguments: str) -> dict:
@@ -400,3 +421,33 @@ async def test_planner_stream_preserves_delegate_actor_update_and_token_stats():
     token_stats = [event for event in events if event.type == "token_stats"][-1]
     assert '"prompt_tokens": 15' in token_stats.content
     assert '"completion_tokens": 5' in token_stats.content
+
+
+@pytest.mark.asyncio
+async def test_planner_stream_includes_nested_actor_events_once():
+    delegate_call = _named_tool_call("delegate", "{}", call_id="call_delegate")
+    llm = FakeLLM([
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [delegate_call],
+        },
+        {"role": "assistant", "content": "planner finished"},
+    ])
+    nested_tool = FakeNestedEventTool()
+    planner = Planner(
+        llm_client=llm,
+        context_manager=ContextManager(system_prompt="system"),
+        tools=[nested_tool],
+        workspace_dir=".",
+        max_steps=3,
+    )
+
+    events = [event async for event in planner.run_stream("hello")]
+    tool_calls = [event for event in events if event.type == "tool_call"]
+
+    assert nested_tool._run_context is planner.run_context
+    assert [event.actor_id for event in tool_calls] == ["", "task_child"]
+    assert [event.tool_name for event in tool_calls] == ["delegate", "child_read"]
+    assert len([event for event in events if event.type == "done"]) == 1
+    assert {event.run_id for event in events} == {planner.run_context.run_id}

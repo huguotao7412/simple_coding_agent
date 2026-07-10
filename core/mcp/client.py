@@ -23,6 +23,8 @@ from mcp.client.stdio import stdio_client
 from ..tools import ACTOR_TOOLS
 from ..tools.base import ToolResult
 from ..policy import ToolPolicy
+from ..events import AgentEvent
+from ..run_context import RunContext
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,11 @@ class MCPToolProvider:
     worktree, fetches tool schemas, routes calls, and shuts everything down.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        run_context: RunContext | None = None,
+        actor_id: str = "",
+    ) -> None:
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._sessions: dict[str, ClientSession] = {}
         self._stdio_ctxs: list[Any] = []
@@ -71,6 +77,8 @@ class MCPToolProvider:
         self._circuit_open: bool = False
         self._worktree_path: str = ""
         self._policy = ToolPolicy.for_role("legacy", None)
+        self._run_context = run_context
+        self._actor_id = actor_id
 
     def set_policy(self, policy: ToolPolicy) -> None:
         """Set the execution policy used for both schemas and dispatch."""
@@ -147,6 +155,14 @@ class MCPToolProvider:
         """Route a tool call to the correct MCP server and return the result."""
         decision = self._policy.authorize(name)
         if not decision.allowed:
+            if self._run_context is not None:
+                await self._run_context.emit(AgentEvent(
+                    type="policy_denied",
+                    content=decision.reason,
+                    tool_name=name,
+                    actor_id=self._actor_id,
+                    task_id=self._actor_id,
+                ))
             return ToolResult.fail(decision.reason)
 
         if self._circuit_open:

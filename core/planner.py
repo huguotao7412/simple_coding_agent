@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncGenerator, Callable
 
@@ -68,11 +69,34 @@ class Planner:
         user_input: str,
         on_token: Callable[[str], None] | None = None,
     ) -> str:
-        return await self._runtime().run(user_input, on_token=on_token)
+        final_content = ""
+        async for event in self.run_stream(user_input):
+            if event.type == "thought" and on_token is not None:
+                on_token(event.token)
+            elif event.type in {"done", "error"}:
+                final_content = event.content
+        return final_content
 
     async def run_stream(
         self,
         user_input: str,
     ) -> AsyncGenerator[AgentEvent, None]:
-        async for event in self._runtime(emit_token_stats=True).run_stream(user_input):
-            yield event
+        async def produce() -> None:
+            async for _ in self._runtime(emit_token_stats=True).run_stream(user_input):
+                pass
+
+        producer = asyncio.create_task(produce())
+        try:
+            while not producer.done() or not self.run_context.events.empty():
+                try:
+                    event = await asyncio.wait_for(
+                        self.run_context.events.get(),
+                        timeout=0.05,
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                yield event
+            await producer
+        finally:
+            if not producer.done():
+                producer.cancel()

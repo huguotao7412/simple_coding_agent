@@ -282,7 +282,10 @@ class DelegateTool(BaseTool):
 
                 # --- 4. Start MCP Servers for this Actor ---
                 from ..mcp import MCPToolProvider  # lazy import to avoid circular dep
-                tool_provider = MCPToolProvider()
+                tool_provider = MCPToolProvider(
+                    run_context=self._run_context,
+                    actor_id=tid,
+                )
                 try:
                     await tool_provider.start(
                         wt_path,
@@ -331,6 +334,7 @@ class DelegateTool(BaseTool):
                         actor_id=tid,
                         task_context=description,
                         max_steps=max_steps,
+                        run_context=self._run_context,
                     )
 
                     # --- 6. Execute Actor ---

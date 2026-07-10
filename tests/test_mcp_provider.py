@@ -7,6 +7,7 @@ import pytest
 
 from core.mcp.client import MCPToolProvider, is_destructive_shell_command
 from core.policy import ToolPolicy
+from core.run_context import RunContext
 
 
 @dataclass
@@ -132,7 +133,8 @@ async def test_mcp_provider_blocks_destructive_bash_command(tmp_path):
 
 @pytest.mark.asyncio
 async def test_mcp_provider_denies_tool_not_in_allowlist(tmp_path):
-    provider = MCPToolProvider()
+    run_context = RunContext.create(run_id="run_policy")
+    provider = MCPToolProvider(run_context=run_context, actor_id="task_scout")
     provider._worktree_path = str(tmp_path)
     provider._tool_routing["run"] = "bash"
     provider._sessions["bash"] = FakeSession(None, None)
@@ -142,6 +144,11 @@ async def test_mcp_provider_denies_tool_not_in_allowlist(tmp_path):
 
     assert not result.success
     assert "not permitted for role 'scout'" in (result.error or "")
+    event = await run_context.events.get()
+    assert event.type == "policy_denied"
+    assert event.tool_name == "run"
+    assert event.actor_id == "task_scout"
+    assert event.run_id == "run_policy"
 
 
 @pytest.mark.asyncio
