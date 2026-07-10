@@ -172,6 +172,21 @@ class AgentRuntime:
         await self.run_context.emit(event)
         return event
 
+    async def _token_stats_event(self) -> AgentEvent:
+        usage = await self.run_context.usage_snapshot()
+        return await self._emit(AgentEvent(
+            type="token_stats",
+            content=json.dumps({
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "estimated": usage.estimated,
+            }),
+            actor_id=self.actor_id,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            usage_estimated=usage.estimated,
+        ))
+
     async def run(self, user_input: str, on_token=None) -> str:
         final_content = ""
         async for event in self.run_stream(user_input):
@@ -186,8 +201,6 @@ class AgentRuntime:
         tool_schemas = await self._list_tool_schemas()
 
         step_count = 0
-        total_prompt_tokens = 0
-        total_completion_tokens = 0
         while True:
             step_count += 1
             if step_count > self.max_steps:
@@ -195,14 +208,7 @@ class AgentRuntime:
                 self.last_result_success = False
                 self.ctx.add_assistant_message(content=error_msg)
                 if self.emit_token_stats:
-                    yield await self._emit(AgentEvent(
-                        type="token_stats",
-                        content=json.dumps({
-                            "prompt_tokens": total_prompt_tokens,
-                            "completion_tokens": total_completion_tokens,
-                        }),
-                        actor_id=self.actor_id,
-                    ))
+                    yield await self._token_stats_event()
                 yield await self._emit(AgentEvent(type="error", content=error_msg, actor_id=self.actor_id))
                 return
 
@@ -245,21 +251,32 @@ class AgentRuntime:
             try:
                 response = await chat_task
                 usage = response.get("_usage", {})
-                total_prompt_tokens += usage.get("prompt_tokens", 0)
-                total_completion_tokens += usage.get("completion_tokens", 0)
+                prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+                completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+                usage_estimated = bool(usage.get("estimated", True))
+                await self.run_context.record_usage(
+                    prompt_tokens,
+                    completion_tokens,
+                    usage_estimated,
+                )
+                yield await self._emit(AgentEvent(
+                    type="model_usage",
+                    content=json.dumps({
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "estimated": usage_estimated,
+                    }),
+                    actor_id=self.actor_id,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    usage_estimated=usage_estimated,
+                ))
             except LLMAPIError as e:
                 error_msg = str(e)
                 self.last_result_success = False
                 self.ctx.add_assistant_message(content=error_msg)
                 if self.emit_token_stats:
-                    yield await self._emit(AgentEvent(
-                        type="token_stats",
-                        content=json.dumps({
-                            "prompt_tokens": total_prompt_tokens,
-                            "completion_tokens": total_completion_tokens,
-                        }),
-                        actor_id=self.actor_id,
-                    ))
+                    yield await self._token_stats_event()
                 yield await self._emit(AgentEvent(type="error", content=error_msg, actor_id=self.actor_id))
                 return
 
@@ -272,14 +289,7 @@ class AgentRuntime:
                 )
                 self.last_result_success = True
                 if self.emit_token_stats:
-                    yield await self._emit(AgentEvent(
-                        type="token_stats",
-                        content=json.dumps({
-                            "prompt_tokens": total_prompt_tokens,
-                            "completion_tokens": total_completion_tokens,
-                        }),
-                        actor_id=self.actor_id,
-                    ))
+                    yield await self._token_stats_event()
                 yield await self._emit(AgentEvent(type="done", content=content, actor_id=self.actor_id))
                 return
 

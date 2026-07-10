@@ -52,5 +52,9 @@ class RunContext:
             self.usage.estimated = self.usage.estimated or estimated
             return replace(self.usage)
 
+    async def usage_snapshot(self) -> UsageTotals:
+        async with self._usage_lock:
+            return replace(self.usage)
+
 
 __all__ = ["RunContext", "UsageTotals"]

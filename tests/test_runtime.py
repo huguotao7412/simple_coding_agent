@@ -451,3 +451,55 @@ async def test_planner_stream_includes_nested_actor_events_once():
     assert [event.tool_name for event in tool_calls] == ["delegate", "child_read"]
     assert len([event for event in events if event.type == "done"]) == 1
     assert {event.run_id for event in events} == {planner.run_context.run_id}
+
+
+@pytest.mark.asyncio
+async def test_shared_run_usage_includes_actor_and_root_model_calls():
+    run_context = RunContext.create(run_id="run_usage")
+    actor = ActorAgent(
+        llm_client=FakeLLM([{
+            "role": "assistant",
+            "content": "actor finished",
+            "_usage": {
+                "prompt_tokens": 7,
+                "completion_tokens": 3,
+                "estimated": True,
+            },
+        }]),
+        context_manager=ContextManager(system_prompt="actor"),
+        tools=[],
+        workspace_dir=".",
+        actor_id="task_actor",
+        run_context=run_context,
+    )
+    await actor.run("work")
+
+    root = AgentRuntime(
+        llm_client=FakeLLM([{
+            "role": "assistant",
+            "content": "planner finished",
+            "_usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 2,
+                "estimated": False,
+            },
+        }]),
+        context_manager=ContextManager(system_prompt="planner"),
+        tools=[],
+        workspace_dir=".",
+        run_context=run_context,
+        emit_token_stats=True,
+    )
+
+    root_events = [event async for event in root.run_stream("finish")]
+    stats = [event for event in root_events if event.type == "token_stats"][-1]
+    published = []
+    while not run_context.events.empty():
+        published.append(await run_context.events.get())
+
+    assert stats.prompt_tokens == 12
+    assert stats.completion_tokens == 5
+    assert stats.usage_estimated is True
+    usage_events = [event for event in published if event.type == "model_usage"]
+    assert [event.actor_id for event in usage_events] == ["task_actor", ""]
+    assert sum(event.prompt_tokens for event in usage_events) == 12

@@ -37,6 +37,22 @@ def test_run_report_tracks_tools_files_tokens_and_errors():
     assert report.final_output == "final"
 
 
+def test_run_report_prefers_structured_token_stats():
+    report = RunReport()
+
+    report.observe(AgentEvent(
+        type="token_stats",
+        content=json.dumps({"prompt_tokens": 1, "completion_tokens": 1}),
+        prompt_tokens=15,
+        completion_tokens=7,
+        usage_estimated=True,
+    ))
+
+    assert report.prompt_tokens == 15
+    assert report.completion_tokens == 7
+    assert report.total_tokens == 22
+
+
 def test_run_report_tracks_failed_tools_and_actor_statuses():
     report = RunReport()
 

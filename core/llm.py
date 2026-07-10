@@ -90,10 +90,24 @@ class LLMClient:
                     ) as response:
                         if response.status_code == 200:
                             result = await self._parse_stream(response, on_token)
-                            result["_usage"] = {
-                                "prompt_tokens": self.count_messages_tokens(messages),
-                                "completion_tokens": self.count_tokens(result.get("content") or ""),
-                            }
+                            provider_usage = result.get("_provider_usage")
+                            if isinstance(provider_usage, dict):
+                                result["_usage"] = {
+                                    "prompt_tokens": int(provider_usage.get("prompt_tokens", 0) or 0),
+                                    "completion_tokens": int(provider_usage.get("completion_tokens", 0) or 0),
+                                    "estimated": False,
+                                }
+                            else:
+                                completion_payload = "".join([
+                                    str(result.get("reasoning_content") or ""),
+                                    str(result.get("content") or ""),
+                                    json.dumps(result.get("tool_calls") or [], ensure_ascii=False),
+                                ])
+                                result["_usage"] = {
+                                    "prompt_tokens": self.count_messages_tokens(messages),
+                                    "completion_tokens": self.count_tokens(completion_payload),
+                                    "estimated": True,
+                                }
                             return result
 
                         text = await response.aread()
@@ -138,6 +152,7 @@ class LLMClient:
         reasoning_parts: list[str] = []
         tool_calls: list[dict] = []
         tool_call_buf: dict[int, dict] = {}
+        provider_usage: dict[str, Any] | None = None
 
         reasoning_started = False
         content_started = False
@@ -158,6 +173,10 @@ class LLMClient:
                         data[:200],
                     )
                     continue
+
+                raw_usage = chunk.get("usage")
+                if isinstance(raw_usage, dict):
+                    provider_usage = raw_usage
 
                 choices = chunk.get("choices")
                 if not choices:
@@ -217,5 +236,7 @@ class LLMClient:
             result["reasoning_content"] = "".join(reasoning_parts)
         if tool_calls:
             result["tool_calls"] = tool_calls
+        if provider_usage is not None:
+            result["_provider_usage"] = provider_usage
 
         return result

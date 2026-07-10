@@ -5,6 +5,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from core.events import AgentEvent
 from evals.cli import main as eval_cli_main
 from evals.run_evals import (
     EvalRunResult,
@@ -14,8 +15,10 @@ from evals.run_evals import (
     evaluate_task,
     load_tasks,
     render_eval_comparison_markdown,
+    run_eval_task,
     run_eval_suite,
     write_eval_results,
+    _event_to_trace_record,
 )
 
 
@@ -295,6 +298,55 @@ def test_run_eval_suite_writes_results_with_injected_runner(monkeypatch, tmp_pat
     payload = json.loads(results_path.read_text(encoding="utf-8"))
     assert results[0].model == "demo-model"
     assert payload["tasks"][0]["task_id"] == "demo_task"
+
+
+def test_trace_record_preserves_run_actor_and_usage_metadata():
+    record = _event_to_trace_record(AgentEvent(
+        type="model_usage",
+        run_id="run_1",
+        task_id="task_1",
+        actor_id="task_1",
+        parent_id="planner",
+        prompt_tokens=10,
+        completion_tokens=4,
+        usage_estimated=False,
+    ))
+
+    assert record["run_id"] == "run_1"
+    assert record["task_id"] == "task_1"
+    assert record["actor_id"] == "task_1"
+    assert record["parent_id"] == "planner"
+    assert record["prompt_tokens"] == 10
+    assert record["completion_tokens"] == 4
+    assert record["usage_estimated"] is False
+
+
+def test_run_eval_task_reports_trace_persistence_failure(monkeypatch, tmp_path: Path):
+    candidate_root = tmp_path / "runs"
+    candidate_dir = candidate_root / "trace_failure"
+    candidate_dir.mkdir(parents=True)
+    task = {
+        "id": "trace_failure",
+        "title": "Trace failure",
+        "prompt": "Do work",
+        "fixture": "fixtures/fix_failing_pytest",
+        "test_command": [],
+        "allowed_files": [".sca/final_report.md"],
+    }
+    original_open = Path.open
+
+    def fail_trace_open(path, *args, **kwargs):
+        if path.name == "run_trace.jsonl":
+            raise OSError("disk full")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_trace_open)
+
+    result = asyncio.run(run_eval_task(task, candidate_root))
+
+    assert not result.passed
+    assert result.runtime_error is not None
+    assert "trace persistence failed" in result.runtime_error
 
 
 def test_sca_eval_run_command_uses_runner(monkeypatch, tmp_path: Path):

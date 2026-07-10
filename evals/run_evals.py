@@ -220,25 +220,35 @@ async def run_eval_task(
     runtime_error: str | None = None
     start = time.perf_counter()
 
-    with trace_path.open("w", encoding="utf-8") as trace_file:
-        try:
-            planner = build_planner(str(candidate_dir), model=model)
-            async for event in planner.run_stream(task["prompt"]):
-                report.observe(event)
-                trace_record = _event_to_trace_record(event)
-                trace_record["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
-                trace_file.write(json.dumps(trace_record, ensure_ascii=False) + "\n")
-                if event.type == "done":
-                    final_output = event.content
-                elif event.type == "error" and not final_output:
-                    final_output = event.content
-        except Exception as e:
-            runtime_error = str(e)
-            trace_file.write(json.dumps({
-                "type": "runner_error",
-                "content": runtime_error,
-                "elapsed_ms": int((time.perf_counter() - start) * 1000),
-            }, ensure_ascii=False) + "\n")
+    try:
+        trace_file = trace_path.open("w", encoding="utf-8")
+    except OSError as e:
+        runtime_error = f"trace persistence failed: {e}"
+    else:
+        with trace_file:
+            try:
+                planner = build_planner(str(candidate_dir), model=model)
+                async for event in planner.run_stream(task["prompt"]):
+                    report.observe(event)
+                    trace_record = _event_to_trace_record(event)
+                    trace_record["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
+                    trace_file.write(json.dumps(trace_record, ensure_ascii=False) + "\n")
+                    if event.type == "done":
+                        final_output = event.content
+                    elif event.type == "error" and not final_output:
+                        final_output = event.content
+            except OSError as e:
+                runtime_error = f"trace persistence failed: {e}"
+            except Exception as e:
+                runtime_error = str(e)
+                try:
+                    trace_file.write(json.dumps({
+                        "type": "runner_error",
+                        "content": runtime_error,
+                        "elapsed_ms": int((time.perf_counter() - start) * 1000),
+                    }, ensure_ascii=False) + "\n")
+                except OSError as trace_error:
+                    runtime_error = f"trace persistence failed: {trace_error}"
 
     duration_ms = int((time.perf_counter() - start) * 1000)
     report_path = report.write_final_report(candidate_dir)
@@ -371,9 +381,15 @@ def _event_to_trace_record(event) -> dict[str, Any]:
         "type": event.type,
         "content": event.content,
         "token": event.token,
+        "run_id": event.run_id,
+        "task_id": event.task_id,
         "actor_id": event.actor_id,
+        "parent_id": event.parent_id,
         "tool_name": event.tool_name,
         "tool_args": event.tool_args,
+        "prompt_tokens": event.prompt_tokens,
+        "completion_tokens": event.completion_tokens,
+        "usage_estimated": event.usage_estimated,
     }
     if event.tool_result is not None:
         record["tool_result"] = {

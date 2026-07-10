@@ -29,6 +29,7 @@ class RunReport:
     compactions: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    usage_estimated: bool = False
     errors: list[str] = field(default_factory=list)
     final_output: str = ""
 
@@ -56,7 +57,7 @@ class RunReport:
             self.compactions += 1
 
         elif event.type == "token_stats":
-            self._record_token_stats(event.content)
+            self._record_token_stats(event)
 
         elif event.type == "error":
             if event.content:
@@ -144,6 +145,7 @@ class RunReport:
                 f"- Prompt tokens: {self.prompt_tokens}",
                 f"- Completion tokens: {self.completion_tokens}",
                 f"- Total tokens: {self.total_tokens}",
+                f"- Source: {'estimated' if self.usage_estimated else 'provider-reported'}",
             ])
 
         if self.final_output:
@@ -183,10 +185,18 @@ class RunReport:
             counts[status] = counts.get(status, 0) + 1
         self.actor_status_counts = counts
 
-    def _record_token_stats(self, content: str) -> None:
+    def _record_token_stats(self, event: AgentEvent) -> None:
+        # Structured fields are preferred for new runtime events. JSON content
+        # remains supported for traces created by older versions.
+        if event.prompt_tokens or event.completion_tokens:
+            self.prompt_tokens = event.prompt_tokens
+            self.completion_tokens = event.completion_tokens
+            self.usage_estimated = event.usage_estimated
+            return
         try:
-            stats = json.loads(content)
+            stats = json.loads(event.content)
         except json.JSONDecodeError:
             return
         self.prompt_tokens = int(stats.get("prompt_tokens", 0) or 0)
         self.completion_tokens = int(stats.get("completion_tokens", 0) or 0)
+        self.usage_estimated = bool(stats.get("estimated", False))
