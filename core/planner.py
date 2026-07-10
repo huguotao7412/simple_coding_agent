@@ -60,6 +60,7 @@ class Planner:
             max_steps=self.max_steps,
             after_tool_call=self._after_tool_call,
             emit_token_stats=emit_token_stats,
+            run_context=self.run_context,
         )
 
     async def run(

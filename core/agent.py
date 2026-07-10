@@ -11,6 +11,7 @@ from typing import Any, Literal
 from .context import ContextManager
 from .llm import LLMClient
 from .runtime import AgentEvent, AgentRuntime
+from .run_context import RunContext
 from .tools.base import BaseTool
 
 
@@ -113,6 +114,7 @@ class ActorAgent:
         task_context: str = "",
         tool_provider: Any | None = None,
         max_steps: int = 30,
+        run_context: RunContext | None = None,
     ):
         self.actor_id = actor_id
         self.task_context = task_context
@@ -120,6 +122,7 @@ class ActorAgent:
         self.workspace_dir = workspace_dir
         self._tool_provider = tool_provider
         self.max_steps = max_steps
+        self.run_context = run_context or RunContext.create()
         self.tools_by_name = {t.name: t for t in tools} if tools else {}
         self.ctx = context_manager
 
@@ -140,6 +143,7 @@ class ActorAgent:
             tool_provider=self._tool_provider,
             actor_id=self.actor_id,
             dynamic_context_builder=self._build_dynamic_context_msg,
+            run_context=self.run_context,
         )
 
     async def run(

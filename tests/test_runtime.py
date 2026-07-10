@@ -6,6 +6,7 @@ from core.context import ContextManager
 from core.agent import ActorAgent
 from core.planner import Planner
 from core.runtime import AgentRuntime, parse_tool_call
+from core.run_context import RunContext
 from core.state import GlobalState
 from core.tools.base import BaseTool, ToolResult
 
@@ -312,6 +313,56 @@ async def test_actor_agent_uses_shared_runtime_for_run():
     assert summary.task_id == "task_1"
     assert summary.status == "done"
     assert summary.key_findings == "actor finished"
+
+
+@pytest.mark.asyncio
+async def test_actor_stream_events_include_run_and_task_metadata():
+    llm = FakeLLM([{"role": "assistant", "content": "actor finished"}])
+    ctx = ContextManager(system_prompt="system")
+    run_context = RunContext.create(run_id="run_actor")
+    actor = ActorAgent(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[],
+        workspace_dir=".",
+        actor_id="task_1",
+        run_context=run_context,
+        max_steps=3,
+    )
+
+    events = [event async for event in actor.run_stream("hello")]
+
+    assert {event.run_id for event in events} == {"run_actor"}
+    assert {event.actor_id for event in events} == {"task_1"}
+    assert {event.task_id for event in events} == {"task_1"}
+
+
+@pytest.mark.asyncio
+async def test_runtime_run_uses_stream_path_and_publishes_events_once():
+    llm = FakeLLM([
+        {"role": "assistant", "content": None, "tool_calls": [_tool_call('{"value": "abc"}')]},
+        {"role": "assistant", "content": "finished"},
+    ])
+    run_context = RunContext.create(run_id="run_shared")
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ContextManager(system_prompt="system"),
+        tools=[EchoTool()],
+        workspace_dir=".",
+        run_context=run_context,
+        max_steps=3,
+    )
+
+    result = await runtime.run("hello")
+    published = []
+    while not run_context.events.empty():
+        published.append(await run_context.events.get())
+
+    assert result == "finished"
+    assert [event.type for event in published].count("tool_call") == 1
+    assert [event.type for event in published].count("tool_result") == 1
+    assert [event.type for event in published].count("done") == 1
+    assert {event.run_id for event in published} == {"run_shared"}
 
 
 @pytest.mark.asyncio

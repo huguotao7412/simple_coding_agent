@@ -12,6 +12,7 @@ from .context import ContextManager
 from .events import AgentEvent
 from .exceptions import LLMAPIError
 from .llm import LLMClient
+from .run_context import RunContext
 from .tools.base import BaseTool, ToolResult
 
 
@@ -80,6 +81,7 @@ class AgentRuntime:
         dynamic_context_builder: Callable[[], dict] | None = None,
         after_tool_call: Callable[[str, ToolResult], Awaitable[list[AgentEvent]]] | None = None,
         emit_token_stats: bool = False,
+        run_context: RunContext | None = None,
     ) -> None:
         self.llm = llm_client
         self.ctx = context_manager
@@ -90,6 +92,7 @@ class AgentRuntime:
         self.dynamic_context_builder = dynamic_context_builder
         self.after_tool_call = after_tool_call
         self.emit_token_stats = emit_token_stats
+        self.run_context = run_context or RunContext.create()
         self.tools_by_name = {t.name: t for t in tools} if tools else {}
         self._recent_actions: deque[int] = deque(maxlen=10)
         self.last_result_success = True
@@ -163,54 +166,20 @@ class AgentRuntime:
             return []
         return await self.after_tool_call(tool_name, result)
 
+    async def _emit(self, event: AgentEvent) -> AgentEvent:
+        event.actor_id = event.actor_id or self.actor_id
+        event.task_id = event.task_id or self.actor_id
+        await self.run_context.emit(event)
+        return event
+
     async def run(self, user_input: str, on_token=None) -> str:
-        self.ctx.add_user_message(user_input)
-        tool_schemas = await self._list_tool_schemas()
-
-        step_count = 0
-        while True:
-            step_count += 1
-            if step_count > self.max_steps:
-                error_msg = "Safety stop: agent reached the maximum step limit."
-                self.last_result_success = False
-                self.ctx.add_assistant_message(content=error_msg)
-                return error_msg
-
-            if self.ctx.needs_compression(self.llm):
-                await self.ctx.compress(self.llm)
-            elif self.ctx.needs_proactive_compression(self.llm):
-                self.ctx._lightweight_compress()
-
-            try:
-                response = await self.llm.chat(
-                    messages=self._payload_messages(),
-                    tools=tool_schemas if tool_schemas else None,
-                    on_token=on_token,
-                )
-            except LLMAPIError as e:
-                error_msg = str(e)
-                self.last_result_success = False
-                self.ctx.add_assistant_message(content=error_msg)
-                return error_msg
-
-            tool_calls = response.get("tool_calls")
-            if not tool_calls:
-                content = response.get("content") or ""
-                self.ctx.add_assistant_message(
-                    content=content,
-                    reasoning_content=response.get("reasoning_content"),
-                )
-                self.last_result_success = True
-                return content
-
-            self.ctx.add_assistant_message(
-                content=response.get("content"),
-                tool_calls=tool_calls,
-                reasoning_content=response.get("reasoning_content"),
-            )
-
-            for tc in tool_calls:
-                await self._execute_single_tool(tc)
+        final_content = ""
+        async for event in self.run_stream(user_input):
+            if event.type == "thought" and on_token is not None:
+                on_token(event.token)
+            elif event.type in {"done", "error"}:
+                final_content = event.content
+        return final_content
 
     async def run_stream(self, user_input: str) -> AsyncGenerator[AgentEvent, None]:
         self.ctx.add_user_message(user_input)
@@ -226,23 +195,23 @@ class AgentRuntime:
                 self.last_result_success = False
                 self.ctx.add_assistant_message(content=error_msg)
                 if self.emit_token_stats:
-                    yield AgentEvent(
+                    yield await self._emit(AgentEvent(
                         type="token_stats",
                         content=json.dumps({
                             "prompt_tokens": total_prompt_tokens,
                             "completion_tokens": total_completion_tokens,
                         }),
                         actor_id=self.actor_id,
-                    )
-                yield AgentEvent(type="error", content=error_msg, actor_id=self.actor_id)
+                    ))
+                yield await self._emit(AgentEvent(type="error", content=error_msg, actor_id=self.actor_id))
                 return
 
             if self.ctx.needs_compression(self.llm):
                 await self.ctx.compress(self.llm)
-                yield AgentEvent(type="compaction", actor_id=self.actor_id)
+                yield await self._emit(AgentEvent(type="compaction", actor_id=self.actor_id))
             elif self.ctx.needs_proactive_compression(self.llm):
                 self.ctx._lightweight_compress()
-                yield AgentEvent(type="compaction", content="lightweight", actor_id=self.actor_id)
+                yield await self._emit(AgentEvent(type="compaction", content="lightweight", actor_id=self.actor_id))
 
             queue: asyncio.Queue[str] = asyncio.Queue()
 
@@ -263,12 +232,12 @@ class AgentRuntime:
                         token = await asyncio.wait_for(queue.get(), timeout=0.05)
                     except asyncio.TimeoutError:
                         continue
-                    yield AgentEvent(
+                    yield await self._emit(AgentEvent(
                         type="thought",
                         token=token,
                         content=token,
                         actor_id=self.actor_id,
-                    )
+                    ))
             finally:
                 if not chat_task.done():
                     chat_task.cancel()
@@ -283,15 +252,15 @@ class AgentRuntime:
                 self.last_result_success = False
                 self.ctx.add_assistant_message(content=error_msg)
                 if self.emit_token_stats:
-                    yield AgentEvent(
+                    yield await self._emit(AgentEvent(
                         type="token_stats",
                         content=json.dumps({
                             "prompt_tokens": total_prompt_tokens,
                             "completion_tokens": total_completion_tokens,
                         }),
                         actor_id=self.actor_id,
-                    )
-                yield AgentEvent(type="error", content=error_msg, actor_id=self.actor_id)
+                    ))
+                yield await self._emit(AgentEvent(type="error", content=error_msg, actor_id=self.actor_id))
                 return
 
             tool_calls = response.get("tool_calls")
@@ -303,15 +272,15 @@ class AgentRuntime:
                 )
                 self.last_result_success = True
                 if self.emit_token_stats:
-                    yield AgentEvent(
+                    yield await self._emit(AgentEvent(
                         type="token_stats",
                         content=json.dumps({
                             "prompt_tokens": total_prompt_tokens,
                             "completion_tokens": total_completion_tokens,
                         }),
                         actor_id=self.actor_id,
-                    )
-                yield AgentEvent(type="done", content=content, actor_id=self.actor_id)
+                    ))
+                yield await self._emit(AgentEvent(type="done", content=content, actor_id=self.actor_id))
                 return
 
             self.ctx.add_assistant_message(
@@ -322,18 +291,18 @@ class AgentRuntime:
 
             for tc in tool_calls:
                 parsed = parse_tool_call(tc)
-                yield AgentEvent(
+                yield await self._emit(AgentEvent(
                     type="tool_call",
                     tool_name=parsed.tool_name,
                     tool_args=parsed.args,
                     actor_id=self.actor_id,
-                )
+                ))
                 tool_name, _, result, _ = await self._execute_single_tool(tc)
-                yield AgentEvent(
+                yield await self._emit(AgentEvent(
                     type="tool_result",
                     tool_name=tool_name,
                     tool_result=result,
                     actor_id=self.actor_id,
-                )
+                ))
                 for event in await self._run_after_tool_hook(tool_name, result):
-                    yield event
+                    yield await self._emit(event)
