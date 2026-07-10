@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.mcp.client import MCPToolProvider, is_destructive_shell_command
+from core.policy import ToolPolicy
 
 
 @dataclass
@@ -31,6 +32,9 @@ class FakeSession:
 
     async def list_tools(self):
         return SimpleNamespace(tools=[FakeTool("run")])
+
+    async def call_tool(self, name, args):
+        return SimpleNamespace(content=[SimpleNamespace(text=f"called:{name}")])
 
 
 class FakeStdioContext:
@@ -124,3 +128,45 @@ async def test_mcp_provider_blocks_destructive_bash_command(tmp_path):
     assert not result.success
     assert result.error is not None
     assert "Destructive shell command blocked" in result.error
+
+
+@pytest.mark.asyncio
+async def test_mcp_provider_denies_tool_not_in_allowlist(tmp_path):
+    provider = MCPToolProvider()
+    provider._worktree_path = str(tmp_path)
+    provider._tool_routing["run"] = "bash"
+    provider._sessions["bash"] = FakeSession(None, None)
+    provider.set_policy(ToolPolicy.for_role("scout", {"read_file"}))
+
+    result = await provider.call_tool("run", {"command": "git status"})
+
+    assert not result.success
+    assert "not permitted for role 'scout'" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_mcp_provider_allows_authorized_tool(tmp_path):
+    provider = MCPToolProvider()
+    provider._worktree_path = str(tmp_path)
+    provider._tool_routing["run"] = "bash"
+    provider._sessions["bash"] = FakeSession(None, None)
+    provider.set_policy(ToolPolicy.for_role("coder", {"run"}))
+
+    result = await provider.call_tool("run", {"command": "git status"})
+
+    assert result.success
+    assert result.content == "called:run"
+
+
+@pytest.mark.asyncio
+async def test_mcp_provider_uses_policy_to_filter_schemas():
+    provider = MCPToolProvider()
+    provider._tool_schemas = [
+        {"type": "function", "function": {"name": "read_file"}},
+        {"type": "function", "function": {"name": "run"}},
+    ]
+    provider.set_policy(ToolPolicy.for_role("scout", {"read_file"}))
+
+    schemas = await provider.list_tools()
+
+    assert [schema["function"]["name"] for schema in schemas] == ["read_file"]

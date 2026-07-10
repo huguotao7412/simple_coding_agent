@@ -22,6 +22,7 @@ from mcp.client.stdio import stdio_client
 
 from ..tools import ACTOR_TOOLS
 from ..tools.base import ToolResult
+from ..policy import ToolPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +70,23 @@ class MCPToolProvider:
         self._failure_count: int = 0
         self._circuit_open: bool = False
         self._worktree_path: str = ""
-        self._tool_allowlist: set[str] | None = None
+        self._policy = ToolPolicy.for_role("legacy", None)
 
-    async def start(self, worktree_path: str, tool_allowlist: set[str] | None = None) -> None:
+    def set_policy(self, policy: ToolPolicy) -> None:
+        """Set the execution policy used for both schemas and dispatch."""
+        self._policy = policy
+
+    async def start(
+        self,
+        worktree_path: str,
+        tool_allowlist: set[str] | None = None,
+        tool_policy: ToolPolicy | None = None,
+    ) -> None:
         """Launch MCP servers bound to the given worktree directory."""
         self._worktree_path = os.path.abspath(worktree_path)
-        self._tool_allowlist = tool_allowlist
+        self.set_policy(
+            tool_policy or ToolPolicy.for_role("actor", tool_allowlist)
+        )
 
         servers: list[tuple[str, list[str]]] = [
             (
@@ -123,16 +135,20 @@ class MCPToolProvider:
         """Return cached tool schemas in OpenAI function-calling format."""
         if not self._tool_schemas:
             await self._build_routing_table()
-        if self._tool_allowlist is None:
+        if self._policy.allowed_tools is None:
             return self._tool_schemas
         return [
             tool
             for tool in self._tool_schemas
-            if tool.get("function", {}).get("name") in self._tool_allowlist
+            if tool.get("function", {}).get("name") in self._policy.allowed_tools
         ]
 
     async def call_tool(self, name: str, args: dict) -> ToolResult:
         """Route a tool call to the correct MCP server and return the result."""
+        decision = self._policy.authorize(name)
+        if not decision.allowed:
+            return ToolResult.fail(decision.reason)
+
         if self._circuit_open:
             return ToolResult.fail(
                 "Tool service circuit breaker is open; report this to the Planner "

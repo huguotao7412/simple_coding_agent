@@ -19,6 +19,7 @@ from ..git_utils import (
     parse_diff_file_paths,
 )
 from ..role_config import ActorRole, get_role_config
+from ..policy import ToolPolicy
 
 MAX_CONCURRENT_ACTORS = int(os.getenv("SCA_MAX_ACTORS", "4"))
 
@@ -275,7 +276,13 @@ class DelegateTool(BaseTool):
                 from ..mcp import MCPToolProvider  # lazy import to avoid circular dep
                 tool_provider = MCPToolProvider()
                 try:
-                    await tool_provider.start(wt_path, tool_allowlist=role_cfg.tool_allowlist)
+                    await tool_provider.start(
+                        wt_path,
+                        tool_policy=ToolPolicy.for_role(
+                            role.value,
+                            role_cfg.tool_allowlist,
+                        ),
+                    )
                 except Exception as e:
                     logger.error("MCP startup failed for %s: %s", tid, e)
                     await state.update_task(tid, status="failed")
