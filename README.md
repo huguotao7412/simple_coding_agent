@@ -179,7 +179,7 @@ Run all tests:
 Type-check the trusted runtime boundary:
 
 ```bash
-.\.venv\Scripts\python.exe -m mypy core/policy.py core/events.py core/run_context.py core/runtime.py core/planner.py core/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy core/actor_execution.py core/policy.py core/events.py core/run_context.py core/runtime.py core/worktree_actor_executor.py core/planner.py core/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py evals/run_evals.py
 ```
 
 Compile-check Python modules:

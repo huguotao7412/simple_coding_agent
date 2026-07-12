@@ -209,7 +209,7 @@ Git worktree 提供版本控制和默认工作目录隔离，不是操作系统�
 对可信运行时边界执行类型检查：
 
 ```powershell
-.\.venv\Scripts\python.exe -m mypy core/policy.py core/events.py core/run_context.py core/runtime.py core/planner.py core/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy core/actor_execution.py core/policy.py core/events.py core/run_context.py core/runtime.py core/worktree_actor_executor.py core/planner.py core/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py evals/run_evals.py
 ```
 
 编译检查：

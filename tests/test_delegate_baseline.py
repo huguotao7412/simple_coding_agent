@@ -11,7 +11,10 @@ from core.git_utils import (
     teardown_worktree,
 )
 from core.state import GlobalState
-from core.tools.delegate import _apply_dependency_diffs_to_worktree, _write_diff_artifact
+from core.worktree_actor_executor import (
+    _apply_dependency_diffs_to_worktree,
+    _write_diff_artifact,
+)
 
 
 def _git(cwd: Path, *args: str) -> str:

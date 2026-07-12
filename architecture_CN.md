@@ -21,6 +21,28 @@ Planner 负责 orchestration：每个 Planner 拥有独立的 `RunContext`，其
 
 Actor 负责 execution：每个 Actor 只接收一个明确子任务，在自己的 git worktree 中运行，最后返回 summary 和提取出的 diff。
 
+## 委派执行边界
+
+P1 不改变外部系统上下文或部署拓扑。`ActorExecutor` 是 Python Agent 进程内的端口，不是新的网络服务。这个边界将应用层调度与单个 Actor 的基础设施执行分开：
+
+```mermaid
+flowchart LR
+    PLANNER["Planner"] --> DELEGATE["DelegateTool\nDAG 调度器"]
+    DELEGATE --> PORT["ActorExecutor\n执行端口"]
+    PORT --> WORKTREE["WorktreeActorExecutor\n默认适配器"]
+    DELEGATE --> STATE["RunContext / TaskState"]
+    WORKTREE --> GIT["Git worktree 与 diff"]
+    WORKTREE --> MCP["每 Actor MCP provider"]
+    WORKTREE --> ACTOR["ActorAgent / AgentRuntime"]
+    WORKTREE --> ARTIFACT["Patch artifact 存储"]
+```
+
+`DelegateTool` 负责输入校验、DAG 就绪计算、并发控制、依赖失败阻塞、任务状态转换、异常隔离与结果汇总。它通过不可变的 `ActorTaskSpec` 和 `ActorExecutionResult` 与执行端口通信。
+
+`WorktreeActorExecutor` 负责上下文注入、遗留 worktree 清理、worktree 创建、依赖 baseline、MCP 启停、Actor 构造、diff 提取、artifact 持久化与最终清理。上下文文件在 MCP 启动前读取或复制时，会同时校验主工作区和 Actor worktree 的路径边界，阻止绝对路径与 `..` 路径逃逸。
+
+默认适配器目前仍通过 `RunContext.state` 读取依赖任务 diff，以保持 P1 向后兼容。未来持久化或远程执行器应使用更窄的执行上下文，或直接从 task spec 接收依赖 artifact。详见 [ADR-0001](docs/adr/0001-actor-executor-boundary.md)。
+
 ## Planner / Actor 流程
 
 1. Planner 接收用户请求。

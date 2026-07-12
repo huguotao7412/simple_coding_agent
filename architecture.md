@@ -21,6 +21,28 @@ The Planner owns orchestration. Each Planner receives a `RunContext` with an ind
 
 Actors own execution. Each Actor receives one concrete task plus scoped context, runs in its own git worktree, and reports a summary plus an extracted diff. The full extracted diff is persisted as a patch artifact, while compact previews and file lists are sent back through Planner-visible state.
 
+## Delegation Execution Boundary
+
+P1 does not change the external system context or deployment topology. `ActorExecutor` is an in-process port inside the Python Agent container, not a new service. The boundary separates application scheduling from single-Actor infrastructure execution:
+
+```mermaid
+flowchart LR
+    PLANNER["Planner"] --> DELEGATE["DelegateTool\nDAG scheduler"]
+    DELEGATE --> PORT["ActorExecutor\nport"]
+    PORT --> WORKTREE["WorktreeActorExecutor\ndefault adapter"]
+    DELEGATE --> STATE["RunContext / TaskState"]
+    WORKTREE --> GIT["Git worktree + diff"]
+    WORKTREE --> MCP["Per-Actor MCP provider"]
+    WORKTREE --> ACTOR["ActorAgent / AgentRuntime"]
+    WORKTREE --> ARTIFACT["Patch artifact store"]
+```
+
+`DelegateTool` owns validation, DAG readiness, concurrency, dependency blocking, task-state transitions, exception isolation, and result rendering. It communicates through immutable `ActorTaskSpec` and `ActorExecutionResult` values.
+
+`WorktreeActorExecutor` owns context injection, one-time orphan cleanup, worktree setup, dependency baselines, MCP startup and shutdown, Actor construction, diff extraction, artifact persistence, and worktree cleanup. Context file paths are resolved against both the main workspace and Actor worktree before any pre-MCP read or copy, preventing absolute-path and `..` traversal from bypassing the tool policy.
+
+The default adapter currently reads dependency diffs through `RunContext.state`. This keeps P1 backward compatible, but a future durable or remote executor should receive dependency artifacts through a narrower execution context or directly in the task specification. See [ADR-0001](docs/adr/0001-actor-executor-boundary.md).
+
 ## Planner / Actor Flow
 
 1. The Planner receives the user request.

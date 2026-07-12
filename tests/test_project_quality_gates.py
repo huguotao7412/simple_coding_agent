@@ -27,3 +27,20 @@ def test_ci_verifies_test_inventory_before_running_tests() -> None:
     assert unit_test_step >= 0
     assert inventory_step < unit_test_step
     assert "expected at least 8 test modules" in workflow
+
+
+def test_actor_executor_modules_are_in_trusted_mypy_boundary() -> None:
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    trusted_modules = {
+        "core/actor_execution.py",
+        "core/worktree_actor_executor.py",
+    }
+
+    configured_files = set(config["tool"]["mypy"]["files"])
+
+    assert trusted_modules <= configured_files
+    for module in trusted_modules:
+        assert module in workflow
