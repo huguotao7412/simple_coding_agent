@@ -47,4 +47,5 @@ norecursedirs = [
     ".worktrees",
     "node_modules",
     "evals/fixtures",
+    "tmp",
 ]

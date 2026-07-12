@@ -20,6 +20,13 @@ jobs:
       - name: Install package
         run: python -m pip install -e .[dev]
 
+      - name: Verify test suite inventory
+        run: >-
+          python -c "from pathlib import Path;
+          root = Path('tests');
+          files = list(root.glob('test_*.py')) if root.is_dir() else [];
+          assert len(files) >= 8, f'expected at least 8 test modules, found {len(files)}'"
+
       - name: Run unit tests
         run: python -m pytest -q
 
