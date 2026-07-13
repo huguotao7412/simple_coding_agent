@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from core.actor_execution import ActorTaskSpec
-from core.run_context import RunContext
-from core.worktree_actor_executor import WorktreeActorExecutor
+from core.actors.contracts import ActorTaskSpec
+from core.runs.context import RunContext
+from core.actors.worktree import WorktreeActorExecutor
 
 
 class FakeLLM:

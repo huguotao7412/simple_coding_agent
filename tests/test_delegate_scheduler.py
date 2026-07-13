@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from core.actor_execution import ActorExecutionResult, ActorTaskSpec
-from core.run_context import RunContext
+from core.actors.contracts import ActorExecutionResult, ActorTaskSpec
+from core.runs.context import RunContext
 from core.tools.delegate import DelegateTool
 
 

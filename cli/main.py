@@ -8,9 +8,9 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from core.context import ContextManager
+    from core.runtime.conversation import ContextManager
     from core.planner import Planner
-    from core.run_context import RunContext
+    from core.runs.context import RunContext
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -39,10 +39,10 @@ def build_planner(
 
     setup_logging()
 
-    from core.context import ContextManager
+    from core.runtime.conversation import ContextManager
     from core.llm import LLMClient
     from core.planner import Planner
-    from core.run_context import RunContext
+    from core.runs.context import RunContext
     from core.system_prompt import PLANNER_SYSTEM_PROMPT
     from core.tools import PLANNER_TOOLS
 
@@ -66,7 +66,7 @@ def build_planner(
 async def run_once(prompt: str, workspace_dir: str, model: str | None = None) -> str:
     from cli.report import RunReport
     from cli.runs import create_durable_run_context
-    from core.context import ContextManager
+    from core.runtime.conversation import ContextManager
     from core.system_prompt import PLANNER_SYSTEM_PROMPT
 
     context_manager = ContextManager(system_prompt=PLANNER_SYSTEM_PROMPT)
@@ -100,8 +100,8 @@ async def resume_once(
 ) -> str:
     from cli.report import RunReport
     from cli.runs import load_resumable_run, open_run_store
-    from core.context import ContextManager
-    from core.run_context import RunContext
+    from core.runtime.conversation import ContextManager
+    from core.runs.context import RunContext
     from core.system_prompt import PLANNER_SYSTEM_PROMPT
 
     store = await open_run_store(workspace_dir)

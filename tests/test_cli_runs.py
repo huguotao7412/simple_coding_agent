@@ -13,9 +13,9 @@ from cli.runs import (
     render_run_list,
     run_database_path,
 )
-from core.context import ContextManager
-from core.run_state import RunRecord, RunStatus
-from core.sqlite_run_store import SQLiteRunStore
+from core.runtime.conversation import ContextManager
+from core.runs.models import RunRecord, RunStatus
+from core.runs.sqlite_store import SQLiteRunStore
 
 
 @pytest.mark.asyncio

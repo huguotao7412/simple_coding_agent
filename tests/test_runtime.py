@@ -6,15 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from core.context import ContextManager
+from core.runtime.conversation import ContextManager
 from core.events import AgentEvent
-from core.agent import ActorAgent
+from core.actors.agent import ActorAgent
 from core.planner import Planner
-from core.runtime import AgentRuntime, parse_tool_call
-from core.run_context import RunContext
-from core.run_state import RunRecord, RunStatus
-from core.sqlite_run_store import SQLiteRunStore
-from core.state import GlobalState
+from core.runtime.engine import AgentRuntime, parse_tool_call
+from core.runs.context import RunContext
+from core.runs.models import RunRecord, RunStatus
+from core.runs.sqlite_store import SQLiteRunStore
+from core.runs.task_state import GlobalState
 from core.tools.base import BaseTool, ToolResult
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .run_state import RunCheckpoint, RunRecord
+from .models import RunCheckpoint, RunRecord
 
 
 class RunStoreError(RuntimeError):

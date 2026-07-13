@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from core.run_state import (
+from core.runs.models import (
     RunCheckpoint,
     RunRecord,
     RunStatus,

@@ -7,7 +7,7 @@ import pytest
 
 from core.mcp.client import MCPToolProvider, is_destructive_shell_command
 from core.policy import ToolPolicy
-from core.run_context import RunContext
+from core.runs.context import RunContext
 
 
 @dataclass

@@ -10,8 +10,8 @@ from core.git_utils import (
     setup_worktree,
     teardown_worktree,
 )
-from core.state import GlobalState
-from core.worktree_actor_executor import (
+from core.runs.task_state import GlobalState
+from core.actors.worktree import (
     _apply_dependency_diffs_to_worktree,
     _write_diff_artifact,
 )

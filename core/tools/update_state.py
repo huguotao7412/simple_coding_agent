@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .base import BaseTool, ToolResult
-from ..state import GlobalState
+from ..runs.task_state import GlobalState
 
 
 class UpdateStateTool(BaseTool):

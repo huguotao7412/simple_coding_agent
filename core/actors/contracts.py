@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from .run_context import RunContext
+from ..runs.context import RunContext
 
 
 ActorExecutionStatus = Literal["done", "failed"]

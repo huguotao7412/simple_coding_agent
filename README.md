@@ -58,12 +58,12 @@ The codebase keeps the Planner/Actor split:
 
 ```text
 core/
-  runtime.py        shared ReAct runtime and AgentEvent protocol
-  planner.py        Planner wrapper around AgentRuntime
-  agent.py          ActorAgent wrapper around AgentRuntime
-  context.py        conversation and context compression
+  runtime/          execution engine and conversation context
+  runs/             durable run lifecycle, task state, persistence adapters
+  actors/           Actor behavior, contracts, roles, worktree adapter
+  planner.py        Planner wrapper around the runtime engine
+  events.py         cross-domain AgentEvent protocol
   llm.py            OpenAI-compatible async streaming client
-  state.py          task ledger and state snapshots
   mcp/              MCP tool provider
   tools/            local planner/actor tools
 
@@ -199,7 +199,7 @@ Run all tests:
 Type-check the trusted runtime boundary:
 
 ```bash
-.\.venv\Scripts\python.exe -m mypy core/actor_execution.py core/policy.py core/events.py core/run_state.py core/run_store.py core/sqlite_run_store.py core/run_context.py core/runtime.py core/worktree_actor_executor.py core/planner.py core/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
 ```
 
 Compile-check Python modules:

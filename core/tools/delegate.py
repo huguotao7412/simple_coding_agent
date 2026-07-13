@@ -6,10 +6,10 @@ import os
 from typing import Any, cast
 
 from .base import BaseTool, ToolResult
-from ..actor_execution import ActorExecutionResult, ActorExecutor, ActorTaskSpec
-from ..run_context import RunContext
-from ..state import GlobalState
-from ..worktree_actor_executor import WorktreeActorExecutor
+from ..actors.contracts import ActorExecutionResult, ActorExecutor, ActorTaskSpec
+from ..runs.context import RunContext
+from ..runs.task_state import GlobalState
+from ..actors.worktree import WorktreeActorExecutor
 
 
 MAX_CONCURRENT_ACTORS = int(os.getenv("SCA_MAX_ACTORS", "4"))

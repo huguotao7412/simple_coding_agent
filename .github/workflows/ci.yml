@@ -33,10 +33,10 @@ jobs:
       - name: Type check trusted runtime modules
         run: >-
           python -m mypy
-          core/actor_execution.py core/policy.py core/events.py
-          core/run_state.py core/run_store.py core/sqlite_run_store.py
-          core/run_context.py core/runtime.py core/worktree_actor_executor.py
-          core/planner.py core/agent.py core/mcp/client.py
+          core/actors/contracts.py core/policy.py core/events.py
+          core/runs/models.py core/runs/store.py core/runs/sqlite_store.py
+          core/runs/context.py core/runtime/engine.py core/actors/worktree.py
+          core/planner.py core/actors/agent.py core/mcp/client.py
           core/tools/update_state.py core/tools/delegate.py
           cli/report.py cli/runs.py cli/main.py evals/run_evals.py
 

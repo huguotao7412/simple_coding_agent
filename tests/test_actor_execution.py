@@ -4,12 +4,12 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from core.actor_execution import (
+from core.actors.contracts import (
     ActorExecutionResult,
     ActorExecutor,
     ActorTaskSpec,
 )
-from core.run_context import RunContext
+from core.runs.context import RunContext
 
 
 class FakeExecutor:

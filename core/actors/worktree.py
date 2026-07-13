@@ -11,18 +11,18 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from .actor_execution import ActorExecutionResult, ActorExecutionStatus, ActorTaskSpec
-from .git_utils import (
+from .contracts import ActorExecutionResult, ActorExecutionStatus, ActorTaskSpec
+from ..git_utils import (
     cleanup_orphans,
     extract_diff,
     parse_diff_file_paths,
     setup_worktree,
     teardown_worktree,
 )
-from .policy import ToolPolicy
-from .role_config import ActorRole, get_role_config
-from .run_context import RunContext
-from .state import GlobalState
+from ..policy import ToolPolicy
+from .roles import ActorRole, get_role_config
+from ..runs.context import RunContext
+from ..runs.task_state import GlobalState
 
 
 ARTIFACT_DIR = os.path.join(".sca", "artifacts", "actor-diffs")
@@ -141,7 +141,7 @@ def _write_diff_artifact(workspace_dir: str, task_id: str, diff: str) -> str:
 
 
 def _default_tool_provider_factory(run_context: RunContext, actor_id: str) -> Any:
-    from .mcp import MCPToolProvider
+    from ..mcp import MCPToolProvider
 
     return MCPToolProvider(run_context=run_context, actor_id=actor_id)
 
@@ -260,7 +260,7 @@ class WorktreeActorExecutor:
             )
 
             phase = "actor execution"
-            from .context import ContextManager
+            from ..runtime.conversation import ContextManager
 
             for file_path in spec.context_files:
                 try:

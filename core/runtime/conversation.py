@@ -5,7 +5,7 @@ import re
 from copy import deepcopy
 from typing import Any
 
-from .tools.base import DEFAULT_TOKEN_BUDGET, semantic_truncate
+from ..tools.base import DEFAULT_TOKEN_BUDGET, semantic_truncate
 
 
 class ContextManager:

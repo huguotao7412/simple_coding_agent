@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import streamlit as st
-from core.agent import AgentEvent
+from core.events import AgentEvent
 from core.tools.base import ToolResult
 
 

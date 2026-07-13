@@ -79,7 +79,7 @@ class WebBridge:
         self.agent.ctx.messages = [self.agent.ctx.messages[0]]
 
         # 清空 Planner 和 Actor 依赖的全局共享状态
-        from core.state import GlobalState
+        from core.runs.task_state import GlobalState
         GlobalState.reset()
 
         st.session_state.messages = []

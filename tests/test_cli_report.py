@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from cli.report import RunReport
-from core.runtime import AgentEvent
+from core.events import AgentEvent
 from core.tools.base import ToolResult
 
 

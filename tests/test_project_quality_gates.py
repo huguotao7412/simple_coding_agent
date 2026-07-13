@@ -35,8 +35,8 @@ def test_actor_executor_modules_are_in_trusted_mypy_boundary() -> None:
         encoding="utf-8"
     )
     trusted_modules = {
-        "core/actor_execution.py",
-        "core/worktree_actor_executor.py",
+        "core/actors/contracts.py",
+        "core/actors/worktree.py",
     }
 
     configured_files = set(config["tool"]["mypy"]["files"])

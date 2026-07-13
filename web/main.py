@@ -15,10 +15,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from core.context import ContextManager
+from core.runtime.conversation import ContextManager
 from core.llm import LLMClient
 from core.planner import Planner
-from core.state import GlobalState
+from core.runs.task_state import GlobalState
 from core.system_prompt import PLANNER_SYSTEM_PROMPT
 from core.tools import PLANNER_TOOLS
 from web.bridge import WebBridge

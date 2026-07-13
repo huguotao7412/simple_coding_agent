@@ -24,7 +24,7 @@ from ..tools import ListDirTool, ReadOutlineTool, SearchCodebaseTool
 from ..tools.base import BaseTool, ToolResult
 from ..policy import ToolPolicy
 from ..events import AgentEvent
-from ..run_context import RunContext
+from ..runs.context import RunContext
 
 logger = logging.getLogger(__name__)
 

@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from core.run_state import RunCheckpoint, RunRecord, RunStatus
-from core.run_store import RunStoreConflictError, RunStoreCorruptionError
-from core.sqlite_run_store import SQLiteRunStore
+from core.runs.models import RunCheckpoint, RunRecord, RunStatus
+from core.runs.store import RunStoreConflictError, RunStoreCorruptionError
+from core.runs.sqlite_store import SQLiteRunStore
 
 
 def make_record(

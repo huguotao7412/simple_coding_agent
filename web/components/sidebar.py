@@ -36,7 +36,7 @@ def render_sidebar(workspace_root: str, current_project: str) -> str | None:
     selected_file = _render_file_tree(project_dir)
 
     # --- Task Board ---
-    from core.state import GlobalState
+    from core.runs.task_state import GlobalState
 
     st.sidebar.divider()
     st.sidebar.subheader("Tasks")

@@ -34,7 +34,7 @@ def _build_role_config() -> dict[ActorRole, RoleConfig]:
     Lazy import of system_prompt constants to avoid circular dependency
     (system_prompt.py may import from role_config in the future).
     """
-    from .system_prompt import (  # noqa: PLC0415
+    from ..system_prompt import (  # noqa: PLC0415
         SCOUT_SYSTEM_PROMPT,
         ACTOR_SYSTEM_PROMPT,
         VERIFIER_SYSTEM_PROMPT,

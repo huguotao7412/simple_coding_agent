@@ -2,6 +2,35 @@
 
 This document describes the runtime boundaries that make Simple Coding Agent auditable: the Planner/Actor lifecycle, worktree isolation, MCP tool boundary, and local eval design.
 
+## Core Package Boundaries
+
+The modular monolith groups cohesive implementation details without hiding dependencies behind package-wide re-exports:
+
+- `core/runtime/`: the ReAct execution engine and conversation compaction.
+- `core/runs/`: durable-run models, task state, `RunContext`, the store port, and SQLite adapter.
+- `core/actors/`: Actor behavior, execution contracts, roles, and the worktree adapter.
+- `core/events.py`: the cross-domain event contract shared by runtime, runs, MCP, CLI, and evals.
+- `core/planner.py`: the application orchestration entry point.
+
+```mermaid
+flowchart TD
+    PLANNER["planner"] --> RUNTIME["runtime"]
+    PLANNER --> RUNS["runs"]
+    PLANNER --> TOOLS["tools"]
+    RUNTIME --> RUNS
+    RUNTIME --> TOOLS
+    TOOLS --> ACTORS["actors"]
+    TOOLS --> RUNS
+    ACTORS --> RUNTIME
+    ACTORS --> RUNS
+    PLANNER --> EVENTS["events contract"]
+    RUNTIME --> EVENTS
+    RUNS --> EVENTS
+    MCP["mcp"] --> EVENTS
+```
+
+Package `__init__.py` files stay minimal. Callers import the owning module explicitly, for example `core.runtime.engine`, `core.runs.context`, or `core.actors.contracts`; this keeps dependency review searchable and prevents accidental circular imports through convenience re-exports.
+
 ## Runtime Lifecycle
 
 ```text

@@ -59,12 +59,12 @@ Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重
 
 ```text
 core/
-  runtime.py        共享 ReAct runtime 和 AgentEvent 协议
-  planner.py        Planner 对 AgentRuntime 的封装
-  agent.py          ActorAgent 对 AgentRuntime 的封装
-  context.py        对话上下文和压缩
+  runtime/          执行循环和对话上下文
+  runs/             Run 生命周期、任务状态和持久化适配器
+  actors/           Actor 行为、执行契约、角色和 worktree 适配器
+  planner.py        Planner 对 runtime engine 的封装
+  events.py         跨域 AgentEvent 协议
   llm.py            OpenAI-compatible 异步流式客户端
-  state.py          任务账本和状态快照
   mcp/              MCP tool provider
   tools/            本地 Planner/Actor 工具
 
@@ -229,7 +229,7 @@ SQLite checkpoint 也不能与任意 shell、文件系统或网络副作用组�
 对可信运行时边界执行类型检查：
 
 ```powershell
-.\.venv\Scripts\python.exe -m mypy core/actor_execution.py core/policy.py core/events.py core/run_state.py core/run_store.py core/sqlite_run_store.py core/run_context.py core/runtime.py core/worktree_actor_executor.py core/planner.py core/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
 ```
 
 编译检查：

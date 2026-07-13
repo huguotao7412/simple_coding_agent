@@ -2,6 +2,35 @@
 
 本文说明 Simple Coding Agent 的几个核心边界：Planner/Actor 生命周期、git worktree 隔离、MCP 工具边界，以及本地 eval 设计。目标是让这个 agent runtime 可审计、可复现、可衡量。
 
+## Core 包边界
+
+模块化单体按高内聚职责组织实现，同时不通过包级大规模 re-export 隐藏依赖：
+
+- `core/runtime/`：ReAct 执行循环与对话压缩。
+- `core/runs/`：持久化 Run 模型、任务状态、`RunContext`、存储端口与 SQLite 适配器。
+- `core/actors/`：Actor 行为、执行契约、角色配置与 worktree 适配器。
+- `core/events.py`：runtime、runs、MCP、CLI 和 eval 共用的跨域事件契约。
+- `core/planner.py`：应用编排入口。
+
+```mermaid
+flowchart TD
+    PLANNER["planner"] --> RUNTIME["runtime"]
+    PLANNER --> RUNS["runs"]
+    PLANNER --> TOOLS["tools"]
+    RUNTIME --> RUNS
+    RUNTIME --> TOOLS
+    TOOLS --> ACTORS["actors"]
+    TOOLS --> RUNS
+    ACTORS --> RUNTIME
+    ACTORS --> RUNS
+    PLANNER --> EVENTS["events 契约"]
+    RUNTIME --> EVENTS
+    RUNS --> EVENTS
+    MCP["mcp"] --> EVENTS
+```
+
+各包的 `__init__.py` 保持最小化。调用方显式导入归属模块，例如 `core.runtime.engine`、`core.runs.context` 或 `core.actors.contracts`，让依赖审查可以直接搜索，并避免 convenience re-export 引发隐式循环。
+
 ## Runtime 生命周期
 
 ```text

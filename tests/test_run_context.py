@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from core.context import ContextManager
+from core.runtime.conversation import ContextManager
 from core.events import AgentEvent
 from core.planner import Planner
-from core.run_context import RunContext
-from core.run_state import RunCheckpoint, RunRecord, RunStatus
-from core.state import GlobalState
+from core.runs.context import RunContext
+from core.runs.models import RunCheckpoint, RunRecord, RunStatus
+from core.runs.task_state import GlobalState
 
 
 class MinimalLLM:
