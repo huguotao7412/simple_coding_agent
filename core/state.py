@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from dataclasses import dataclass, field
-from typing import Literal, ClassVar
+from typing import Any, Literal, ClassVar, cast
 
 
 @dataclass
@@ -34,6 +34,7 @@ class GlobalState:
     def __init__(self) -> None:
         self.task_tree: dict[str, TaskNode] = {}
         self.change_log: list[ChangeRecord] = []
+        self._change_offset: int = 0
         self._last_consumed: int = 0
         self._lock = asyncio.Lock()
 
@@ -115,7 +116,58 @@ class GlobalState:
             self._last_consumed = len(self.change_log)
         return new_changes
 
-    async def snapshot(self) -> dict:
+    @classmethod
+    def from_snapshot(cls, snapshot: dict[str, Any]) -> GlobalState:
+        """Reconstruct task state from a trusted durable snapshot payload."""
+        state = cls()
+        raw_tree = snapshot.get("task_tree", {})
+        if not isinstance(raw_tree, dict):
+            raise ValueError("task snapshot task_tree must be an object")
+        valid_statuses = {
+            "pending", "running", "verifying", "done", "failed", "blocked"
+        }
+        for task_id, raw_node in raw_tree.items():
+            if not isinstance(raw_node, dict):
+                raise ValueError(f"task snapshot entry {task_id} must be an object")
+            status = str(raw_node.get("status", "pending"))
+            if status not in valid_statuses:
+                raise ValueError(f"invalid task status in checkpoint: {status}")
+            dependencies = raw_node.get("dependencies", [])
+            files_modified = raw_node.get("files_modified", [])
+            if not isinstance(dependencies, list) or not isinstance(files_modified, list):
+                raise ValueError("task dependencies and files_modified must be lists")
+            normalized_id = str(task_id)
+            state.task_tree[normalized_id] = TaskNode(
+                task_id=str(raw_node.get("task_id", normalized_id)),
+                description=str(raw_node.get("description", "")),
+                status=cast(Any, status),
+                assigned_actor=(
+                    str(raw_node["assigned_actor"])
+                    if raw_node.get("assigned_actor") is not None
+                    else None
+                ),
+                dependencies=[str(value) for value in dependencies],
+                result_summary=(
+                    str(raw_node["result_summary"])
+                    if raw_node.get("result_summary") is not None
+                    else None
+                ),
+                diff=(
+                    str(raw_node["diff"])
+                    if raw_node.get("diff") is not None
+                    else None
+                ),
+                files_modified=[str(value) for value in files_modified],
+                diff_artifact=(
+                    str(raw_node["diff_artifact"])
+                    if raw_node.get("diff_artifact") is not None
+                    else None
+                ),
+            )
+        state._change_offset = int(snapshot.get("change_count", 0) or 0)
+        return state
+
+    async def snapshot(self, *, truncate_diffs: bool = True) -> dict[str, Any]:
         async with self._lock:
             return {
                 "task_tree": {
@@ -126,11 +178,15 @@ class GlobalState:
                         "assigned_actor": t.assigned_actor,
                         "dependencies": t.dependencies,
                         "result_summary": t.result_summary,
-                        "diff": (t.diff or "")[:500],  # truncate for context window
+                        "diff": (
+                            (t.diff or "")[:500]
+                            if truncate_diffs
+                            else t.diff
+                        ),
                         "files_modified": t.files_modified,
                         "diff_artifact": t.diff_artifact,
                     }
                     for tid, t in self.task_tree.items()
                 },
-                "change_count": len(self.change_log),
+                "change_count": self._change_offset + len(self.change_log),
             }

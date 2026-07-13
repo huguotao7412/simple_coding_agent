@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+from copy import deepcopy
+from typing import Any
 
 from .tools.base import DEFAULT_TOKEN_BUDGET, semantic_truncate
 
@@ -65,6 +67,20 @@ class ContextManager:
             "tool_call_id": tool_call_id,
             "content": content,
         })
+
+    def restore_messages(self, messages: list[dict[str, Any]]) -> None:
+        """Replace conversation state from a complete durable checkpoint."""
+        if messages and messages[0].get("role") != "system":
+            raise ValueError("restored messages must begin with a system message")
+        self.messages = deepcopy(messages)
+        self._result_hashes.clear()
+        tool_results: list[str] = []
+        for message in self.messages:
+            content = message.get("content")
+            if message.get("role") == "tool" and isinstance(content, str):
+                tool_results.append(content)
+        for content in tool_results[-self._max_hash_cache:]:
+            self._result_hashes.add(hashlib.sha256(content.encode()).hexdigest())
 
     def estimate_tokens(self, llm_client) -> int:
         """Precise token count using LLM client's tokenizer."""
