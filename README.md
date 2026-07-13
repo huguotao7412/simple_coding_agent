@@ -16,6 +16,7 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - Git worktree isolation for delegated Actor tasks.
 - Full Actor patch artifacts under `.sca/artifacts/actor-diffs/`.
 - Persistent JSONL traces for eval/debug runs.
+- Durable checkpoints for listing, inspecting, and resuming non-interactive runs.
 - Local eval runner with aggregate `eval_results.json` metrics.
 - Safety eval fixtures for path escape, dirty workspace, and destructive command behavior.
 - Deterministic unit tests for runtime, isolation, reports, and eval behavior.
@@ -129,6 +130,22 @@ Run against another workspace:
 sca --dir C:\path\to\project
 ```
 
+Run a resumable non-interactive task:
+
+```bash
+sca --dir C:\path\to\project --prompt "Fix the failing tests"
+```
+
+Inspect and resume local runs:
+
+```bash
+sca --dir C:\path\to\project runs
+sca --dir C:\path\to\project inspect run_abc123
+sca --dir C:\path\to\project resume run_abc123
+```
+
+Checkpoints are stored in `<workspace>/.sca/runs.db`. `runs` and `inspect` are read-only and do not require a model API key. P1 recovery covers single-task `--prompt` runs; the multi-turn interactive REPL remains an in-memory session for now.
+
 Experimental Web UI:
 
 ```bash
@@ -165,8 +182,11 @@ The current safety model is pragmatic rather than magical:
 - MCP server packages are pinned and launched from local `node_modules/.bin` when installed
 - destructive Actor shell commands such as recursive delete and hard reset are blocked before reaching bash MCP
 - Actor role allowlists are enforced again immediately before local or MCP tool dispatch
+- committed root tool-call results are reused during recovery instead of being executed again
 
 Git worktrees provide version-control and working-directory separation, not an operating-system sandbox. Shell processes still run with the permissions of the current user, so only run the agent against repositories and environments you are willing to modify.
+
+SQLite cannot atomically commit an arbitrary shell, filesystem, or network side effect together with its tool-result checkpoint. A crash after the side effect but before the checkpoint can still cause a retry. See [ADR-0002](docs/adr/0002-durable-run-store.md) for the exact transaction boundary.
 
 ## Development
 
@@ -179,7 +199,7 @@ Run all tests:
 Type-check the trusted runtime boundary:
 
 ```bash
-.\.venv\Scripts\python.exe -m mypy core/actor_execution.py core/policy.py core/events.py core/run_context.py core/runtime.py core/worktree_actor_executor.py core/planner.py core/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy core/actor_execution.py core/policy.py core/events.py core/run_state.py core/run_store.py core/sqlite_run_store.py core/run_context.py core/runtime.py core/worktree_actor_executor.py core/planner.py core/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
 ```
 
 Compile-check Python modules:

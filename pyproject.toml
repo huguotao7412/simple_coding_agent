@@ -38,6 +38,9 @@ files = [
     "core/actor_execution.py",
     "core/policy.py",
     "core/events.py",
+    "core/run_state.py",
+    "core/run_store.py",
+    "core/sqlite_run_store.py",
     "core/run_context.py",
     "core/runtime.py",
     "core/planner.py",
@@ -47,6 +50,8 @@ files = [
     "core/tools/update_state.py",
     "core/tools/delegate.py",
     "cli/report.py",
+    "cli/runs.py",
+    "cli/main.py",
     "evals/run_evals.py",
 ]
 

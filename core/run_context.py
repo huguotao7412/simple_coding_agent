@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .events import AgentEvent, QueueEventSink
-from .run_state import RunCheckpoint, RunRecord
+from .run_state import RunCheckpoint, RunRecord, RunStatus, transition_run
 from .run_store import RunStore
 from .state import GlobalState
 
@@ -34,6 +34,7 @@ class RunContext:
     record: RunRecord | None = None
     store: RunStore | None = None
     _usage_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    _persistence_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     @classmethod
     def create(
@@ -118,6 +119,43 @@ class RunContext:
             completed_tool_calls=dict(self.completed_tool_calls),
             saved_at=time.time() if saved_at is None else saved_at,
         )
+
+    async def persist_checkpoint(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        event_type: str,
+        status: RunStatus | None = None,
+        error: str = "",
+    ) -> None:
+        """Atomically replace the durable checkpoint using optimistic locking."""
+        if self.store is None or self.record is None:
+            return
+        async with self._persistence_lock:
+            current = self.record
+            now = time.time()
+            if status is not None and status is not current.status:
+                updated = transition_run(current, status, error=error, now=now)
+            else:
+                updated = replace(
+                    current,
+                    version=current.version + 1,
+                    updated_at=now,
+                    error=error if status is RunStatus.FAILED else current.error,
+                )
+            checkpoint = await self.checkpoint(messages, saved_at=now)
+            await self.store.save_run(
+                updated,
+                checkpoint,
+                expected_version=current.version,
+            )
+            self.record = updated
+            await self.store.append_event(
+                self.run_id,
+                event_type,
+                {"status": updated.status.value, "version": updated.version},
+                now,
+            )
 
 
 __all__ = ["RunContext", "UsageTotals"]

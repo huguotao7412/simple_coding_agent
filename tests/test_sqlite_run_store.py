@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from dataclasses import replace
@@ -175,3 +176,14 @@ async def test_checkpoint_payload_is_valid_json_without_pickle(tmp_path: Path) -
         ).fetchone()[0]
 
     assert json.loads(raw)["completed_tool_calls"] == {"call_1": "observation"}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_store_initialization_is_safe(tmp_path: Path) -> None:
+    path = tmp_path / "runs.db"
+    stores = [SQLiteRunStore(path) for _ in range(4)]
+
+    await asyncio.gather(*(store.initialize() for store in stores))
+
+    await stores[0].create_run(make_record(), make_checkpoint())
+    assert await stores[-1].load_run("run_test") is not None

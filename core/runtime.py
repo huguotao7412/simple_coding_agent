@@ -13,6 +13,7 @@ from .events import AgentEvent
 from .exceptions import LLMAPIError
 from .llm import LLMClient
 from .run_context import RunContext
+from .run_state import RunStatus
 from .tools.base import BaseTool, ToolResult
 
 
@@ -114,6 +115,17 @@ class AgentRuntime:
         parsed = parse_tool_call(tc)
         tool_name = parsed.tool_name
         args = parsed.args
+        tool_call_id = str(tc.get("id", ""))
+
+        cached = (
+            self.run_context.completed_tool_calls.get(tool_call_id)
+            if self.run_context.store is not None and not self.actor_id
+            else None
+        )
+        if cached is not None:
+            result, observation = self._decode_cached_tool_result(cached)
+            self.ctx.add_tool_result(tool_call_id, observation)
+            return tool_name, args, result, False
 
         if parsed.error is not None:
             result = ToolResult.fail(parsed.error)
@@ -164,6 +176,112 @@ class AgentRuntime:
         self.ctx.add_tool_result(tc["id"], observation)
         return tool_name, args, result, False
 
+    @staticmethod
+    def _decode_cached_tool_result(cached: str) -> tuple[ToolResult, str]:
+        try:
+            payload = json.loads(cached)
+        except json.JSONDecodeError:
+            return ToolResult.ok(cached), cached
+        if not isinstance(payload, dict):
+            return ToolResult.ok(cached), cached
+        observation = str(payload.get("observation", ""))
+        success = bool(payload.get("success", True))
+        if success:
+            return ToolResult.ok(str(payload.get("content", observation))), observation
+        return ToolResult.fail(
+            str(payload.get("error", "cached tool call failed")),
+            content=str(payload.get("content", "")),
+        ), observation
+
+    def _remember_tool_result(
+        self,
+        tool_call_id: str,
+        result: ToolResult,
+    ) -> None:
+        if self.run_context.store is None or self.actor_id:
+            return
+        last_message = self.ctx.messages[-1] if self.ctx.messages else {}
+        observation = str(last_message.get("content", ""))
+        self.run_context.completed_tool_calls[tool_call_id] = json.dumps(
+            {
+                "success": result.success,
+                "content": result.content,
+                "error": result.error,
+                "observation": observation,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    async def _persist_root(
+        self,
+        event_type: str,
+        *,
+        status: RunStatus | None = None,
+        error: str = "",
+    ) -> None:
+        if self.actor_id:
+            return
+        await self.run_context.persist_checkpoint(
+            self.ctx.messages,
+            event_type=event_type,
+            status=status,
+            error=error,
+        )
+
+    def _pending_tool_calls(self) -> list[dict[str, Any]]:
+        """Return tool calls missing observations at the last assistant boundary."""
+        assistant_index: int | None = None
+        tool_calls: list[dict[str, Any]] = []
+        for index in range(len(self.ctx.messages) - 1, -1, -1):
+            message = self.ctx.messages[index]
+            if message.get("role") != "assistant":
+                continue
+            raw_calls = message.get("tool_calls")
+            if isinstance(raw_calls, list):
+                assistant_index = index
+                tool_calls = [
+                    cast(dict[str, Any], call)
+                    for call in raw_calls
+                    if isinstance(call, dict)
+                ]
+            break
+        if assistant_index is None:
+            return []
+        observed_ids = {
+            str(message.get("tool_call_id", ""))
+            for message in self.ctx.messages[assistant_index + 1:]
+            if message.get("role") == "tool"
+        }
+        return [
+            call for call in tool_calls
+            if str(call.get("id", "")) not in observed_ids
+        ]
+
+    async def _process_tool_calls(
+        self,
+        tool_calls: list[dict[str, Any]],
+    ) -> AsyncGenerator[AgentEvent, None]:
+        for tc in tool_calls:
+            parsed = parse_tool_call(tc)
+            yield await self._emit(AgentEvent(
+                type="tool_call",
+                tool_name=parsed.tool_name,
+                tool_args=parsed.args,
+                actor_id=self.actor_id,
+            ))
+            tool_name, _, result, _ = await self._execute_single_tool(tc)
+            self._remember_tool_result(str(tc.get("id", "")), result)
+            await self._persist_root("tool_result")
+            yield await self._emit(AgentEvent(
+                type="tool_result",
+                tool_name=tool_name,
+                tool_result=result,
+                actor_id=self.actor_id,
+            ))
+            for event in await self._run_after_tool_hook(tool_name, result):
+                yield await self._emit(event)
+
     async def _run_after_tool_hook(self, tool_name: str, result: ToolResult) -> list[AgentEvent]:
         if self.after_tool_call is None:
             return []
@@ -194,17 +312,50 @@ class AgentRuntime:
         self,
         user_input: str,
         on_token: Callable[[str], None] | None = None,
+        *,
+        resume: bool = False,
     ) -> str:
         final_content = ""
-        async for event in self.run_stream(user_input):
+        async for event in self.run_stream(user_input, resume=resume):
             if event.type == "thought" and on_token is not None:
                 on_token(event.token)
             elif event.type in {"done", "error"}:
                 final_content = event.content
         return final_content
 
-    async def run_stream(self, user_input: str) -> AsyncGenerator[AgentEvent, None]:
-        self.ctx.add_user_message(user_input)
+    async def run_stream(
+        self,
+        user_input: str,
+        *,
+        resume: bool = False,
+    ) -> AsyncGenerator[AgentEvent, None]:
+        if not resume:
+            self.ctx.add_user_message(user_input)
+        await self._persist_root("running", status=RunStatus.RUNNING)
+        try:
+            if resume:
+                async for event in self._process_tool_calls(
+                    self._pending_tool_calls()
+                ):
+                    yield event
+            async for event in self._run_stream_loop():
+                yield event
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                self._persist_root("paused", status=RunStatus.PAUSED)
+            )
+            raise
+        except Exception as error:
+            await asyncio.shield(
+                self._persist_root(
+                    "failed",
+                    status=RunStatus.FAILED,
+                    error=str(error),
+                )
+            )
+            raise
+
+    async def _run_stream_loop(self) -> AsyncGenerator[AgentEvent, None]:
         tool_schemas = await self._list_tool_schemas()
 
         step_count = 0
@@ -214,6 +365,11 @@ class AgentRuntime:
                 error_msg = "Safety stop: agent reached the maximum step limit."
                 self.last_result_success = False
                 self.ctx.add_assistant_message(content=error_msg)
+                await self._persist_root(
+                    "failed",
+                    status=RunStatus.FAILED,
+                    error=error_msg,
+                )
                 if self.emit_token_stats:
                     yield await self._token_stats_event()
                 yield await self._emit(AgentEvent(type="error", content=error_msg, actor_id=self.actor_id))
@@ -221,9 +377,11 @@ class AgentRuntime:
 
             if self.ctx.needs_compression(self.llm):
                 await self.ctx.compress(self.llm)
+                await self._persist_root("compaction")
                 yield await self._emit(AgentEvent(type="compaction", actor_id=self.actor_id))
             elif self.ctx.needs_proactive_compression(self.llm):
                 self.ctx._lightweight_compress()
+                await self._persist_root("compaction")
                 yield await self._emit(AgentEvent(type="compaction", content="lightweight", actor_id=self.actor_id))
 
             queue: asyncio.Queue[str] = asyncio.Queue()
@@ -282,6 +440,11 @@ class AgentRuntime:
                 error_msg = str(e)
                 self.last_result_success = False
                 self.ctx.add_assistant_message(content=error_msg)
+                await self._persist_root(
+                    "failed",
+                    status=RunStatus.FAILED,
+                    error=error_msg,
+                )
                 if self.emit_token_stats:
                     yield await self._token_stats_event()
                 yield await self._emit(AgentEvent(type="error", content=error_msg, actor_id=self.actor_id))
@@ -295,6 +458,10 @@ class AgentRuntime:
                     reasoning_content=response.get("reasoning_content"),
                 )
                 self.last_result_success = True
+                await self._persist_root(
+                    "completed",
+                    status=RunStatus.COMPLETED,
+                )
                 if self.emit_token_stats:
                     yield await self._token_stats_event()
                 yield await self._emit(AgentEvent(type="done", content=content, actor_id=self.actor_id))
@@ -305,21 +472,7 @@ class AgentRuntime:
                 tool_calls=tool_calls,
                 reasoning_content=response.get("reasoning_content"),
             )
+            await self._persist_root("assistant_tool_calls")
 
-            for tc in tool_calls:
-                parsed = parse_tool_call(tc)
-                yield await self._emit(AgentEvent(
-                    type="tool_call",
-                    tool_name=parsed.tool_name,
-                    tool_args=parsed.args,
-                    actor_id=self.actor_id,
-                ))
-                tool_name, _, result, _ = await self._execute_single_tool(tc)
-                yield await self._emit(AgentEvent(
-                    type="tool_result",
-                    tool_name=tool_name,
-                    tool_result=result,
-                    actor_id=self.actor_id,
-                ))
-                for event in await self._run_after_tool_hook(tool_name, result):
-                    yield await self._emit(event)
+            async for event in self._process_tool_calls(tool_calls):
+                yield event

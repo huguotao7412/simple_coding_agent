@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -92,6 +93,16 @@ class SQLiteRunStore:
 
     def _initialize_sync(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        for attempt in range(8):
+            try:
+                self._initialize_once()
+                return
+            except sqlite3.OperationalError as error:
+                if "locked" not in str(error).lower() or attempt == 7:
+                    raise
+                time.sleep(0.025 * (attempt + 1))
+
+    def _initialize_once(self) -> None:
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(

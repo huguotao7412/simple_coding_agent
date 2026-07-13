@@ -34,10 +34,11 @@ jobs:
         run: >-
           python -m mypy
           core/actor_execution.py core/policy.py core/events.py
+          core/run_state.py core/run_store.py core/sqlite_run_store.py
           core/run_context.py core/runtime.py core/worktree_actor_executor.py
           core/planner.py core/agent.py core/mcp/client.py
           core/tools/update_state.py core/tools/delegate.py
-          cli/report.py evals/run_evals.py
+          cli/report.py cli/runs.py cli/main.py evals/run_evals.py
 
       - name: Compile Python sources
         run: python -m compileall -q core cli web evals tests

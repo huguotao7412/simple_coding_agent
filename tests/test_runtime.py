@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
+
 import pytest
 
 from core.context import ContextManager
@@ -8,6 +12,8 @@ from core.agent import ActorAgent
 from core.planner import Planner
 from core.runtime import AgentRuntime, parse_tool_call
 from core.run_context import RunContext
+from core.run_state import RunRecord, RunStatus
+from core.sqlite_run_store import SQLiteRunStore
 from core.state import GlobalState
 from core.tools.base import BaseTool, ToolResult
 
@@ -39,6 +45,30 @@ class EchoTool(BaseTool):
 
     async def execute(self, **kwargs):
         return ToolResult.ok(f"echo:{kwargs.get('value')}")
+
+
+class CountingTool(EchoTool):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def execute(self, **kwargs):
+        self.calls += 1
+        return await super().execute(**kwargs)
+
+
+class BlockingAfterToolLLM(FakeLLM):
+    def __init__(self, tool_response):
+        super().__init__([tool_response])
+        self.waiting = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def chat(self, messages, tools=None, on_token=None):
+        if self.responses:
+            return await super().chat(messages, tools=tools, on_token=on_token)
+        self.waiting.set()
+        await self.release.wait()
+        return {"role": "assistant", "content": "released"}
 
 
 class FailingTool(BaseTool):
@@ -503,3 +533,166 @@ async def test_shared_run_usage_includes_actor_and_root_model_calls():
     usage_events = [event for event in published if event.type == "model_usage"]
     assert [event.actor_id for event in usage_events] == ["task_actor", ""]
     assert sum(event.prompt_tokens for event in usage_events) == 12
+
+
+@pytest.mark.asyncio
+async def test_root_runtime_persists_safe_message_boundaries(tmp_path: Path):
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    await store.initialize()
+    record = RunRecord(
+        run_id="run_durable",
+        workspace_dir=str(tmp_path),
+        model="test-model",
+        created_at=100.0,
+        updated_at=100.0,
+    )
+    run_context = RunContext.create(record=record, store=store)
+    ctx = ContextManager(system_prompt="system")
+    await store.create_run(record, await run_context.checkpoint(ctx.messages))
+    runtime = AgentRuntime(
+        llm_client=FakeLLM([
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [_tool_call('{"value": "durable"}')],
+            },
+            {"role": "assistant", "content": "complete"},
+        ]),
+        context_manager=ctx,
+        tools=[EchoTool()],
+        run_context=run_context,
+    )
+
+    result = await runtime.run("persist this")
+
+    assert result == "complete"
+    stored = await store.load_run(record.run_id)
+    assert stored is not None
+    assert stored.record.status is RunStatus.COMPLETED
+    assert stored.checkpoint is not None
+    assert [message["role"] for message in stored.checkpoint.messages] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    cached = stored.checkpoint.completed_tool_calls or {}
+    assert json.loads(cached["call_1"])["observation"] == "echo:durable"
+    assert [event.event_type for event in await store.list_events(record.run_id)] == [
+        "running",
+        "assistant_tool_calls",
+        "tool_result",
+        "completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_interrupted_run_resumes_without_replaying_completed_tool_call(
+    tmp_path: Path,
+):
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    await store.initialize()
+    record = RunRecord(
+        run_id="run_resume",
+        workspace_dir=str(tmp_path),
+        model="test-model",
+        created_at=100.0,
+        updated_at=100.0,
+    )
+    first_context = RunContext.create(record=record, store=store)
+    first_messages = ContextManager(system_prompt="system")
+    await store.create_run(
+        record,
+        await first_context.checkpoint(first_messages.messages),
+    )
+    tool = CountingTool()
+    tool_response = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [_tool_call('{"value": "once"}')],
+    }
+    blocking_llm = BlockingAfterToolLLM(tool_response)
+    first_runtime = AgentRuntime(
+        llm_client=blocking_llm,
+        context_manager=first_messages,
+        tools=[tool],
+        run_context=first_context,
+    )
+
+    running = asyncio.create_task(first_runtime.run("start"))
+    await asyncio.wait_for(blocking_llm.waiting.wait(), timeout=2)
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    interrupted = await store.load_run(record.run_id)
+    assert interrupted is not None
+    assert interrupted.record.status is RunStatus.PAUSED
+    assert interrupted.checkpoint is not None
+    restored_messages = ContextManager(system_prompt="discarded")
+    restored_messages.restore_messages(list(interrupted.checkpoint.messages))
+    restored_context = RunContext.from_checkpoint(
+        interrupted.record,
+        interrupted.checkpoint,
+        store=store,
+    )
+    resumed_runtime = AgentRuntime(
+        llm_client=FakeLLM([
+            tool_response,
+            {"role": "assistant", "content": "resumed"},
+        ]),
+        context_manager=restored_messages,
+        tools=[tool],
+        run_context=restored_context,
+    )
+
+    result = await resumed_runtime.run("", resume=True)
+
+    assert result == "resumed"
+    assert tool.calls == 1
+    completed = await store.load_run(record.run_id)
+    assert completed is not None
+    assert completed.record.status is RunStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_resume_finishes_a_tool_call_checkpointed_before_execution(
+    tmp_path: Path,
+):
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    await store.initialize()
+    record = RunRecord(
+        run_id="run_pending_tool",
+        workspace_dir=str(tmp_path),
+        model="test-model",
+        status=RunStatus.PAUSED,
+        created_at=100.0,
+        updated_at=101.0,
+    )
+    messages = ContextManager(system_prompt="system")
+    messages.add_user_message("start")
+    messages.add_assistant_message(
+        content=None,
+        tool_calls=[_tool_call('{"value": "pending"}')],
+    )
+    run_context = RunContext.create(record=record, store=store)
+    checkpoint = await run_context.checkpoint(messages.messages)
+    await store.create_run(record, checkpoint)
+    restored = RunContext.from_checkpoint(record, checkpoint, store=store)
+    tool = CountingTool()
+    runtime = AgentRuntime(
+        llm_client=FakeLLM([{"role": "assistant", "content": "done"}]),
+        context_manager=messages,
+        tools=[tool],
+        run_context=restored,
+    )
+
+    result = await runtime.run("", resume=True)
+
+    assert result == "done"
+    assert tool.calls == 1
+    tool_messages = [
+        message for message in messages.messages if message["role"] == "tool"
+    ]
+    assert tool_messages[-1]["content"] == "echo:pending"

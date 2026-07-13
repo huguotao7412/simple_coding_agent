@@ -118,6 +118,24 @@ This makes each run inspectable after the fact without changing the runtime loop
 
 The Streamlit dashboard reads the same eval artifacts without invoking the agent: `eval_results.json` for aggregate metrics, trace JSONL for the timeline, `.sca/final_report.md` for the run report, and `.sca/artifacts/actor-diffs/*.patch` for Actor diffs. This keeps observability independent from live model access.
 
+## Durable Run Recovery
+
+Non-interactive `--prompt` runs use a `RunStore` port backed by `<workspace>/.sca/runs.db`. The SQLite adapter owns schema setup, WAL configuration, checkpoint JSON encoding, event ordering, and optimistic version checks. `RunContext` owns the current record, full task snapshot, usage totals, and committed root tool-call results.
+
+The root runtime checkpoints only complete message boundaries. Nested Actors share usage and task state but do not overwrite the root conversation checkpoint. On cancellation the run becomes `paused`; `sca resume <run_id>` reconstructs the conversation, task state, usage, and completed-call cache before continuing.
+
+```mermaid
+flowchart LR
+    CLI["sca --prompt / resume"] --> P["Planner"]
+    P --> R["AgentRuntime"]
+    R --> RC["RunContext"]
+    RC --> RS["RunStore port"]
+    RS --> DB["SQLite runs.db"]
+    R --> T["Tools / ActorExecutor"]
+```
+
+Committed tool-result checkpoints prevent replay of the same root tool-call ID. This is not global exactly-once execution: an external side effect can succeed immediately before a process crash and before SQLite records its result. See [ADR-0002](docs/adr/0002-durable-run-store.md).
+
 ## Eval Design
 
 The local eval suite is intentionally deterministic and offline at check time.

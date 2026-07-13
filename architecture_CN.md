@@ -109,6 +109,24 @@ tmp/eval-runs/<task_id>/.sca/traces/run_trace.jsonl
 
 这样每次运行结束后都能回放和检查 agent 到底做了什么，而不需要改 runtime 主循环。
 
+## 持久化 Run 恢复
+
+非交互 `--prompt` 任务通过 `RunStore` 端口写入 `<workspace>/.sca/runs.db`。SQLite 适配器负责 schema、WAL、checkpoint JSON、事件顺序和乐观版本检查；`RunContext` 持有当前 Run record、完整任务快照、usage 汇总与已落盘的 root tool-call 结果。
+
+root runtime 只在完整消息边界写 checkpoint。嵌套 Actor 仍共享 usage 和任务状态，但不会覆盖 root 对话 checkpoint。任务被取消时状态转为 `paused`；`sca resume <run_id>` 会先恢复对话、任务树、usage 和已完成调用缓存，再继续执行。
+
+```mermaid
+flowchart LR
+    CLI["sca --prompt / resume"] --> P["Planner"]
+    P --> R["AgentRuntime"]
+    R --> RC["RunContext"]
+    RC --> RS["RunStore 端口"]
+    RS --> DB["SQLite runs.db"]
+    R --> T["工具 / ActorExecutor"]
+```
+
+已经提交的 tool-result checkpoint 可以阻止相同 root tool-call ID 被重复执行，但这不是全局 exactly-once：外部副作用可能在成功后、SQLite 落盘前遭遇进程崩溃。完整边界见 [ADR-0002](docs/adr/0002-durable-run-store.md)。
+
 ## Eval 设计
 
 本地 eval suite 的检查阶段是确定性的、离线的。

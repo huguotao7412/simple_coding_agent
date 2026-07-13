@@ -69,9 +69,11 @@ class Planner:
         self,
         user_input: str,
         on_token: Callable[[str], None] | None = None,
+        *,
+        resume: bool = False,
     ) -> str:
         final_content = ""
-        async for event in self.run_stream(user_input):
+        async for event in self.run_stream(user_input, resume=resume):
             if event.type == "thought" and on_token is not None:
                 on_token(event.token)
             elif event.type in {"done", "error"}:
@@ -81,9 +83,14 @@ class Planner:
     async def run_stream(
         self,
         user_input: str,
+        *,
+        resume: bool = False,
     ) -> AsyncGenerator[AgentEvent, None]:
         async def produce() -> None:
-            async for _ in self._runtime(emit_token_stats=True).run_stream(user_input):
+            async for _ in self._runtime(emit_token_stats=True).run_stream(
+                user_input,
+                resume=resume,
+            ):
                 pass
 
         producer = asyncio.create_task(produce())
@@ -101,3 +108,7 @@ class Planner:
         finally:
             if not producer.done():
                 producer.cancel()
+                try:
+                    await producer
+                except asyncio.CancelledError:
+                    pass

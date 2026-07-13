@@ -16,6 +16,7 @@ Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重
 - 使用 git worktree 隔离委派给 Actor 的子任务。
 - 依赖任务的 diff 会作为下游 Actor 的 baseline，Verifier 能验证真实 Coder 改动。
 - eval/debug 运行会持久化 JSONL trace。
+- 非交互任务会持久化 Run checkpoint，可列出、检查并恢复中断任务。
 - 本地 eval runner 会输出聚合的 `eval_results.json` 指标。
 - 单元测试覆盖 runtime、隔离、报告和 eval 行为。
 
@@ -132,6 +133,22 @@ sca
 sca --dir C:\path\to\project
 ```
 
+运行一个可恢复的非交互任务：
+
+```powershell
+sca --dir C:\path\to\project --prompt "修复失败的测试"
+```
+
+检查和恢复本地 Run：
+
+```powershell
+sca --dir C:\path\to\project runs
+sca --dir C:\path\to\project inspect run_abc123
+sca --dir C:\path\to\project resume run_abc123
+```
+
+Run checkpoint 默认保存在工作区的 `.sca/runs.db`。`runs` 和 `inspect` 是只读命令，不需要模型 API key。P1 的持久化恢复覆盖 `--prompt` 单任务运行；交互式多轮 REPL 暂时仍是内存会话。
+
 实验 Web UI：
 
 ```powershell
@@ -195,8 +212,11 @@ eval runner 会把同一条事件流写成 JSONL trace，方便调试、复盘�
 - Actor 任务使用独立 git worktree。
 - 下游 Actor 会接收上游 diff baseline，避免 Verifier 验证空代码。
 - Actor 角色 allowlist 会在本地或 MCP 工具真正执行前再次强制校验。
+- 已落盘的 root tool-call 结果会在恢复时复用，避免 checkpoint 之后重复执行。
 
 Git worktree 提供版本控制和默认工作目录隔离，不是操作系统沙箱。Actor 子进程仍拥有当前用户的系统权限。这些机制能降低风险，但不能替代进程级沙箱；请只在你愿意让 agent 修改的仓库和环境中运行。
+
+SQLite checkpoint 也不能与任意 shell、文件系统或网络副作用组成同一个原子事务。如果进程恰好在副作用成功后、tool result 落盘前崩溃，该操作仍可能在恢复时重试。完整取舍见 [ADR-0002](docs/adr/0002-durable-run-store.md)。
 
 ## 开发
 
@@ -209,7 +229,7 @@ Git worktree 提供版本控制和默认工作目录隔离，不是操作系统�
 对可信运行时边界执行类型检查：
 
 ```powershell
-.\.venv\Scripts\python.exe -m mypy core/actor_execution.py core/policy.py core/events.py core/run_context.py core/runtime.py core/worktree_actor_executor.py core/planner.py core/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy core/actor_execution.py core/policy.py core/events.py core/run_state.py core/run_store.py core/sqlite_run_store.py core/run_context.py core/runtime.py core/worktree_actor_executor.py core/planner.py core/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
 ```
 
 编译检查：
