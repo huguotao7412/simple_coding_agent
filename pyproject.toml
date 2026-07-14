@@ -35,6 +35,7 @@ follow_imports = "silent"
 exclude = [".venv", ".worktrees", "__pycache__"]
 ignore_missing_imports = true
 files = [
+    "core/execution",
     "core/actors/contracts.py",
     "core/policy.py",
     "core/events.py",

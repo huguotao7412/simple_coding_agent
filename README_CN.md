@@ -19,6 +19,7 @@ Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重
 - eval/debug 运行会持久化 JSONL trace。
 - 非交互任务会持久化 Run checkpoint，可列出、检查并恢复中断任务。
 - 本地 eval runner 会输出聚合的 `eval_results.json` 指标。
+- 版本化的确定性任务评估会记录意图、复杂度、风险和推荐执行策略。
 - 单元测试覆盖 runtime、隔离、报告和 eval 行为。
 
 当前目标不是宣称它已经是完全自治的生产级 coding system，而是打磨一个可靠、可审计、可持续评测的本地 agent 核心。
@@ -37,6 +38,7 @@ Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重
 
 ```text
 用户请求
+  -> TaskAssessor（意图 / 复杂度 / 风险 / 策略）
   -> Planner
   -> AgentRuntime
   -> LLM response
@@ -64,6 +66,7 @@ core/
   runs/             Run 生命周期、任务状态和持久化适配器
   actors/           Actor 行为、执行契约、角色和 worktree 适配器
   verification/     质量门禁配置、执行证据与修复提示
+  execution/        确定性任务评估与执行策略契约
   planner.py        Planner 对 runtime engine 的封装
   events.py         跨域 AgentEvent 协议
   llm.py            OpenAI-compatible 异步流式客户端
@@ -211,6 +214,7 @@ sca-eval check
 
 CLI 会渲染 runtime 事件流：
 
+- 确定性任务评估和推荐执行策略
 - 流式模型输出
 - 工具调用名称和精简参数
 - 工具成功/失败摘要
@@ -249,7 +253,7 @@ SQLite checkpoint 也不能与任意 shell、文件系统或网络副作用组�
 对可信运行时边界执行类型检查：
 
 ```powershell
-.\.venv\Scripts\python.exe -m mypy core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/verification core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy core/execution core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/verification core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
 ```
 
 编译检查：
@@ -268,9 +272,8 @@ CLI smoke check：
 
 近期：
 
-- 基于 `eval_results.json` 增加模型/provider 对比报告。
-- 增加 path escape、破坏性命令、dirty workspace 等安全 eval。
-- Web UI 继续保持实验状态，除非它能真正服务 trace 可视化。
+- 使用重复的真实模型 eval 基线校准任务评估规则。
+- 强制执行各策略的 Actor、模型调用、token、修复和总时长预算。
 
 长期：
 

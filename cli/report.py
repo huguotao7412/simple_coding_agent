@@ -32,9 +32,13 @@ class RunReport:
     usage_estimated: bool = False
     errors: list[str] = field(default_factory=list)
     final_output: str = ""
+    task_assessment: dict[str, Any] | None = None
 
     def observe(self, event: AgentEvent) -> None:
-        if event.type == "tool_call":
+        if event.type == "task_assessment":
+            self._record_task_assessment(event.content)
+
+        elif event.type == "tool_call":
             args = dict(event.tool_args or {})
             self.tool_calls.append(ToolCallRecord(name=event.tool_name or "tool", args=args))
             self._record_file_args(args)
@@ -99,9 +103,26 @@ class RunReport:
             "",
             f"Status: {self.outcome}",
             "",
-            "## Files",
-            "",
         ]
+
+        if self.task_assessment:
+            hints = self.task_assessment.get("execution_hints", {})
+            reasons = self.task_assessment.get("reasons", [])
+            lines.extend([
+                "## Task Assessment",
+                "",
+                f"- Strategy: {self.task_assessment.get('strategy', 'unknown')}",
+                f"- Intent: {self.task_assessment.get('intent', 'unknown')}",
+                f"- Complexity: {self.task_assessment.get('complexity', 'unknown')}",
+                f"- Risk: {self.task_assessment.get('risk', 'unknown')}",
+                f"- Max actors: {hints.get('max_actors', 'unknown')}",
+                f"- Human approval required: {bool(hints.get('requires_human_approval', False))}",
+            ])
+            if isinstance(reasons, list):
+                lines.extend(f"- Reason: {reason}" for reason in reasons if isinstance(reason, str))
+            lines.append("")
+
+        lines.extend(["## Files", ""])
 
         if self.files_referenced:
             for path in sorted(self.files_referenced):
@@ -130,7 +151,16 @@ class RunReport:
             lines.append("- No test command was observed in this run.")
 
         lines.extend(["", "## Risk", ""])
-        if self.errors:
+        assessed_risk = (
+            str(self.task_assessment.get("risk", ""))
+            if self.task_assessment
+            else ""
+        )
+        if assessed_risk == "high":
+            lines.append("- High: task assessment requires review or human approval.")
+        elif assessed_risk == "medium":
+            lines.append("- Medium: task assessment identified a cross-boundary change.")
+        elif self.errors:
             lines.append("- Review required: runtime errors were observed.")
         elif self.failed_tool_count:
             lines.append("- Review required: at least one tool call failed.")
@@ -184,6 +214,15 @@ class RunReport:
             status = task.get("status", "unknown")
             counts[status] = counts.get(status, 0) + 1
         self.actor_status_counts = counts
+
+    def _record_task_assessment(self, content: str) -> None:
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+            return
+        self.task_assessment = payload
 
     def _record_token_stats(self, event: AgentEvent) -> None:
         # Structured fields are preferred for new runtime events. JSON content

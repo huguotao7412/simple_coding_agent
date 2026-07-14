@@ -158,6 +158,12 @@ class UI:
         failed_tools = report.failed_tool_count
         table.add_row("Tools", f"{tool_count} call(s), {failed_tools} failed")
 
+        if report.task_assessment:
+            table.add_row(
+                "Task strategy",
+                str(report.task_assessment.get("strategy", "unknown")),
+            )
+
         if report.files_referenced:
             files = sorted(report.files_referenced)
             rendered = ", ".join(files[:5])

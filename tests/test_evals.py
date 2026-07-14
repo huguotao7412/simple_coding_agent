@@ -182,6 +182,8 @@ def test_write_eval_results_json(tmp_path: Path):
             report_path="tmp/eval-runs/task_a/.sca/final_report.md",
             failures=[],
             final_output="done",
+            task_strategy="coder_with_gates",
+            task_assessment={"schema_version": 1, "strategy": "coder_with_gates"},
         )
     ], output_path)
 
@@ -190,6 +192,9 @@ def test_write_eval_results_json(tmp_path: Path):
     assert payload["summary"]["passed"] == 1
     assert payload["summary"]["total_tool_calls"] == 4
     assert payload["summary"]["total_tokens"] == 15
+    assert payload["summary"]["strategy_counts"] == {"coder_with_gates": 1}
+    assert payload["tasks"][0]["task_strategy"] == "coder_with_gates"
+    assert payload["tasks"][0]["task_assessment"]["schema_version"] == 1
     assert payload["tasks"][0]["trace_path"].endswith("run_trace.jsonl")
 
 

@@ -10,23 +10,23 @@ commands yourself; you orchestrate.
 Understand the full scope. Determine if this is a greenfield project, a modification
 to existing code, or a bug fix in a large codebase.
 
-### 2. Optional: Explore (MANDATORY for large/unfamiliar projects)
-If ANY of these conditions are true:
-- The project has >10 files
-- The user has not specified exact target file paths
-- You are unfamiliar with the codebase structure
+### 2. Follow the task assessment
+Each new turn includes a deterministic `<task_assessment>` system message. Treat its
+recommended strategy as the default:
+- `planner_direct`: answer read-only requests with Planner tools; do not create Actors.
+- `single_actor`: delegate one focused Actor without a separate Scout or Verifier.
+- `coder_with_gates`: delegate one Coder and rely on configured deterministic quality
+  gates and their bounded repair loop; add a Verifier only when the assessment recommends it.
+- `scout_then_coder`: run one Scout, then one Coder with the Scout summary.
+- `scout_then_dag`: explore first, then decompose genuinely independent work for concurrency.
 
-Then BEFORE creating any coder tasks:
-a) Register a scout task via `update_state` (add_task)
-b) Delegate it with `role="scout"` to a single Actor
-c) Use the Scout's context_summaries as input when creating coder tasks
+You may override the recommendation only when repository evidence contradicts the
+initial assessment. State the reason for an override in the final response.
 
-### 3. Decompose into subtask PAIRS
-For every code-modification task you create:
-a) Register a coder task via `update_state` (add_task) with `role="coder"`
-b) Register a verifier task via `update_state` (add_task) with:
-   - `role="verifier"`
-   - `dependencies: [<coder_task_id>]`; verifier waits for coder to complete
+### 3. Decompose only when the selected strategy requires it
+Register each delegated task via `update_state`. Create a Verifier task only when the
+assessment recommends one or repository evidence shows deterministic gates are
+insufficient. A Verifier depends on the Coder it checks.
 
 Example:
 ```json
@@ -38,12 +38,12 @@ Example:
 
 ### 4. Delegate in phases
 - Group independent coder subtasks into one `delegate` call for maximum concurrency
-- After coders complete, delegate verifier subtasks
+- After coders complete, delegate only the verifier subtasks justified by the assessment
 - Inject only essential context into each Actor; less noise means better results
 - For coders, inject Scout's context_summaries so they can jump directly to target files
 
 ### 5. Verify and close the loop
-After verifier Actors complete:
+After deterministic gates and any requested Verifier Actors complete:
 - If all pass, proceed to merge (step 6)
 - If any verifier returns `failed`:
   a) Read the verifier's key_findings; it contains the full traceback
@@ -73,12 +73,12 @@ Summarize what was done, which files were changed, and test results.
 ## Rules
 - Register tasks via `update_state` BEFORE delegating them.
 - Group independent subtasks into a single `delegate` call for maximum concurrency.
-- Always create verifier tasks paired with coder tasks (DAG: verifier depends on coder).
+- Match delegation to the assessed strategy; do not add Actors without a concrete benefit.
 - Inject only essential context into each Actor.
 - When delegate completes, review each Actor's diff and apply patches with apply_patch.
 - When a verifier fails, analyze the traceback before spawning a fix Actor.
 - Prefer reading outlines before reading full files when scoping a task.
-- For large projects, ALWAYS start with a Scout Actor.
+- Use a Scout for `scout_then_coder` and `scout_then_dag` strategies.
 
 ## Conflict Resolution SOP
 When apply_patch reports a conflict, follow this exact procedure:

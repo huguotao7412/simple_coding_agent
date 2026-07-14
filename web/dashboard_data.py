@@ -7,6 +7,7 @@ from typing import Any
 
 
 TIMELINE_EVENT_TYPES = {
+    "task_assessment",
     "thought",
     "tool_call",
     "tool_result",
@@ -29,6 +30,7 @@ class DashboardSummary:
     total_tool_calls: int = 0
     failed_tool_calls: int = 0
     total_tokens: int = 0
+    strategy_counts: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -52,6 +54,7 @@ class DashboardTask:
     total_tokens: int
     trace_path: Path
     report_path: Path
+    task_strategy: str | None = None
     failures: list[str] = field(default_factory=list)
     final_output: str = ""
     timeline: list[TimelineEvent] = field(default_factory=list)
@@ -92,6 +95,10 @@ def _load_summary(raw: dict[str, Any], tasks: list[DashboardTask]) -> DashboardS
         total_tool_calls=int(raw.get("total_tool_calls", 0) or 0),
         failed_tool_calls=failed_tool_calls,
         total_tokens=int(raw.get("total_tokens", 0) or 0),
+        strategy_counts={
+            str(key): int(value)
+            for key, value in (raw.get("strategy_counts", {}) or {}).items()
+        },
     )
 
 
@@ -110,6 +117,7 @@ def _load_task(raw: dict[str, Any], base_dir: Path) -> DashboardTask:
         total_tokens=int(raw.get("total_tokens", 0) or 0),
         trace_path=trace_path,
         report_path=report_path,
+        task_strategy=(str(raw["task_strategy"]) if raw.get("task_strategy") else None),
         failures=list(raw.get("failures", [])),
         final_output=str(raw.get("final_output", "") or ""),
         timeline=load_timeline(trace_path),
@@ -170,7 +178,10 @@ def _timeline_event_from_record(record: dict[str, Any]) -> TimelineEvent:
     event_type = str(record.get("type", ""))
     tool_result = record.get("tool_result") or {}
     success = tool_result.get("success")
-    if event_type == "tool_call":
+    if event_type == "task_assessment":
+        label = "Task assessment"
+        content = str(record.get("content") or "")
+    elif event_type == "tool_call":
         label = f"Tool call: {record.get('tool_name') or 'unknown'}"
         content = _compact_json(record.get("tool_args") or {})
     elif event_type == "tool_result":

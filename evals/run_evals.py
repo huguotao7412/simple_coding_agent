@@ -48,6 +48,8 @@ class EvalRunResult:
     failures: list[str] = field(default_factory=list)
     final_output: str = ""
     runtime_error: str | None = None
+    task_strategy: str | None = None
+    task_assessment: dict[str, Any] | None = None
 
 
 @dataclass
@@ -146,6 +148,10 @@ def write_eval_results(results: list[EvalRunResult], output_path: Path) -> Path:
     """Write aggregate eval run results to a deterministic JSON file."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     passed = sum(1 for result in results if result.passed)
+    strategy_counts: dict[str, int] = {}
+    for result in results:
+        strategy = result.task_strategy or "unknown"
+        strategy_counts[strategy] = strategy_counts.get(strategy, 0) + 1
     payload = {
         "summary": {
             "total": len(results),
@@ -157,6 +163,7 @@ def write_eval_results(results: list[EvalRunResult], output_path: Path) -> Path:
             "total_prompt_tokens": sum(result.prompt_tokens for result in results),
             "total_completion_tokens": sum(result.completion_tokens for result in results),
             "total_tokens": sum(result.total_tokens for result in results),
+            "strategy_counts": dict(sorted(strategy_counts.items())),
         },
         "tasks": [
             {
@@ -175,6 +182,8 @@ def write_eval_results(results: list[EvalRunResult], output_path: Path) -> Path:
                 "failures": result.failures,
                 "final_output": result.final_output,
                 "runtime_error": result.runtime_error,
+                "task_strategy": result.task_strategy,
+                "task_assessment": result.task_assessment,
             }
             for result in results
         ],
@@ -278,6 +287,12 @@ async def run_eval_task(
         failures=failures,
         final_output=final_output or report.final_output,
         runtime_error=runtime_error,
+        task_strategy=(
+            str(report.task_assessment.get("strategy"))
+            if report.task_assessment and report.task_assessment.get("strategy")
+            else None
+        ),
+        task_assessment=report.task_assessment,
     )
 
 

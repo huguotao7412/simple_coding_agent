@@ -19,6 +19,7 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - Persistent JSONL traces for eval/debug runs.
 - Durable checkpoints for listing, inspecting, and resuming non-interactive runs.
 - Local eval runner with aggregate `eval_results.json` metrics.
+- Versioned deterministic task assessment with auditable strategy recommendations.
 - Safety eval fixtures for path escape, dirty workspace, and destructive command behavior.
 - Deterministic unit tests for runtime, isolation, reports, and eval behavior.
 
@@ -38,6 +39,7 @@ Dashboard interface:
 
 ```text
 User request
+  -> TaskAssessor (intent / complexity / risk / strategy)
   -> Planner
   -> AgentRuntime
   -> LLM response
@@ -63,6 +65,7 @@ core/
   runs/             durable run lifecycle, task state, persistence adapters
   actors/           Actor behavior, contracts, roles, worktree adapter
   verification/     Quality-gate config, execution evidence, repair prompts
+  execution/        Deterministic task assessment and strategy contracts
   planner.py        Planner wrapper around the runtime engine
   events.py         cross-domain AgentEvent protocol
   llm.py            OpenAI-compatible async streaming client
@@ -178,6 +181,7 @@ By default this opens the Trace/Eval Dashboard. Point it at an `eval_results.jso
 
 The CLI renders the runtime event stream:
 
+- deterministic task assessment and recommended execution strategy
 - streamed model output
 - tool call names and compact arguments
 - tool success/failure summaries
@@ -219,7 +223,7 @@ Run all tests:
 Type-check the trusted runtime boundary:
 
 ```bash
-.\.venv\Scripts\python.exe -m mypy core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/verification core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy core/execution core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/verification core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
 ```
 
 Compile-check Python modules:
@@ -265,7 +269,9 @@ Compare two or more aggregate eval runs:
 sca-eval compare eval_results.baseline.json eval_results.candidate.json --output eval_comparison.md
 ```
 
-The comparison report shows pass rate, duration, tool calls, failed tools, token usage, and task-level regressions/improvements against the first file as baseline.
+The aggregate results include per-task assessments and strategy counts. The comparison
+report shows pass rate, duration, tool calls, failed tools, token usage, and task-level
+regressions/improvements against the first file as baseline.
 
 The same artifacts can be inspected visually with:
 
@@ -277,8 +283,8 @@ sca-web
 
 Near-term:
 
-- Add safety-focused eval cases for merge-conflict recovery.
-- Add richer trace filtering and side-by-side diff navigation to the dashboard.
+- Calibrate task-assessment rules against repeated real-model eval baselines.
+- Enforce per-strategy actor, model-call, token, repair, and wall-clock budgets.
 
 Longer-term:
 

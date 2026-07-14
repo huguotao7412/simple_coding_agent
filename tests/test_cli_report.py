@@ -102,3 +102,43 @@ def test_run_report_renders_and_writes_eval_friendly_markdown(tmp_path):
     assert "python -m pytest -q" in markdown
     assert report_path == tmp_path / ".sca" / "final_report.md"
     assert report_path.read_text(encoding="utf-8") == markdown
+
+
+def test_run_report_records_versioned_task_assessment():
+    report = RunReport()
+    report.observe(AgentEvent(
+        type="task_assessment",
+        content=json.dumps({
+            "schema_version": 1,
+            "intent": "code_change",
+            "complexity": "small",
+            "risk": "low",
+            "strategy": "coder_with_gates",
+            "reasons": ["repository defines deterministic quality gates"],
+            "execution_hints": {
+                "max_actors": 1,
+                "requires_human_approval": False,
+            },
+        }),
+    ))
+
+    markdown = report.to_markdown()
+
+    assert report.task_assessment is not None
+    assert report.task_assessment["strategy"] == "coder_with_gates"
+    assert "## Task Assessment" in markdown
+    assert "Strategy: coder_with_gates" in markdown
+
+
+def test_run_report_risk_section_respects_high_task_risk():
+    report = RunReport(task_assessment={
+        "schema_version": 1,
+        "risk": "high",
+        "strategy": "scout_then_dag",
+        "execution_hints": {"max_actors": 4, "requires_human_approval": True},
+    })
+
+    markdown = report.to_markdown()
+
+    assert "High: task assessment requires review or human approval." in markdown
+    assert "Low: no runtime errors" not in markdown

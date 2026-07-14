@@ -5,6 +5,8 @@ import json
 from collections.abc import AsyncGenerator, Callable
 
 from .runtime.conversation import ContextManager
+from .execution.assessment import TaskAssessor
+from .execution.models import TaskAssessment
 from .llm import LLMClient
 from .events import AgentEvent
 from .runtime.engine import AgentRuntime
@@ -23,6 +25,7 @@ class Planner:
         workspace_dir: str,
         max_steps: int = 50,
         run_context: RunContext | None = None,
+        task_assessor: TaskAssessor | None = None,
     ):
         self.llm = llm_client
         self.workspace_dir = workspace_dir
@@ -30,6 +33,8 @@ class Planner:
         self.ctx = context_manager
         self.run_context = run_context or RunContext.create()
         self.state = self.run_context.state
+        self.task_assessor = task_assessor or TaskAssessor(workspace_dir)
+        self.current_task_assessment: TaskAssessment | None = None
 
         for tool in tools:
             if tool.name == "delegate":
@@ -86,6 +91,22 @@ class Planner:
         *,
         resume: bool = False,
     ) -> AsyncGenerator[AgentEvent, None]:
+        if not resume:
+            assessment = self.task_assessor.assess(user_input)
+            self.current_task_assessment = assessment
+            self.ctx.add_system_message(assessment.to_system_message())
+            await self.run_context.emit(AgentEvent(
+                type="task_assessment",
+                content=assessment.to_json(),
+            ))
+        else:
+            restored_assessment = self._restored_assessment_json()
+            if restored_assessment:
+                await self.run_context.emit(AgentEvent(
+                    type="task_assessment",
+                    content=restored_assessment,
+                ))
+
         async def produce() -> None:
             async for _ in self._runtime(emit_token_stats=True).run_stream(
                 user_input,
@@ -112,3 +133,25 @@ class Planner:
                     await producer
                 except asyncio.CancelledError:
                     pass
+
+    def _restored_assessment_json(self) -> str:
+        """Recover the latest durable assessment for resume-time observability."""
+        prefix = "<task_assessment>\n"
+        suffix = "\n</task_assessment>"
+        for message in reversed(self.ctx.messages):
+            content = message.get("content")
+            if message.get("role") != "system" or not isinstance(content, str):
+                continue
+            if not content.startswith(prefix):
+                continue
+            end = content.find(suffix, len(prefix))
+            if end == -1:
+                continue
+            raw = content[len(prefix):end]
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict) and payload.get("schema_version") == 1:
+                return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        return ""

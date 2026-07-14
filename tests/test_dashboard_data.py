@@ -9,6 +9,7 @@ from web.dashboard_data import load_dashboard_data, load_timeline
 def test_load_timeline_groups_thought_tokens_and_tool_events(tmp_path: Path):
     trace_path = tmp_path / "run_trace.jsonl"
     _write_jsonl(trace_path, [
+        {"type": "task_assessment", "content": "{\"strategy\":\"single_actor\"}", "elapsed_ms": 1},
         {"type": "thought", "token": "plan ", "elapsed_ms": 10},
         {"type": "thought", "token": "work", "elapsed_ms": 12},
         {"type": "tool_call", "tool_name": "read", "tool_args": {"path": "app.py"}, "elapsed_ms": 20},
@@ -23,10 +24,13 @@ def test_load_timeline_groups_thought_tokens_and_tool_events(tmp_path: Path):
 
     timeline = load_timeline(trace_path)
 
-    assert [event.type for event in timeline] == ["thought", "tool_call", "tool_result", "done"]
-    assert timeline[0].content == "plan work"
-    assert timeline[1].label == "Tool call: read"
-    assert timeline[2].success is True
+    assert [event.type for event in timeline] == [
+        "task_assessment", "thought", "tool_call", "tool_result", "done",
+    ]
+    assert timeline[0].label == "Task assessment"
+    assert timeline[1].content == "plan work"
+    assert timeline[2].label == "Tool call: read"
+    assert timeline[3].success is True
 
 
 def test_load_dashboard_data_reads_report_and_patch_artifacts(tmp_path: Path):

@@ -10,6 +10,7 @@ The modular monolith groups cohesive implementation details without hiding depen
 - `core/runs/`: durable-run models, task state, `RunContext`, the store port, and SQLite adapter.
 - `core/actors/`: Actor behavior, execution contracts, roles, and the worktree adapter.
 - `core/verification/`: deterministic gate configuration, subprocess execution, evidence, and repair prompts.
+- `core/execution/`: versioned task assessment contracts and deterministic strategy selection.
 - `core/events.py`: the cross-domain event contract shared by runtime, runs, MCP, CLI, and evals.
 - `core/planner.py`: the application orchestration entry point.
 
@@ -36,6 +37,7 @@ Package `__init__.py` files stay minimal. Callers import the owning module expli
 
 ```text
 User prompt
+  -> TaskAssessor
   -> Planner
   -> AgentRuntime
   -> LLM streaming response
@@ -46,6 +48,14 @@ User prompt
 ```
 
 `AgentRuntime` is the shared ReAct loop. Planner and Actor agents both use it, so step limits, tool-call parsing, malformed JSON recovery, repeated-action circuit breaking, context compression, token reporting, and event emission live in one place.
+
+Before a new Planner turn enters that loop, `TaskAssessor` performs a bounded,
+read-only workspace scan and classifies intent, complexity, and risk. It publishes a
+versioned `task_assessment` event and injects the same JSON as durable system context.
+The recommendation selects between Planner-only analysis, one Actor, a Coder backed
+by deterministic gates, Scout plus Coder, or a Scout-led Actor DAG. This first
+boundary is advisory and measurable; later policy layers can enforce its budgets
+without embedding orchestration decisions only in prompt prose.
 
 The Planner owns orchestration. Each Planner receives a `RunContext` with an independent task ledger, run ID, event queue, and usage accumulator. It decomposes work, delegates isolated subtasks, receives Actor summaries and diffs, applies selected patches, and synthesizes the final response.
 

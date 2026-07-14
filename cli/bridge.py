@@ -38,7 +38,19 @@ class Bridge:
                 async for event in self.agent.run_stream(user_input):
                     report.observe(event)
 
-                    if event.type == "thought":
+                    if event.type == "task_assessment":
+                        try:
+                            assessment = json.loads(event.content)
+                            self.ui.render_info(
+                                "Task assessment: "
+                                f"strategy={assessment.get('strategy', 'unknown')}, "
+                                f"complexity={assessment.get('complexity', 'unknown')}, "
+                                f"risk={assessment.get('risk', 'unknown')}"
+                            )
+                        except (json.JSONDecodeError, AttributeError):
+                            pass
+
+                    elif event.type == "thought":
                         self.ui.clear_tool_status()
                         if stream is None:
                             stream = self.ui.stream_markdown()
