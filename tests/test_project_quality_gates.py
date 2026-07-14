@@ -3,6 +3,8 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+from core.verification.config import load_verification_config
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,3 +47,11 @@ def test_actor_executor_modules_are_in_trusted_mypy_boundary() -> None:
     assert trusted_modules <= configured_files
     for module in trusted_modules:
         assert module in workflow
+
+
+def test_repository_dogfoods_deterministic_quality_gates() -> None:
+    config = load_verification_config(ROOT)
+
+    assert config.enabled
+    assert [gate.name for gate in config.gates] == ["unit", "types"]
+    assert all(gate.required for gate in config.gates)

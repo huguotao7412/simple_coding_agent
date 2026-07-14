@@ -15,4 +15,5 @@ package-lock.json
 evals/reports/
 tmp/
 state.db
-/.sca/
+/.sca/*
+!/.sca/quality-gates.toml

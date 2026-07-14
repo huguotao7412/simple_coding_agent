@@ -1,0 +1,11 @@
+max_repair_attempts = 2
+
+[[gates]]
+name = "unit"
+command = ["{python}", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+timeout_seconds = 120
+
+[[gates]]
+name = "types"
+command = ["{python}", "-m", "mypy"]
+timeout_seconds = 120
