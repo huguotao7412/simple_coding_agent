@@ -3,6 +3,7 @@
 from .config import VerificationConfigError, load_verification_config
 from .models import GateResult, GateSpec, VerificationConfig, VerificationReport
 from .runner import VerificationRunner
+from .repair import build_repair_prompt
 
 __all__ = [
     "GateResult",
@@ -11,5 +12,6 @@ __all__ = [
     "VerificationConfigError",
     "VerificationReport",
     "VerificationRunner",
+    "build_repair_prompt",
     "load_verification_config",
 ]

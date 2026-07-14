@@ -14,6 +14,7 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - Planner/Actor orchestration with execution-time role tool authorization.
 - MCP-backed file and shell tools for isolated Actor execution.
 - Git worktree isolation for delegated Actor tasks.
+- Deterministic project quality gates with bounded automatic repair.
 - Full Actor patch artifacts under `.sca/artifacts/actor-diffs/`.
 - Persistent JSONL traces for eval/debug runs.
 - Durable checkpoints for listing, inspecting, and resuming non-interactive runs.
@@ -61,6 +62,7 @@ core/
   runtime/          execution engine and conversation context
   runs/             durable run lifecycle, task state, persistence adapters
   actors/           Actor behavior, contracts, roles, worktree adapter
+  verification/     Quality-gate config, execution evidence, repair prompts
   planner.py        Planner wrapper around the runtime engine
   events.py         cross-domain AgentEvent protocol
   llm.py            OpenAI-compatible async streaming client
@@ -115,6 +117,24 @@ SCA_MAX_ACTORS=4
 ```
 
 The client uses an OpenAI-compatible chat completions API.
+
+Optionally define deterministic coder quality gates in `.sca/quality-gates.toml`:
+
+```toml
+max_repair_attempts = 2
+
+[[gates]]
+name = "unit"
+command = ["{python}", "-m", "pytest", "-q"]
+timeout_seconds = 120
+
+[[gates]]
+name = "types"
+command = ["{python}", "-m", "mypy", "core"]
+required = false
+```
+
+Commands are argument arrays and run without a shell in the coder's isolated worktree. Required failures are returned to the same Actor for bounded repair; a diff is exported only after all required gates pass. Complete output is retained under `.sca/artifacts/verification/`. These are repository-owned commands and execute with the current user's permissions, so only enable configurations you trust.
 
 ## Usage
 
@@ -199,7 +219,7 @@ Run all tests:
 Type-check the trusted runtime boundary:
 
 ```bash
-.\.venv\Scripts\python.exe -m mypy core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/verification core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
 ```
 
 Compile-check Python modules:

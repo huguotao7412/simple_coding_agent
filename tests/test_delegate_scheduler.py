@@ -7,6 +7,7 @@ import pytest
 from core.actors.contracts import ActorExecutionResult, ActorTaskSpec
 from core.runs.context import RunContext
 from core.tools.delegate import DelegateTool
+from core.verification.models import GateResult, VerificationReport
 
 
 class RecordingExecutor:
@@ -50,6 +51,37 @@ def _tool(context: RunContext, executor: RecordingExecutor) -> DelegateTool:
 
 def _subtask(task_id: str) -> dict[str, Any]:
     return {"task_id": task_id, "description": f"Execute {task_id}"}
+
+
+def test_result_payload_preserves_verification_attempt_evidence() -> None:
+    report = VerificationReport(
+        attempt=1,
+        results=(
+            GateResult(
+                gate_name="unit",
+                command=("pytest",),
+                required=True,
+                passed=False,
+                exit_code=1,
+                duration_ms=12,
+                output_artifact="unit.log",
+                output_excerpt="failed",
+            ),
+        ),
+    )
+
+    payload = DelegateTool._result_payload(
+        ActorExecutionResult(
+            task_id="task",
+            status="failed",
+            verification_reports=(report,),
+        )
+    )
+
+    verification = payload["verification"]
+    assert verification["attempts"] == 1
+    assert verification["passed"] is False
+    assert verification["reports"][0]["gates"][0]["output_artifact"] == "unit.log"
 
 
 @pytest.mark.asyncio

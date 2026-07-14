@@ -90,7 +90,7 @@ def load_verification_config(workspace: str | Path) -> VerificationConfig:
         _gate_from_mapping(value, index=index)
         for index, value in enumerate(raw_gates, start=1)
     )
-    names = [gate.name for gate in gates]
+    names = [gate.name.casefold() for gate in gates]
     if len(names) != len(set(names)):
         raise VerificationConfigError("duplicate gate name")
 

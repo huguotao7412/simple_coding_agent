@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from ..runs.context import RunContext
+from ..verification.models import VerificationReport
 
 
 ActorExecutionStatus = Literal["done", "failed"]
@@ -56,6 +57,7 @@ class ActorExecutionResult:
     suggested_next_steps: str = ""
     diff_artifact: str = ""
     diff: str = ""
+    verification_reports: tuple[VerificationReport, ...] = ()
 
 
 @runtime_checkable

@@ -14,6 +14,7 @@ Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重
 - Planner/Actor 编排，以及在执行入口强制校验的角色工具 allowlist。
 - MCP 文件和 shell 工具集成，并绑定到 Actor worktree。
 - 使用 git worktree 隔离委派给 Actor 的子任务。
+- 使用确定性项目质量门禁与有界自动修复验证 Coder 产出。
 - 依赖任务的 diff 会作为下游 Actor 的 baseline，Verifier 能验证真实 Coder 改动。
 - eval/debug 运行会持久化 JSONL trace。
 - 非交互任务会持久化 Run checkpoint，可列出、检查并恢复中断任务。
@@ -62,6 +63,7 @@ core/
   runtime/          执行循环和对话上下文
   runs/             Run 生命周期、任务状态和持久化适配器
   actors/           Actor 行为、执行契约、角色和 worktree 适配器
+  verification/     质量门禁配置、执行证据与修复提示
   planner.py        Planner 对 runtime engine 的封装
   events.py         跨域 AgentEvent 协议
   llm.py            OpenAI-compatible 异步流式客户端
@@ -118,6 +120,24 @@ SCA_MAX_ACTORS=4
 ```
 
 客户端使用 OpenAI-compatible chat completions API。
+
+项目可选地在 `.sca/quality-gates.toml` 中声明确定性 Coder 质量门禁：
+
+```toml
+max_repair_attempts = 2
+
+[[gates]]
+name = "unit"
+command = ["{python}", "-m", "pytest", "-q"]
+timeout_seconds = 120
+
+[[gates]]
+name = "types"
+command = ["{python}", "-m", "mypy", "core"]
+required = false
+```
+
+命令必须使用参数数组，并以无 shell 的方式在 Coder 隔离 worktree 中运行。必选门禁失败会把证据回灌给同一个 Actor，进行次数受限的自动修复；只有全部必选门禁通过后才导出 diff。完整输出保存在 `.sca/artifacts/verification/`。这些项目自有命令仍以当前用户权限执行，因此只应启用可信仓库中的配置。
 
 ## 使用
 
@@ -229,7 +249,7 @@ SQLite checkpoint 也不能与任意 shell、文件系统或网络副作用组�
 对可信运行时边界执行类型检查：
 
 ```powershell
-.\.venv\Scripts\python.exe -m mypy core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/verification core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
 ```
 
 编译检查：

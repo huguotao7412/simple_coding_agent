@@ -101,7 +101,7 @@ class DelegateTool(BaseTool):
 
     @staticmethod
     def _result_payload(result: ActorExecutionResult) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "task_id": result.task_id,
             "status": result.status,
             "error": result.error,
@@ -112,6 +112,34 @@ class DelegateTool(BaseTool):
             "diff_artifact": result.diff_artifact,
             "diff": result.diff[:8000],
         }
+        if result.verification_reports:
+            final_report = result.verification_reports[-1]
+            payload["verification"] = {
+                "attempts": len(result.verification_reports),
+                "passed": final_report.passed,
+                "failure_fingerprint": final_report.failure_fingerprint,
+                "reports": [
+                    {
+                        "attempt": report.attempt,
+                        "passed": report.passed,
+                        "gates": [
+                            {
+                                "name": gate.gate_name,
+                                "required": gate.required,
+                                "passed": gate.passed,
+                                "exit_code": gate.exit_code,
+                                "timed_out": gate.timed_out,
+                                "duration_ms": gate.duration_ms,
+                                "output_artifact": gate.output_artifact,
+                                "output_excerpt": gate.output_excerpt[:2000],
+                            }
+                            for gate in report.results
+                        ],
+                    }
+                    for report in result.verification_reports
+                ],
+            }
+        return payload
 
     @staticmethod
     async def _record_result(

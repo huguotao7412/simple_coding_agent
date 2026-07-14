@@ -64,7 +64,7 @@ required = false
         ),
         (
             '[[gates]]\nname = "unit"\ncommand = ["pytest"]\n'
-            '[[gates]]\nname = "unit"\ncommand = ["mypy"]\n',
+            '[[gates]]\nname = "UNIT"\ncommand = ["mypy"]\n',
             "duplicate gate name",
         ),
     ],
@@ -80,4 +80,3 @@ def test_rejects_ambiguous_or_unsafe_configuration(
 
     with pytest.raises(VerificationConfigError, match=message):
         load_verification_config(tmp_path)
-

@@ -9,7 +9,8 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
+from pathlib import Path
+from typing import Any, Protocol
 
 from .contracts import ActorExecutionResult, ActorExecutionStatus, ActorTaskSpec
 from ..git_utils import (
@@ -23,6 +24,10 @@ from ..policy import ToolPolicy
 from .roles import ActorRole, get_role_config
 from ..runs.context import RunContext
 from ..runs.task_state import GlobalState
+from ..verification.config import load_verification_config
+from ..verification.models import VerificationConfig, VerificationReport
+from ..verification.repair import build_repair_prompt
+from ..verification.runner import VerificationRunner
 
 
 ARTIFACT_DIR = os.path.join(".sca", "artifacts", "actor-diffs")
@@ -34,6 +39,18 @@ DiffExtractor = Callable[[str], Awaitable[str]]
 ArtifactWriter = Callable[[str, str, str], str]
 ToolProviderFactory = Callable[[RunContext, str], Any]
 ActorFactory = Callable[..., Any]
+VerificationConfigLoader = Callable[[str], VerificationConfig]
+
+
+class VerificationRunnerPort(Protocol):
+    async def run(
+        self,
+        config: VerificationConfig,
+        *,
+        worktree: str | Path,
+        task_id: str,
+        attempt: int,
+    ) -> VerificationReport: ...
 
 
 def _resolve_within(root_dir: str, relative_path: str) -> str:
@@ -152,6 +169,18 @@ def _default_actor_factory(**kwargs: Any) -> Any:
     return ActorAgent(**kwargs)
 
 
+def _verification_failure_message(report: VerificationReport) -> str:
+    failures: list[str] = []
+    for result in report.results:
+        if result.passed or not result.required:
+            continue
+        outcome = "timed out" if result.timed_out else f"exit {result.exit_code}"
+        failures.append(
+            f"{result.gate_name} ({outcome}; log={result.output_artifact})"
+        )
+    return "verification failed: " + ", ".join(failures)
+
+
 class WorktreeActorExecutor:
     """Execute one Actor task inside a disposable Git worktree."""
 
@@ -166,6 +195,8 @@ class WorktreeActorExecutor:
         artifact_writer: ArtifactWriter = _write_diff_artifact,
         tool_provider_factory: ToolProviderFactory = _default_tool_provider_factory,
         actor_factory: ActorFactory = _default_actor_factory,
+        verification_config_loader: VerificationConfigLoader = load_verification_config,
+        verification_runner: VerificationRunnerPort | None = None,
     ) -> None:
         self.llm = llm_client
         self.workspace_dir = workspace_dir
@@ -175,6 +206,15 @@ class WorktreeActorExecutor:
         self.artifact_writer = artifact_writer
         self.tool_provider_factory = tool_provider_factory
         self.actor_factory = actor_factory
+        self.verification_config_loader = verification_config_loader
+        self.verification_runner = verification_runner or VerificationRunner(
+            artifact_root=os.path.join(
+                workspace_dir,
+                ".sca",
+                "artifacts",
+                "verification",
+            )
+        )
         self._orphan_cleanup_lock = asyncio.Lock()
         self._orphan_cleanup_done = False
 
@@ -301,23 +341,91 @@ class WorktreeActorExecutor:
                 "Use the provided context and objective to execute your assigned subtask."
             )
 
-            diff = ""
-            files_modified: tuple[str, ...] = ()
-            diff_artifact = ""
-            try:
-                diff = await self.diff_extractor(worktree_path)
-                files_modified = tuple(parse_diff_file_paths(diff))
-                diff_artifact = self.artifact_writer(
-                    self.workspace_dir,
-                    spec.task_id,
-                    diff,
-                )
-            except Exception:
-                logger.warning("Failed to extract diff for %s", spec.task_id)
-
             status: ActorExecutionStatus = (
                 "done" if summary.status == "done" else "failed"
             )
+            verification_reports: list[VerificationReport] = []
+            verification_error = ""
+            if status == "done" and role is ActorRole.CODER:
+                phase = "project verification"
+                verification_config = self.verification_config_loader(
+                    self.workspace_dir
+                )
+                if verification_config.enabled:
+                    verification = await self.verification_runner.run(
+                        verification_config,
+                        worktree=worktree_path,
+                        task_id=spec.task_id,
+                        attempt=1,
+                    )
+                    verification_reports.append(verification)
+                    seen_failures = {verification.failure_fingerprint}
+                    repair_attempt = 0
+                    while (
+                        not verification.passed
+                        and repair_attempt < verification_config.max_repair_attempts
+                    ):
+                        repair_attempt += 1
+                        phase = f"repair attempt {repair_attempt}"
+                        repair_summary = await actor.run(
+                            build_repair_prompt(
+                                verification,
+                                repair_attempt=repair_attempt,
+                                max_repair_attempts=(
+                                    verification_config.max_repair_attempts
+                                ),
+                            )
+                        )
+                        summary = repair_summary
+                        if repair_summary.status != "done":
+                            verification_error = (
+                                f"repair attempt {repair_attempt} actor failed; "
+                                f"{_verification_failure_message(verification)}"
+                            )
+                            break
+
+                        phase = "project verification"
+                        verification = await self.verification_runner.run(
+                            verification_config,
+                            worktree=worktree_path,
+                            task_id=spec.task_id,
+                            attempt=repair_attempt + 1,
+                        )
+                        verification_reports.append(verification)
+                        if verification.passed:
+                            break
+                        fingerprint = verification.failure_fingerprint
+                        if fingerprint in seen_failures:
+                            verification_error = (
+                                "verification made no progress after repair; "
+                                f"{_verification_failure_message(verification)}"
+                            )
+                            break
+                        seen_failures.add(fingerprint)
+
+                    if not verification.passed:
+                        status = "failed"
+                        if not verification_error:
+                            verification_error = (
+                                f"{_verification_failure_message(verification)} "
+                                f"after {len(verification_reports)} attempt(s)"
+                            )
+
+            diff = ""
+            files_modified: tuple[str, ...] = ()
+            diff_artifact = ""
+            if not verification_error:
+                try:
+                    diff = await self.diff_extractor(worktree_path)
+                    files_modified = tuple(parse_diff_file_paths(diff))
+                    diff_artifact = self.artifact_writer(
+                        self.workspace_dir,
+                        spec.task_id,
+                        diff,
+                    )
+                except Exception:
+                    logger.warning("Failed to extract diff for %s", spec.task_id)
+
             duration_ms = int((time.monotonic() - start_time) * 1000)
             logger.info(
                 "actor_end task_id=%s duration_ms=%d outcome=%s files_modified=%d",
@@ -329,12 +437,14 @@ class WorktreeActorExecutor:
             return ActorExecutionResult(
                 task_id=spec.task_id,
                 status=status,
+                error=verification_error,
                 files_modified=files_modified,
                 bugs_found=tuple(summary.bugs_found),
                 key_findings=summary.key_findings or "",
                 suggested_next_steps=summary.suggested_next_steps or "",
                 diff_artifact=diff_artifact,
                 diff=diff,
+                verification_reports=tuple(verification_reports),
             )
         except Exception as error:
             duration_ms = int((time.monotonic() - start_time) * 1000)

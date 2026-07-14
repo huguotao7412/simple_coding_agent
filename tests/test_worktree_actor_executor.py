@@ -9,6 +9,12 @@ import pytest
 from core.actors.contracts import ActorTaskSpec
 from core.runs.context import RunContext
 from core.actors.worktree import WorktreeActorExecutor
+from core.verification.models import (
+    GateResult,
+    GateSpec,
+    VerificationConfig,
+    VerificationReport,
+)
 
 
 class FakeLLM:
@@ -37,6 +43,62 @@ class FakeActor:
             files_modified=[],
             bugs_found=["latent bug"],
             key_findings="implemented safely",
+            suggested_next_steps="none",
+        )
+
+
+class FakeVerificationRunner:
+    def __init__(self, events: list[str], report: VerificationReport) -> None:
+        self.events = events
+        self.report = report
+
+    async def run(
+        self,
+        config: VerificationConfig,
+        *,
+        worktree: str | Path,
+        task_id: str,
+        attempt: int,
+    ) -> VerificationReport:
+        self.events.append(f"verify:{task_id}:{attempt}:{Path(worktree).name}")
+        return self.report
+
+
+class SequenceVerificationRunner:
+    def __init__(
+        self,
+        events: list[str],
+        reports: list[VerificationReport],
+    ) -> None:
+        self.events = events
+        self.reports = reports
+
+    async def run(
+        self,
+        config: VerificationConfig,
+        *,
+        worktree: str | Path,
+        task_id: str,
+        attempt: int,
+    ) -> VerificationReport:
+        self.events.append(f"verify:{attempt}")
+        report = self.reports.pop(0)
+        return VerificationReport(attempt=attempt, results=report.results)
+
+
+class RepairActor(FakeActor):
+    def __init__(self, events: list[str]) -> None:
+        super().__init__(events)
+        self.prompts: list[str] = []
+
+    async def run(self, prompt: str) -> Any:
+        self.prompts.append(prompt)
+        self.events.append(f"actor:run:{len(self.prompts)}")
+        return SimpleNamespace(
+            status="done",
+            files_modified=[],
+            bugs_found=[],
+            key_findings=f"turn {len(self.prompts)}",
             suggested_next_steps="none",
         )
 
@@ -89,6 +151,251 @@ async def test_worktree_executor_owns_actor_lifecycle(tmp_path: Path) -> None:
         "provider:shutdown",
         "worktree:cleanup",
     ]
+
+
+@pytest.mark.asyncio
+async def test_coder_diff_is_exported_only_after_required_gates_pass(tmp_path: Path) -> None:
+    events: list[str] = []
+    worktree = tmp_path / "actor-worktree"
+    passing_report = VerificationReport(
+        attempt=1,
+        results=(
+            GateResult(
+                gate_name="unit",
+                command=("pytest",),
+                required=True,
+                passed=True,
+                exit_code=0,
+                duration_ms=10,
+                output_artifact=str(tmp_path / "unit.log"),
+                output_excerpt="passed",
+            ),
+        ),
+    )
+
+    def setup(workspace_dir: str, task_id: str) -> str:
+        worktree.mkdir()
+        return str(worktree)
+
+    async def extract(worktree_path: str) -> str:
+        events.append("diff:extract")
+        return "diff --git a/module.py b/module.py\n"
+
+    executor = WorktreeActorExecutor(
+        llm_client=FakeLLM(),
+        workspace_dir=str(tmp_path),
+        worktree_factory=setup,
+        worktree_cleanup=lambda path: None,
+        diff_extractor=extract,
+        artifact_writer=lambda workspace, task, diff: "task.patch",
+        tool_provider_factory=lambda context, actor_id: FakeProvider(events),
+        actor_factory=lambda **kwargs: FakeActor(events),
+        verification_config_loader=lambda workspace: VerificationConfig(
+            gates=(GateSpec("unit", ("pytest",)),)
+        ),
+        verification_runner=FakeVerificationRunner(events, passing_report),
+    )
+
+    result = await executor.execute(
+        ActorTaskSpec(task_id="task_verified", description="Change module.py"),
+        RunContext.create(run_id="run_test"),
+    )
+
+    assert result.status == "done"
+    assert result.verification_reports == (passing_report,)
+    assert result.diff_artifact == "task.patch"
+    assert events.index("verify:task_verified:1:actor-worktree") < events.index(
+        "diff:extract"
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_required_gate_blocks_diff_export(tmp_path: Path) -> None:
+    events: list[str] = []
+    worktree = tmp_path / "actor-worktree"
+    failing_report = VerificationReport(
+        attempt=1,
+        results=(
+            GateResult(
+                gate_name="unit",
+                command=("pytest",),
+                required=True,
+                passed=False,
+                exit_code=1,
+                duration_ms=10,
+                output_artifact=str(tmp_path / "unit.log"),
+                output_excerpt="one failed",
+            ),
+        ),
+    )
+
+    def setup(workspace_dir: str, task_id: str) -> str:
+        worktree.mkdir()
+        return str(worktree)
+
+    async def forbidden_extract(worktree_path: str) -> str:
+        raise AssertionError("unverified diff must not be exported")
+
+    executor = WorktreeActorExecutor(
+        llm_client=FakeLLM(),
+        workspace_dir=str(tmp_path),
+        worktree_factory=setup,
+        worktree_cleanup=lambda path: events.append("worktree:cleanup"),
+        diff_extractor=forbidden_extract,
+        tool_provider_factory=lambda context, actor_id: FakeProvider(events),
+        actor_factory=lambda **kwargs: FakeActor(events),
+        verification_config_loader=lambda workspace: VerificationConfig(
+            gates=(GateSpec("unit", ("pytest",)),), max_repair_attempts=0
+        ),
+        verification_runner=FakeVerificationRunner(events, failing_report),
+    )
+
+    result = await executor.execute(
+        ActorTaskSpec(task_id="task_failed", description="Change module.py"),
+        RunContext.create(run_id="run_test"),
+    )
+
+    assert result.status == "failed"
+    assert result.verification_reports == (failing_report,)
+    assert result.diff == ""
+    assert result.diff_artifact == ""
+    assert "unit" in result.error
+    assert "unit.log" in result.error
+    assert events[-2:] == ["provider:shutdown", "worktree:cleanup"]
+
+
+@pytest.mark.asyncio
+async def test_non_coder_role_skips_project_quality_gates(tmp_path: Path) -> None:
+    events: list[str] = []
+    worktree = tmp_path / "actor-worktree"
+
+    def setup(workspace_dir: str, task_id: str) -> str:
+        worktree.mkdir()
+        return str(worktree)
+
+    def forbidden_loader(workspace: str) -> VerificationConfig:
+        raise AssertionError("non-coder roles must not load implementation gates")
+
+    executor = WorktreeActorExecutor(
+        llm_client=FakeLLM(),
+        workspace_dir=str(tmp_path),
+        worktree_factory=setup,
+        worktree_cleanup=lambda path: None,
+        diff_extractor=lambda path: _empty_diff(),
+        tool_provider_factory=lambda context, actor_id: FakeProvider(events),
+        actor_factory=lambda **kwargs: FakeActor(events),
+        verification_config_loader=forbidden_loader,
+    )
+
+    result = await executor.execute(
+        ActorTaskSpec(task_id="task_scout", description="Inspect", role="scout"),
+        RunContext.create(run_id="run_test"),
+    )
+
+    assert result.status == "done"
+    assert result.verification_reports == ()
+
+
+@pytest.mark.asyncio
+async def test_failed_gate_is_repaired_and_reverified_before_diff_export(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    worktree = tmp_path / "actor-worktree"
+    worktree.mkdir()
+    actor = RepairActor(events)
+    failed = _gate_report(tmp_path, passed=False, output="one failed")
+    passed = _gate_report(tmp_path, passed=True, output="all passed")
+
+    async def extract(path: str) -> str:
+        events.append("diff:extract")
+        return "diff --git a/module.py b/module.py\n"
+
+    executor = WorktreeActorExecutor(
+        llm_client=FakeLLM(),
+        workspace_dir=str(tmp_path),
+        worktree_factory=lambda workspace, task: str(worktree),
+        worktree_cleanup=lambda path: None,
+        diff_extractor=extract,
+        artifact_writer=lambda workspace, task, diff: "task.patch",
+        tool_provider_factory=lambda context, actor_id: FakeProvider(events),
+        actor_factory=lambda **kwargs: actor,
+        verification_config_loader=lambda workspace: VerificationConfig(
+            gates=(GateSpec("unit", ("pytest",)),), max_repair_attempts=2
+        ),
+        verification_runner=SequenceVerificationRunner(events, [failed, passed]),
+    )
+
+    result = await executor.execute(
+        ActorTaskSpec(task_id="task_repair", description="Change module.py"),
+        RunContext.create(run_id="run_test"),
+    )
+
+    assert result.status == "done"
+    assert [report.passed for report in result.verification_reports] == [False, True]
+    assert len(actor.prompts) == 2
+    assert "Deterministic project verification failed" in actor.prompts[1]
+    assert events.index("verify:2") < events.index("diff:extract")
+    assert result.key_findings == "turn 2"
+
+
+@pytest.mark.asyncio
+async def test_repeated_failure_stops_repair_early_and_blocks_diff(tmp_path: Path) -> None:
+    events: list[str] = []
+    worktree = tmp_path / "actor-worktree"
+    worktree.mkdir()
+    actor = RepairActor(events)
+    failed = _gate_report(tmp_path, passed=False, output="same failure")
+
+    async def forbidden_extract(path: str) -> str:
+        raise AssertionError("a repeated failure must block diff export")
+
+    executor = WorktreeActorExecutor(
+        llm_client=FakeLLM(),
+        workspace_dir=str(tmp_path),
+        worktree_factory=lambda workspace, task: str(worktree),
+        worktree_cleanup=lambda path: None,
+        diff_extractor=forbidden_extract,
+        tool_provider_factory=lambda context, actor_id: FakeProvider(events),
+        actor_factory=lambda **kwargs: actor,
+        verification_config_loader=lambda workspace: VerificationConfig(
+            gates=(GateSpec("unit", ("pytest",)),), max_repair_attempts=3
+        ),
+        verification_runner=SequenceVerificationRunner(events, [failed, failed]),
+    )
+
+    result = await executor.execute(
+        ActorTaskSpec(task_id="task_stuck", description="Change module.py"),
+        RunContext.create(run_id="run_test"),
+    )
+
+    assert result.status == "failed"
+    assert "no progress" in result.error
+    assert len(result.verification_reports) == 2
+    assert len(actor.prompts) == 2
+    assert result.diff == ""
+
+
+def _gate_report(tmp_path: Path, *, passed: bool, output: str) -> VerificationReport:
+    return VerificationReport(
+        attempt=1,
+        results=(
+            GateResult(
+                gate_name="unit",
+                command=("pytest",),
+                required=True,
+                passed=passed,
+                exit_code=0 if passed else 1,
+                duration_ms=10,
+                output_artifact=str(tmp_path / "unit.log"),
+                output_excerpt=output,
+            ),
+        ),
+    )
+
+
+async def _empty_diff() -> str:
+    return ""
 
 
 def test_injected_context_refuses_files_outside_workspace(tmp_path: Path) -> None:

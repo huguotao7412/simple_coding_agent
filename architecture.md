@@ -9,6 +9,7 @@ The modular monolith groups cohesive implementation details without hiding depen
 - `core/runtime/`: the ReAct execution engine and conversation compaction.
 - `core/runs/`: durable-run models, task state, `RunContext`, the store port, and SQLite adapter.
 - `core/actors/`: Actor behavior, execution contracts, roles, and the worktree adapter.
+- `core/verification/`: deterministic gate configuration, subprocess execution, evidence, and repair prompts.
 - `core/events.py`: the cross-domain event contract shared by runtime, runs, MCP, CLI, and evals.
 - `core/planner.py`: the application orchestration entry point.
 
@@ -69,6 +70,8 @@ flowchart LR
 `DelegateTool` owns validation, DAG readiness, concurrency, dependency blocking, task-state transitions, exception isolation, and result rendering. It communicates through immutable `ActorTaskSpec` and `ActorExecutionResult` values.
 
 `WorktreeActorExecutor` owns context injection, one-time orphan cleanup, worktree setup, dependency baselines, MCP startup and shutdown, Actor construction, diff extraction, artifact persistence, and worktree cleanup. Context file paths are resolved against both the main workspace and Actor worktree before any pre-MCP read or copy, preventing absolute-path and `..` traversal from bypassing the tool policy.
+
+For coder tasks, it is also the deterministic verification boundary. If `.sca/quality-gates.toml` exists, configured commands run sequentially inside the Actor worktree with `shell=False`. Required failures are converted into bounded repair turns on the same Actor context, then rerun by the runtime rather than trusted on the Actor's claim. Repeated failure fingerprints terminate early as no progress. Only a passing coder diff is exported; every attempt retains a complete log under `.sca/artifacts/verification/` and a compact structured report in `ActorExecutionResult`.
 
 The default adapter currently reads dependency diffs through `RunContext.state`. This keeps P1 backward compatible, but a future durable or remote executor should receive dependency artifacts through a narrower execution context or directly in the task specification. See [ADR-0001](docs/adr/0001-actor-executor-boundary.md).
 

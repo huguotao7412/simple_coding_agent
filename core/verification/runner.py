@@ -84,6 +84,11 @@ class VerificationRunner:
             timed_out = True
             process.kill()
             await process.wait()
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            await output_task
+            raise
         output = await output_task
 
         duration_ms = round((monotonic() - started) * 1000)
