@@ -99,7 +99,42 @@ tests/
 
 See [architecture.md](architecture.md) and [architecture_CN.md](architecture_CN.md) for the Planner/Actor lifecycle, worktree isolation, MCP boundary, and eval design.
 
-## Installation
+## User Installation
+
+Use `pipx` for a user-level CLI. It gives SCA an isolated Python environment and exposes `sca` on the user `PATH`, so neither the source checkout nor a target project's `.venv` needs to be activated.
+
+Prepare `pipx` on Windows:
+
+```powershell
+py -m pip install --user pipx
+py -m pipx ensurepath
+```
+
+Restart the terminal, then install the current GitHub version:
+
+```powershell
+pipx install git+https://github.com/huguotao7412/simple_coding_agent.git
+sca config init
+sca config path
+```
+
+Edit the user config printed by `sca config path` and set `SCA_API_KEY`. The CLI can then be launched from any Git workspace; the current directory is the default workspace:
+
+```powershell
+cd C:\path\to\any-project
+sca
+```
+
+Upgrade or uninstall it with:
+
+```powershell
+pipx upgrade simple-coding-agent
+pipx uninstall simple-coding-agent
+```
+
+Node.js 18+ is still required. Development checkouts prefer repository-local `node_modules`; user-level installs let `npx` fetch and cache the code-pinned MCP filesystem/shell server versions on first Actor startup.
+
+## Development Installation
 
 Requires Python 3.12+ and Node.js 18+ if you want MCP Actor tools.
 
@@ -118,7 +153,7 @@ pip install -e ".[web]"
 
 ## Configuration
 
-Create `.env` in the repository root:
+The user-level default is created by `sca config init`. A target workspace may also contain `.env` for project-specific overrides:
 
 ```bash
 SCA_API_KEY=your-api-key
@@ -133,6 +168,8 @@ SCA_E2B_ALLOW_INTERNET=false
 SCA_SANDBOX_MAX_TIMEOUT=300
 SCA_SANDBOX_MAX_TRANSFER=50000000
 ```
+
+Precedence is process environment > current workspace `.env` > user config. SCA reads only the exact workspace `.env` and does not search parent directories, avoiding accidental configuration inheritance from the terminal launch location.
 
 The client uses an OpenAI-compatible chat completions API.
 

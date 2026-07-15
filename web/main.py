@@ -11,9 +11,9 @@ st.set_page_config(
     layout="wide",
 )
 
-from dotenv import load_dotenv
+from core.config import load_runtime_environment
 
-load_dotenv()
+load_runtime_environment(os.getcwd())
 
 from core.runtime.conversation import ContextManager
 from core.llm import LLMClient
@@ -30,7 +30,7 @@ from web.dashboard import render_dashboard
 def init_planner() -> Planner:
     api_key = os.getenv("SCA_API_KEY", "")
     if not api_key:
-        st.error("SCA_API_KEY not set in .env file")
+        st.error("SCA_API_KEY is not configured. Run `sca config init` first.")
         st.stop()
 
     base_url = os.getenv("SCA_API_BASE", "https://api.deepseek.com")

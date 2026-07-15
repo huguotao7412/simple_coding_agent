@@ -108,7 +108,42 @@ tests/
   test_mcp_provider.py     MCP provider 隔离测试
 ```
 
-## 安装
+## 用户安装
+
+推荐使用 `pipx`。它会为 SCA 管理独立 Python 环境，同时把 `sca` 命令加入用户级 `PATH`，因此不需要激活源码仓库或目标项目的 `.venv`。
+
+Windows 首次准备 `pipx`：
+
+```powershell
+py -m pip install --user pipx
+py -m pipx ensurepath
+```
+
+重启终端后，从 GitHub 安装当前版本：
+
+```powershell
+pipx install git+https://github.com/huguotao7412/simple_coding_agent.git
+sca config init
+sca config path
+```
+
+编辑 `sca config path` 输出的用户配置文件，填入 `SCA_API_KEY`。之后可以在任意 Git 工作区直接启动，当前目录就是默认 workspace：
+
+```powershell
+cd C:\path\to\any-project
+sca
+```
+
+升级和卸载：
+
+```powershell
+pipx upgrade simple-coding-agent
+pipx uninstall simple-coding-agent
+```
+
+仍需安装 Node.js 18+。开发 checkout 优先使用仓库 `node_modules`；用户级安装首次启动 Actor 时，`npx` 会下载并缓存代码中固定版本的 MCP 文件/shell 服务。
+
+## 开发安装
 
 需要 Python 3.12+。如果使用 MCP Actor 工具，还需要 Node.js 18+。
 
@@ -127,7 +162,7 @@ pip install -e ".[web]"
 
 ## 配置
 
-在仓库根目录创建 `.env`：
+用户级默认配置由 `sca config init` 创建。也可以在某个目标工作区根目录放置 `.env` 作为该项目的覆盖配置：
 
 ```bash
 SCA_API_KEY=your-api-key
@@ -142,6 +177,8 @@ SCA_E2B_ALLOW_INTERNET=false
 SCA_SANDBOX_MAX_TIMEOUT=300
 SCA_SANDBOX_MAX_TRANSFER=50000000
 ```
+
+配置优先级为：进程环境变量 > 当前工作区 `.env` > 用户级配置。SCA 只读取当前工作区的 `.env`，不会向父目录搜索，避免从启动终端的位置意外继承配置。
 
 客户端使用 OpenAI-compatible chat completions API。
 

@@ -15,11 +15,6 @@ if TYPE_CHECKING:
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
-
 def _resolved_model(model: str | None) -> str:
     return model or os.getenv("SCA_MODEL") or "deepseek-v4-pro"
 
@@ -32,9 +27,17 @@ def build_planner(
     context_manager: ContextManager | None = None,
     high_risk_approved: bool = False,
 ) -> Planner:
+    from core.config import load_runtime_environment
+
+    load_runtime_environment(workspace_dir)
     api_key = os.getenv("SCA_API_KEY")
-    if not api_key:
-        raise RuntimeError("SCA_API_KEY not set in .env file")
+    if not api_key or api_key.strip() == "your-api-key":
+        from core.config import user_config_path
+
+        raise RuntimeError(
+            "SCA_API_KEY is not configured. Run 'sca config init', then edit "
+            f"{user_config_path()}"
+        )
 
     from core.logging_config import setup_logging
 
@@ -72,11 +75,13 @@ async def run_once(
     *,
     high_risk_approved: bool = False,
 ) -> str:
+    from core.config import load_runtime_environment
     from cli.report import RunReport
     from cli.runs import create_durable_run_context
     from core.runtime.conversation import ContextManager
     from core.system_prompt import PLANNER_SYSTEM_PROMPT
 
+    load_runtime_environment(workspace_dir)
     context_manager = ContextManager(system_prompt=PLANNER_SYSTEM_PROMPT)
     run_context = await create_durable_run_context(
         workspace_dir=workspace_dir,
@@ -176,7 +181,38 @@ def build_parser() -> argparse.ArgumentParser:
         "sandbox-check",
         help="Validate the configured command-execution sandbox",
     )
+    config_parser = commands.add_parser(
+        "config",
+        help="Manage user-level configuration",
+    )
+    config_commands = config_parser.add_subparsers(dest="config_command")
+    config_commands.add_parser("path", help="Print the user config path")
+    config_init = config_commands.add_parser(
+        "init",
+        help="Create a user config template",
+    )
+    config_init.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing user config template",
+    )
     return parser
+
+
+def _config_command(args: argparse.Namespace) -> int:
+    from core.config import initialize_user_config, user_config_path
+
+    if args.config_command in {None, "path"}:
+        print(user_config_path())
+        return 0
+    try:
+        path = initialize_user_config(force=bool(args.force))
+    except FileExistsError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+    print(f"Created user configuration: {path}")
+    print("Edit SCA_API_KEY before starting sca.")
+    return 0
 
 
 async def _read_run_command(args: argparse.Namespace, workspace_dir: str) -> int:
@@ -247,6 +283,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     workspace_dir = os.path.abspath(args.workspace or args.dir or os.getcwd())
+
+    if args.command == "config":
+        return _config_command(args)
+
+    from core.config import load_runtime_environment
+
+    load_runtime_environment(workspace_dir)
 
     if args.command == "sandbox-check":
         return asyncio.run(_sandbox_check())

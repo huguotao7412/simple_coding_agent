@@ -89,10 +89,10 @@ async def test_mcp_servers_start_with_worktree_cwd(monkeypatch, tmp_path):
 
     assert [params.command for params in captured_params] == ["npx", "npx"]
     assert captured_params[0].args[:2] == [
-        "--no-install",
+        "--yes",
         "@modelcontextprotocol/server-filesystem@2026.1.14",
     ]
-    assert captured_params[1].args[:2] == ["--no-install", "bash-mcp@1.1.0"]
+    assert captured_params[1].args[:2] == ["--yes", "bash-mcp@1.1.0"]
     assert [params.cwd for params in captured_params] == [str(tmp_path), str(tmp_path)]
 
 

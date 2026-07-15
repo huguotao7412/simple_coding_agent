@@ -346,7 +346,10 @@ def _node_bin_command(binary_name: str, package_spec: str) -> list[str]:
     local_binary = PACKAGE_ROOT / "node_modules" / ".bin" / f"{binary_name}{extension}"
     if local_binary.exists():
         return [str(local_binary)]
-    return ["npx", "--no-install", package_spec]
+    # A pipx/PyPI install does not contain this repository's node_modules.
+    # The package spec is pinned above, so npx can fetch/cache that exact tool
+    # version on first use while development checkouts keep using local bins.
+    return ["npx", "--yes", package_spec]
 
 
 def _extract_shell_command(args: dict[str, Any]) -> str:

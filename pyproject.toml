@@ -1,8 +1,23 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "simple-coding-agent"
 version = "0.1.0"
 description = "CLI-first transparent coding agent runtime"
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.12"
+authors = [{ name = "huguotao7412" }]
+keywords = ["coding-agent", "cli", "llm", "mcp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development",
+]
 dependencies = [
     "httpx>=0.28",
     "mcp>=1.0",
@@ -15,6 +30,11 @@ dependencies = [
 sca = "cli.main:main"
 sca-eval = "evals.cli:main"
 sca-web = "web.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/huguotao7412/simple_coding_agent"
+Repository = "https://github.com/huguotao7412/simple_coding_agent"
+Issues = "https://github.com/huguotao7412/simple_coding_agent/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -38,6 +58,7 @@ ignore_missing_imports = true
 files = [
     "core/a2a_lite",
     "core/execution",
+    "core/config.py",
     "core/sandbox",
     "core/actors/contracts.py",
     "core/policy.py",
