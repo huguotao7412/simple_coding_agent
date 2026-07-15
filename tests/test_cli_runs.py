@@ -18,6 +18,11 @@ from core.runs.models import RunRecord, RunStatus
 from core.runs.sqlite_store import SQLiteRunStore
 
 
+@pytest.fixture(autouse=True)
+def _state_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SCA_STATE_HOME", str(tmp_path / "state"))
+
+
 @pytest.mark.asyncio
 async def test_create_durable_context_persists_initial_checkpoint(tmp_path: Path):
     messages = ContextManager(system_prompt="system")
@@ -37,7 +42,10 @@ async def test_create_durable_context_persists_initial_checkpoint(tmp_path: Path
     assert stored is not None
     assert stored.checkpoint is not None
     assert stored.checkpoint.messages == ({"role": "system", "content": "system"},)
-    assert run_database_path(str(tmp_path)) == tmp_path / ".sca" / "runs.db"
+    database_path = run_database_path(str(tmp_path))
+    assert database_path.parent.parent == tmp_path / "state" / "workspaces"
+    assert database_path.name == "runs.db"
+    assert not (tmp_path / ".sca").exists()
 
 
 @pytest.mark.asyncio

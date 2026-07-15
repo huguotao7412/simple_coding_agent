@@ -26,7 +26,7 @@ An external database or workflow engine would provide stronger multi-process sch
 
 ## Decision
 
-Introduce a `RunStore` port and use `SQLiteRunStore` as the default local adapter. The database lives at `<workspace>/.sca/runs.db` and is ignored by Git.
+Introduce a `RunStore` port and use `SQLiteRunStore` as the default local adapter. The database originally lived at `<workspace>/.sca/runs.db`; the runtime now places it in a workspace-keyed per-user SCA state directory so execution metadata does not mutate the target workspace.
 
 ```mermaid
 flowchart LR

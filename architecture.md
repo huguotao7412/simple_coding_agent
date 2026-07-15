@@ -97,11 +97,11 @@ flowchart LR
 
 `A2A_lite` is an in-process, transport-independent communication contract. Every completed or failed Actor execution produces an immutable `AgentMessage` using schema `a2a-lite/1.0`. Its `AgentHandoff` separates findings, decisions, constraints, unresolved questions, and `ArtifactRef` values. Patch references include a content digest; verification log references retain the producing task and gate metadata.
 
-The message is stored in the task snapshot, emitted as an `a2a_lite_message` event, returned to the Planner, and automatically attached to ready dependent tasks. The downstream prompt receives the serialized structured envelope and artifact metadata; the full patch remains in `.sca/artifacts/` and is independently applied as the worktree baseline. Legacy `context_summaries` remain accepted for compatibility but are no longer required for dependency handoff.
+The message is stored in the task snapshot, emitted as an `a2a_lite_message` event, returned to the Planner, and automatically attached to ready dependent tasks. The downstream prompt receives the serialized structured envelope and artifact metadata; the full patch remains in the per-user runtime state directory and is independently applied as the worktree baseline. Legacy `context_summaries` remain accepted for compatibility but are no longer required for dependency handoff.
 
 This phase intentionally adds no broker, network transport, discovery, authentication, acknowledgement, or retry protocol. See [ADR-0005](docs/adr/0005-a2a-lite-handoffs.md).
 
-For coder tasks, it is also the deterministic verification boundary. If `.sca/quality-gates.toml` exists, configured commands run sequentially inside the Actor worktree with `shell=False`. Required failures are converted into bounded repair turns on the same Actor context, then rerun by the runtime rather than trusted on the Actor's claim. Repeated failure fingerprints terminate early as no progress. Only a passing coder diff is exported; every attempt retains a complete log under `.sca/artifacts/verification/` and a compact structured report in `ActorExecutionResult`.
+For coder tasks, it is also the deterministic verification boundary. If `.sca/quality-gates.toml` exists, configured commands run sequentially inside the Actor worktree with `shell=False`. Required failures are converted into bounded repair turns on the same Actor context, then rerun by the runtime rather than trusted on the Actor's claim. Repeated failure fingerprints terminate early as no progress. Only a passing coder diff is exported; every attempt retains a complete log in the per-user runtime state directory and a compact structured report in `ActorExecutionResult`.
 
 The default adapter currently reads dependency diffs through `RunContext.state`. This keeps P1 backward compatible, but a future durable or remote executor should receive dependency artifacts through a narrower execution context or directly in the task specification. See [ADR-0001](docs/adr/0001-actor-executor-boundary.md).
 
@@ -114,7 +114,7 @@ The default adapter currently reads dependency diffs through `RunContext.state`.
 5. Dependency diffs are applied to dependent Actor worktrees as a committed baseline.
 6. The Actor runs with role-specific prompts and an execution-time enforced tool policy.
 7. The Actor worktree diff is extracted with `git diff --cached --binary`.
-8. The diff is stored under `.sca/artifacts/actor-diffs/`, and an A2A_lite handoff records its typed artifact reference.
+8. The diff is stored in the workspace-keyed user state directory, and an A2A_lite handoff records its typed artifact reference.
 9. The versioned handoff is persisted, emitted, and automatically injected into dependent Actors.
 10. The Planner reviews and applies successful diffs to the main workspace.
 
@@ -149,7 +149,7 @@ This provides:
 
 The main workspace remains the merge point. `apply_patch` applies selected Actor diffs to the working tree but does not commit automatically, so users can inspect changes before deciding how to version them.
 
-Full Actor patches are also retained under `.sca/artifacts/actor-diffs/`. This gives the Planner a compact context preview without losing the complete artifact needed for audit, retry, and conflict-resolution workflows.
+Full Actor patches are retained outside the target workspace under the per-user SCA state root. This gives the Planner a compact context preview without losing the complete artifact needed for audit, retry, and conflict-resolution workflows.
 
 ## MCP Tool Boundary
 
@@ -222,7 +222,7 @@ The Streamlit dashboard reads the same eval artifacts without invoking the agent
 
 ## Durable Run Recovery
 
-Non-interactive `--prompt` runs use a `RunStore` port backed by `<workspace>/.sca/runs.db`. The SQLite adapter owns schema setup, WAL configuration, checkpoint JSON encoding, event ordering, and optimistic version checks. `RunContext` owns the current record, full task snapshot, usage totals, and committed root tool-call results.
+Non-interactive `--prompt` runs use a `RunStore` port backed by a workspace-keyed `runs.db` in the per-user SCA state directory. Reports, Actor patches, and verification logs use the same external root. The target workspace only owns optional configuration such as `.sca/quality-gates.toml`. The SQLite adapter owns schema setup, WAL configuration, checkpoint JSON encoding, event ordering, and optimistic version checks. `RunContext` owns the current record, full task snapshot, usage totals, and committed root tool-call results.
 
 The root runtime checkpoints only complete message boundaries. Nested Actors share usage and task state but do not overwrite the root conversation checkpoint. On cancellation the run becomes `paused`; `sca resume <run_id>` reconstructs the conversation, task state, usage, and completed-call cache before continuing.
 

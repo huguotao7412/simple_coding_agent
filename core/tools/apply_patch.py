@@ -66,8 +66,9 @@ def _run_git(
 class ApplyPatchTool(BaseTool):
     name = "apply_patch"
     description = (
-        "Apply a unified diff produced by an Actor to the main workspace. "
+        "Apply the trusted diff produced by an Actor to the main workspace. "
         "Use this to merge Actor changes back after a delegate call completes. "
+        "Pass the completed Coder task_id; the host resolves its stored diff. "
         "The tool applies changes to the working tree but does not commit them. "
         "Strategy: 'strict' (default) fails on any conflict. "
         "'fuzz' applies what it can and reports rejected hunks."
@@ -75,7 +76,10 @@ class ApplyPatchTool(BaseTool):
     parameters = {
         "diff": {
             "type": "string",
-            "description": "The unified diff string to apply.",
+            "description": (
+                "Deprecated optional compatibility field. Omit it and let the "
+                "trusted host resolve the Actor diff from task_id."
+            ),
         },
         "task_id": {
             "type": "string",
@@ -87,7 +91,7 @@ class ApplyPatchTool(BaseTool):
             "description": "Merge strategy. Default: strict.",
         },
     }
-    required_params = ["diff", "task_id"]
+    required_params = ["task_id"]
 
     def __init__(
         self,
@@ -122,13 +126,29 @@ class ApplyPatchTool(BaseTool):
             )
         return ""
 
+    def _resolve_diff(self, task_id: str, supplied_diff: str) -> tuple[str, str]:
+        state = self._state or (
+            self._run_context.state if self._run_context is not None else None
+        )
+        node = state.task_tree.get(task_id) if state is not None else None
+        if node is None:
+            if supplied_diff:
+                return supplied_diff, ""
+            return "", f"No Actor result found for task '{task_id}'"
+        if not supplied_diff or supplied_diff == (node.diff_artifact or ""):
+            return node.diff or "", ""
+        return supplied_diff, ""
+
     async def execute(  # type: ignore[override]
         self,
-        diff: str,
         task_id: str,
+        diff: str = "",
         strategy: str = "strict",
         workspace_dir: str = "",
     ) -> ToolResult:
+        diff, resolution_error = self._resolve_diff(task_id, diff)
+        if resolution_error:
+            return ToolResult.fail(resolution_error)
         denial = self._authorize_patch(task_id, diff)
         if denial:
             return ToolResult.deny(denial)

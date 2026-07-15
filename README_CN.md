@@ -31,7 +31,7 @@ Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重
 
 Actor 完成或失败后会生成版本化的 `A2A_lite` 消息。结构化 handoff 分别记录
 发现、决策、约束、未解决问题和 artifact 引用；DAG 调度器会自动把依赖任务的
-handoff 注入下游 Actor。完整 patch 与验证日志保留在 `.sca/artifacts/`，prompt
+handoff 注入下游 Actor。完整 patch 与验证日志保留在用户级 SCA state 目录，prompt
 只传递引用和结构化元数据，从而减少隐式共享状态和手工摘要传递。
 
 当前实现保持进程内运行，不引入消息 broker 或网络服务。
@@ -221,7 +221,7 @@ command = ["{python}", "-m", "mypy", "core"]
 required = false
 ```
 
-命令必须使用参数数组，并以无 shell 的方式在 Coder 隔离 worktree 中运行。必选门禁失败会把证据回灌给同一个 Actor，进行次数受限的自动修复；只有全部必选门禁通过后才导出 diff。完整输出保存在 `.sca/artifacts/verification/`。这些项目自有命令仍以当前用户权限执行，因此只应启用可信仓库中的配置。
+命令必须使用参数数组，并以无 shell 的方式在 Coder 隔离 worktree 中运行。必选门禁失败会把证据回灌给同一个 Actor，进行次数受限的自动修复；只有全部必选门禁通过后才导出 diff。完整输出保存在用户级 SCA state 目录。这些项目自有命令仍以当前用户权限执行，因此只应启用可信仓库中的配置。
 
 ## 使用
 
@@ -260,7 +260,7 @@ sca --dir C:\path\to\project inspect run_abc123
 sca --dir C:\path\to\project resume run_abc123
 ```
 
-Run checkpoint 默认保存在工作区的 `.sca/runs.db`。`runs` 和 `inspect` 是只读命令，不需要模型 API key。P1 的持久化恢复覆盖 `--prompt` 单任务运行；交互式多轮 REPL 暂时仍是内存会话。
+Run checkpoint、最终报告、Actor patch 和 verification 日志默认按工作区分别保存在 Windows 的 `%LOCALAPPDATA%\\sca\\workspaces` 或 Unix 的 `$XDG_STATE_HOME/sca/workspaces`。可通过 `SCA_STATE_HOME` 覆盖根目录。目标工作区不再写入运行报告和数据库；`.sca/quality-gates.toml` 仍是可选的项目配置。`runs` 和 `inspect` 是只读命令，不需要模型 API key。
 
 实验 Web UI：
 

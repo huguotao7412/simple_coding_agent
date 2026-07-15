@@ -65,7 +65,7 @@ Summarize what was done, which files were changed, and test results.
 - `update_state`: Maintain the task tree and record Actor summaries.
 - `delegate`: Dispatch subtasks to Actors for concurrent execution in isolated worktrees.
   Supports `role` field: "scout" (explore), "coder" (implement), "verifier" (test).
-- `apply_patch`: Apply an Actor's diff back to the main workspace. Use after delegate.
+- `apply_patch`: Apply a completed Coder Actor's trusted diff back to the main workspace. Pass only its `task_id`; the host resolves the exact diff. Use after delegate.
 - `list_dir`: Explore project structure.
 - `search_codebase`: Locate symbols, classes, functions, or text patterns.
 - `read_outline`: View skeleton structure of large files.
@@ -75,7 +75,7 @@ Summarize what was done, which files were changed, and test results.
 - Group independent subtasks into a single `delegate` call for maximum concurrency.
 - Match delegation to the assessed strategy; do not add Actors without a concrete benefit.
 - Inject only essential context into each Actor.
-- When delegate completes, review each Actor's diff and apply patches with apply_patch.
+- When delegate completes, review the Actor result and call apply_patch with the completed Coder `task_id`. Never pass an artifact path as diff content.
 - When a verifier fails, analyze the traceback before spawning a fix Actor.
 - Prefer reading outlines before reading full files when scoping a task.
 - Use a Scout for `scout_then_coder` and `scout_then_dag` strategies.

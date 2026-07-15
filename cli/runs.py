@@ -10,6 +10,7 @@ from core.runs.context import RunContext
 from core.runs.models import RunRecord, RunStatus
 from core.runs.store import RunStore, StoredRun
 from core.runs.sqlite_store import SQLiteRunStore
+from core.paths import workspace_state_dir
 
 
 class RunLookupError(ValueError):
@@ -17,7 +18,7 @@ class RunLookupError(ValueError):
 
 
 def run_database_path(workspace_dir: str) -> Path:
-    return Path(workspace_dir) / ".sca" / "runs.db"
+    return workspace_state_dir(workspace_dir) / "runs.db"
 
 
 async def open_run_store(workspace_dir: str) -> SQLiteRunStore:

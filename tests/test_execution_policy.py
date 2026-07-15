@@ -519,7 +519,7 @@ async def test_apply_patch_requires_matching_verified_coder_provenance() -> None
         diff="",
         verification_passed=True,
     )
-    verified = await tool.execute(diff="", task_id=task_id)
+    verified = await tool.execute(task_id=task_id)
 
     assert unverified.success is False
     assert unverified.policy_denied is True

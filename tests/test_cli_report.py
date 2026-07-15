@@ -79,7 +79,13 @@ def test_run_report_tracks_failed_tools_and_actor_statuses():
     assert report.compactions == 1
 
 
-def test_run_report_renders_and_writes_eval_friendly_markdown(tmp_path):
+def test_run_report_renders_and_writes_eval_friendly_markdown(
+    tmp_path,
+    monkeypatch,
+):
+    state_home = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    monkeypatch.setenv("SCA_STATE_HOME", str(state_home))
     report = RunReport()
     report.observe(AgentEvent(
         type="tool_call",
@@ -94,13 +100,15 @@ def test_run_report_renders_and_writes_eval_friendly_markdown(tmp_path):
     report.observe(AgentEvent(type="done", content="All set."))
 
     markdown = report.to_markdown()
-    report_path = report.write_final_report(tmp_path)
+    report_path = report.write_final_report(workspace)
 
     assert "## Files" in markdown
     assert "## Tests" in markdown
     assert "## Risk" in markdown
     assert "python -m pytest -q" in markdown
-    assert report_path == tmp_path / ".sca" / "final_report.md"
+    assert report_path.parent.parent == state_home / "workspaces"
+    assert report_path.name == "final_report.md"
+    assert not (workspace / ".sca").exists()
     assert report_path.read_text(encoding="utf-8") == markdown
 
 

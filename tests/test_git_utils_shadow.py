@@ -16,6 +16,7 @@ from core.git_utils import (
     uses_shadow_repository,
 )
 from core.tools.apply_patch import ApplyPatchTool
+from core.runs.task_state import GlobalState
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -121,13 +122,13 @@ def test_non_git_patch_applies_and_advances_shadow_baseline(tmp_path: Path) -> N
     try:
         (worktree / "module.py").write_text("VALUE = 2\n", encoding="utf-8")
         diff = asyncio.run(extract_diff(str(worktree)))
-        result = asyncio.run(
-            ApplyPatchTool().execute(
-                diff=diff,
-                task_id="patch",
-                workspace_dir=str(workspace),
-            )
-        )
+        state = GlobalState()
+        task_id = asyncio.run(state.add_task("patch"))
+        asyncio.run(state.add_summary(task_id, "done", diff=diff))
+        result = asyncio.run(ApplyPatchTool(state).execute(
+            task_id=task_id,
+            workspace_dir=str(workspace),
+        ))
         assert result.success, result.error
         assert target.read_text(encoding="utf-8") == "VALUE = 2\n"
     finally:

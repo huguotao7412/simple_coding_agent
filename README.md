@@ -17,7 +17,7 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - MCP-backed file and shell tools for isolated Actor execution.
 - Git worktree isolation for delegated Actor tasks.
 - Deterministic project quality gates with bounded automatic repair.
-- Full Actor patch artifacts under `.sca/artifacts/actor-diffs/`.
+- Full Actor patch artifacts in the per-user SCA state directory, outside the target workspace.
 - Persistent JSONL traces for eval/debug runs.
 - Durable checkpoints for listing, inspecting, and resuming non-interactive runs.
 - Local eval runner with aggregate `eval_results.json` metrics.
@@ -216,7 +216,7 @@ command = ["{python}", "-m", "mypy", "core"]
 required = false
 ```
 
-Commands are argument arrays and run without a shell in the coder's isolated worktree. Required failures are returned to the same Actor for bounded repair; a diff is exported only after all required gates pass. Complete output is retained under `.sca/artifacts/verification/`. These are repository-owned commands and execute with the current user's permissions, so only enable configurations you trust.
+Commands are argument arrays and run without a shell in the coder's isolated worktree. Required failures are returned to the same Actor for bounded repair; a diff is exported only after all required gates pass. Complete output is retained in the per-user SCA state directory. These are repository-owned commands and execute with the current user's permissions, so only enable configurations you trust.
 
 ## Usage
 
@@ -255,7 +255,7 @@ sca --dir C:\path\to\project inspect run_abc123
 sca --dir C:\path\to\project resume run_abc123
 ```
 
-Checkpoints are stored in `<workspace>/.sca/runs.db`. `runs` and `inspect` are read-only and do not require a model API key. P1 recovery covers single-task `--prompt` runs; the multi-turn interactive REPL remains an in-memory session for now.
+Checkpoints, reports, Actor patches, and verification logs are stored under a workspace-keyed directory in `%LOCALAPPDATA%\\sca\\workspaces` on Windows or `$XDG_STATE_HOME/sca/workspaces` on Unix. Set `SCA_STATE_HOME` to override this root. Target workspaces are not populated with runtime reports or databases; `.sca/quality-gates.toml` remains the optional project-owned configuration. `runs` and `inspect` are read-only and do not require a model API key.
 
 Experimental Web UI:
 

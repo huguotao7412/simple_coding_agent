@@ -84,7 +84,7 @@ flowchart LR
 
 `WorktreeActorExecutor` 负责上下文注入、遗留 worktree 清理、worktree 创建、依赖 baseline、MCP 启停、Actor 构造、diff 提取、artifact 持久化与最终清理。上下文文件在 MCP 启动前读取或复制时，会同时校验主工作区和 Actor worktree 的路径边界，阻止绝对路径与 `..` 路径逃逸。
 
-对于 Coder 任务，它同时是确定性验证边界。如果项目存在 `.sca/quality-gates.toml`，门禁命令会以参数数组、无 shell 的方式在 Actor worktree 内顺序执行。必选门禁失败后，结构化证据会回灌给同一个 Actor 上下文进行有界修复，再由 runtime 重新执行门禁，而不是相信 Actor 对“测试已通过”的自然语言声明。相同失败指纹再次出现会提前判定无进展。只有通过全部必选门禁的 Coder diff 才会导出；每轮完整日志保存在 `.sca/artifacts/verification/`，紧凑报告随 `ActorExecutionResult` 返回。
+对于 Coder 任务，它同时是确定性验证边界。如果项目存在 `.sca/quality-gates.toml`，门禁命令会以参数数组、无 shell 的方式在 Actor worktree 内顺序执行。必选门禁失败后，结构化证据会回灌给同一个 Actor 上下文进行有界修复，再由 runtime 重新执行门禁，而不是相信 Actor 对“测试已通过”的自然语言声明。相同失败指纹再次出现会提前判定无进展。只有通过全部必选门禁的 Coder diff 才会导出；每轮完整日志保存在用户级 SCA state 目录，紧凑报告随 `ActorExecutionResult` 返回。
 
 默认适配器目前仍通过 `RunContext.state` 读取依赖任务 diff，以保持 P1 向后兼容。未来持久化或远程执行器应使用更窄的执行上下文，或直接从 task spec 接收依赖 artifact。详见 [ADR-0001](docs/adr/0001-actor-executor-boundary.md)。
 
@@ -96,7 +96,7 @@ Actor 都会生成不可变的 `AgentMessage`，当前 schema 为 `a2a-lite/1.0`
 `ArtifactRef`；patch 引用包含内容摘要，verification 引用保留产出任务和证据位置。
 
 消息会写入任务快照、作为 `a2a_lite_message` 进入 Run 事件流、返回 Planner，
-并由 DAG 调度器自动注入已就绪的下游任务。完整 diff 仍保存在 `.sca/artifacts/`
+并由 DAG 调度器自动注入已就绪的下游任务。完整 diff 仍保存在用户级 SCA state 目录，
 并作为下游 worktree baseline 应用，prompt 只接收结构化 handoff 和 artifact 元数据。
 旧的 `context_summaries` 暂时保留兼容，但依赖任务间传递不再要求 Planner 手工复制摘要。
 
@@ -202,7 +202,7 @@ tmp/eval-runs/<task_id>/.sca/traces/run_trace.jsonl
 
 ## 持久化 Run 恢复
 
-非交互 `--prompt` 任务通过 `RunStore` 端口写入 `<workspace>/.sca/runs.db`。SQLite 适配器负责 schema、WAL、checkpoint JSON、事件顺序和乐观版本检查；`RunContext` 持有当前 Run record、完整任务快照、usage 汇总与已落盘的 root tool-call 结果。
+非交互 `--prompt` 任务通过 `RunStore` 端口写入用户级 SCA state 目录中按 workspace 隔离的 `runs.db`。最终报告、Actor patch 与 verification 日志使用同一外部根目录，目标工作区只保留 `.sca/quality-gates.toml` 等可选项目配置。SQLite 适配器负责 schema、WAL、checkpoint JSON、事件顺序和乐观版本检查；`RunContext` 持有当前 Run record、完整任务快照、usage 汇总与已落盘的 root tool-call 结果。
 
 root runtime 只在完整消息边界写 checkpoint。嵌套 Actor 仍共享 usage 和任务状态，但不会覆盖 root 对话 checkpoint。任务被取消时状态转为 `paused`；`sca resume <run_id>` 会先恢复对话、任务树、usage 和已完成调用缓存，再继续执行。
 

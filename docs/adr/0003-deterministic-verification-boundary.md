@@ -30,7 +30,7 @@ Missing configuration disables this boundary and preserves the previous executio
 
 ## Consequences
 
-- Acceptance evidence is reproducible and retained under `.sca/artifacts/verification/`.
+- Acceptance evidence is reproducible and retained in the workspace-keyed per-user SCA state directory.
 - Repair consumes a bounded number of additional model turns and process executions.
 - Failure fingerprints intentionally ignore timing but include the failed gate, outcome, and compact output; materially identical failures terminate early.
 - `shell=False` removes shell parsing ambiguity, but configured executables still run with the current user's OS permissions. The configuration is trusted repository code, not a process sandbox.

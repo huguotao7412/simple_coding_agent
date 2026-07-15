@@ -82,7 +82,11 @@ def test_dependency_diffs_become_actor_baseline(tmp_path: Path):
         teardown_worktree(str(worktree_path))
 
 
-def test_diff_paths_and_artifact_are_recorded(tmp_path: Path):
+def test_diff_paths_and_artifact_are_recorded(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("SCA_STATE_HOME", str(tmp_path / "state"))
     diff = (
         "diff --git a/src/app.py b/src/app.py\n"
         "index 1111111..2222222 100644\n"
@@ -102,5 +106,8 @@ def test_diff_paths_and_artifact_are_recorded(tmp_path: Path):
     artifact = _write_diff_artifact(str(tmp_path), "task:demo/1", diff)
 
     assert parse_diff_file_paths(diff) == ["src/app.py", "tests/test_app.py"]
-    assert artifact == ".sca/artifacts/actor-diffs/task_demo_1.patch"
-    assert (tmp_path / artifact).read_text(encoding="utf-8").endswith("\n")
+    artifact_path = Path(artifact)
+    assert artifact_path.name == "task_demo_1.patch"
+    assert artifact_path.parent.name == "actor-diffs"
+    assert artifact_path.read_text(encoding="utf-8").endswith("\n")
+    assert not (tmp_path / ".sca").exists()

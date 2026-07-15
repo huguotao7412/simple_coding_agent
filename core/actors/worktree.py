@@ -22,6 +22,7 @@ from ..git_utils import (
     teardown_worktree,
 )
 from ..policy import ToolPolicy
+from ..paths import workspace_state_dir
 from ..execution.policy import PolicyViolation
 from .roles import ActorRole, get_role_config
 from ..runs.context import RunContext
@@ -34,7 +35,6 @@ from ..sandbox.contracts import SandboxBackend
 from ..sandbox.factory import create_sandbox_backend
 
 
-ARTIFACT_DIR = os.path.join(".sca", "artifacts", "actor-diffs")
 logger = logging.getLogger(__name__)
 
 WorktreeFactory = Callable[[str, str], str]
@@ -151,14 +151,18 @@ def _write_diff_artifact(workspace_dir: str, task_id: str, diff: str) -> str:
         return ""
 
     safe_task_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", task_id).strip("._") or "task"
-    artifact_rel = os.path.join(ARTIFACT_DIR, f"{safe_task_id}.patch")
-    artifact_abs = os.path.join(workspace_dir, artifact_rel)
+    artifact_abs = str(
+        workspace_state_dir(workspace_dir)
+        / "artifacts"
+        / "actor-diffs"
+        / f"{safe_task_id}.patch"
+    )
     os.makedirs(os.path.dirname(artifact_abs), exist_ok=True)
     with open(artifact_abs, "w", encoding="utf-8", newline="\n") as artifact_file:
         artifact_file.write(diff)
         if not diff.endswith("\n"):
             artifact_file.write("\n")
-    return artifact_rel.replace(os.sep, "/")
+    return artifact_abs
 
 
 def _default_tool_provider_factory(run_context: RunContext, actor_id: str) -> Any:
@@ -214,11 +218,10 @@ class WorktreeActorExecutor:
         self.verification_config_loader = verification_config_loader
         self.sandbox_backend = sandbox_backend or create_sandbox_backend()
         self.verification_runner = verification_runner or VerificationRunner(
-            artifact_root=os.path.join(
-                workspace_dir,
-                ".sca",
-                "artifacts",
-                "verification",
+            artifact_root=(
+                workspace_state_dir(workspace_dir)
+                / "artifacts"
+                / "verification"
             ),
             sandbox_backend=self.sandbox_backend,
         )

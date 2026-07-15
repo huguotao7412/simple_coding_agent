@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from core.events import AgentEvent
+from core.paths import workspace_state_dir
 
 
 FILE_ARG_KEYS = ("path", "file_path", "filepath", "source", "destination")
@@ -223,7 +224,7 @@ class RunReport:
         return "\n".join(lines).rstrip() + "\n"
 
     def write_final_report(self, workspace_dir: str | Path) -> Path:
-        report_path = Path(workspace_dir) / ".sca" / "final_report.md"
+        report_path = workspace_state_dir(workspace_dir) / "final_report.md"
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(self.to_markdown(), encoding="utf-8")
         return report_path

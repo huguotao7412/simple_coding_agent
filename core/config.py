@@ -14,6 +14,8 @@ SCA_MODEL=deepseek-v4-pro
 SCA_MAX_TOKENS=128000
 SCA_MAX_ACTORS=4
 SCA_SANDBOX_BACKEND=local
+# Optional runtime state override (reports, checkpoints, patches, verification logs)
+# SCA_STATE_HOME=C:\\path\\to\\sca-state
 
 # Optional E2B remote sandbox
 # E2B_API_KEY=e2b_your-key
