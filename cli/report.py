@@ -33,10 +33,15 @@ class RunReport:
     errors: list[str] = field(default_factory=list)
     final_output: str = ""
     task_assessment: dict[str, Any] | None = None
+    sandbox_backends: set[str] = field(default_factory=set)
+    isolated_execution_observed: bool = False
 
     def observe(self, event: AgentEvent) -> None:
         if event.type == "task_assessment":
             self._record_task_assessment(event.content)
+
+        elif event.type == "sandbox_execution":
+            self._record_sandbox_execution(event.content)
 
         elif event.type == "tool_call":
             args = dict(event.tool_args or {})
@@ -121,6 +126,15 @@ class RunReport:
             if isinstance(reasons, list):
                 lines.extend(f"- Reason: {reason}" for reason in reasons if isinstance(reason, str))
             lines.append("")
+
+        if self.sandbox_backends:
+            lines.extend([
+                "## Command Sandbox",
+                "",
+                f"- Backends: {', '.join(sorted(self.sandbox_backends))}",
+                f"- Isolated execution observed: {self.isolated_execution_observed}",
+                "",
+            ])
 
         lines.extend(["## Files", ""])
 
@@ -223,6 +237,20 @@ class RunReport:
         if not isinstance(payload, dict) or payload.get("schema_version") != 1:
             return
         self.task_assessment = payload
+
+    def _record_sandbox_execution(self, content: str) -> None:
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(payload, dict):
+            return
+        backend = payload.get("backend")
+        if isinstance(backend, str) and backend:
+            self.sandbox_backends.add(backend)
+        self.isolated_execution_observed = (
+            self.isolated_execution_observed or payload.get("isolated") is True
+        )
 
     def _record_token_stats(self, event: AgentEvent) -> None:
         # Structured fields are preferred for new runtime events. JSON content

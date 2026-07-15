@@ -8,6 +8,7 @@ import pytest
 from core.mcp.client import MCPToolProvider, is_destructive_shell_command
 from core.policy import ToolPolicy
 from core.runs.context import RunContext
+from core.sandbox.contracts import SandboxExecutionResult
 
 
 @dataclass
@@ -44,6 +45,30 @@ class FakeStdioContext:
 
     async def __aexit__(self, exc_type, exc, tb):
         return None
+
+
+class FakeIsolatedSandbox:
+    name = "fake-e2b"
+    isolated = True
+    python_executable = "python"
+
+    def __init__(self):
+        self.available = False
+        self.requests = []
+
+    async def ensure_available(self):
+        self.available = True
+
+    async def execute(self, request):
+        self.requests.append(request)
+        return SandboxExecutionResult(
+            backend=self.name,
+            isolated=True,
+            command=request.command,
+            exit_code=0,
+            output="sandboxed output",
+            duration_ms=5,
+        )
 
 
 @pytest.mark.asyncio
@@ -98,6 +123,39 @@ async def test_mcp_servers_prefer_local_node_bins(monkeypatch, tmp_path):
     assert captured_params[0].args == [str(tmp_path)]
     assert captured_params[1].command == str(bash_bin)
     assert captured_params[1].args == []
+
+
+@pytest.mark.asyncio
+async def test_isolated_mode_omits_bash_mcp_and_routes_run_to_sandbox(
+    monkeypatch,
+    tmp_path,
+):
+    captured_params = []
+    sandbox = FakeIsolatedSandbox()
+
+    def fake_stdio_client(params):
+        captured_params.append(params)
+        return FakeStdioContext()
+
+    monkeypatch.setattr("core.mcp.client.stdio_client", fake_stdio_client)
+    monkeypatch.setattr("core.mcp.client.ClientSession", FakeSession)
+    monkeypatch.setattr("core.mcp.client.PACKAGE_ROOT", tmp_path / "without_bins")
+    provider = MCPToolProvider(sandbox_backend=sandbox)
+
+    await provider.start(str(tmp_path))
+    schemas = await provider.list_tools()
+    result = await provider.call_tool("run", {"command": "python -m pytest"})
+    await provider.shutdown()
+
+    assert sandbox.available
+    assert len(captured_params) == 1
+    assert "server-filesystem" in " ".join(captured_params[0].args)
+    names = [schema["function"]["name"] for schema in schemas]
+    assert names.count("run") == 1
+    assert "run_background" not in names
+    assert result.success
+    assert '"isolated": true' in result.content
+    assert sandbox.requests[0].workspace == tmp_path
 
 
 def test_mcp_provider_rejects_absolute_paths_outside_worktree(tmp_path):

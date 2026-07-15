@@ -164,6 +164,13 @@ class UI:
                 str(report.task_assessment.get("strategy", "unknown")),
             )
 
+        if report.sandbox_backends:
+            table.add_row(
+                "Command sandbox",
+                f"{', '.join(sorted(report.sandbox_backends))}; "
+                f"isolated={'yes' if report.isolated_execution_observed else 'no'}",
+            )
+
         if report.files_referenced:
             files = sorted(report.files_referenced)
             rendered = ", ".join(files[:5])

@@ -85,7 +85,7 @@ def _render_timeline_event(event: TimelineEvent) -> None:
     elapsed = f" · {event.elapsed_ms} ms" if event.elapsed_ms is not None else ""
     with st.expander(f"{status} {event.label}{elapsed}", expanded=event.type in {"error", "runner_error"}):
         if event.content:
-            language = "json" if event.type in {"task_assessment", "tool_call", "token_stats"} else "text"
+            language = "json" if event.type in {"sandbox_execution", "task_assessment", "tool_call", "token_stats"} else "text"
             st.code(_truncate(event.content), language=language)
         else:
             st.caption("No content")

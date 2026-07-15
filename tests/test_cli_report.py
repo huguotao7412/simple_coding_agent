@@ -142,3 +142,18 @@ def test_run_report_risk_section_respects_high_task_risk():
 
     assert "High: task assessment requires review or human approval." in markdown
     assert "Low: no runtime errors" not in markdown
+
+
+def test_run_report_records_sandbox_backend_evidence():
+    report = RunReport()
+    report.observe(AgentEvent(
+        type="sandbox_execution",
+        content=json.dumps({"backend": "e2b", "isolated": True}),
+    ))
+
+    markdown = report.to_markdown()
+
+    assert report.sandbox_backends == {"e2b"}
+    assert report.isolated_execution_observed is True
+    assert "## Command Sandbox" in markdown
+    assert "Isolated execution observed: True" in markdown

@@ -10,6 +10,7 @@
 - `core/runs/`：持久化 Run 模型、任务状态、`RunContext`、存储端口与 SQLite 适配器。
 - `core/actors/`：Actor 行为、执行契约、角色配置与 worktree 适配器。
 - `core/verification/`：确定性质量门禁配置、子进程执行、证据与修复提示。
+- `core/sandbox/`：命令执行端口、本地/E2B 适配器与受控工作区传输。
 - `core/events.py`：runtime、runs、MCP、CLI 和 eval 共用的跨域事件契约。
 - `core/planner.py`：应用编排入口。
 
@@ -117,6 +118,27 @@ provider 会把 MCP 子进程的当前工作目录设置为 Actor worktree，并
 - Verifier：读取、测试、创建测试文件
 
 worktree 不是操作系统沙箱：它隔离分支、diff 和默认工作目录，但 Actor 子进程仍拥有当前用户的系统权限。路径和命令策略属于纵深防御，不代表完整的进程封锁。
+
+## 沙箱执行边界
+
+Git worktree 与 OS 执行隔离是两个可组合的边界。可信宿主机负责 worktree
+创建、依赖 baseline、Git 暂存、diff 提取和清理；`SandboxBackend` 负责执行不可信
+的 Actor shell 与项目 verification 命令。
+
+```mermaid
+flowchart LR
+    HOST["可信宿主机"] --> WT["Git worktree"]
+    WT --> SB["SandboxBackend 协议"]
+    SB --> LOCAL["Local 适配器\n无 OS 隔离"]
+    SB --> E2B["E2B 适配器\n远程 Linux 沙箱"]
+    E2B --> SYNC["受限工作区归档\n排除凭证"]
+    WT --> DIFF["宿主机 Git diff 提取"]
+```
+
+E2B 模式不会启动 bash MCP，而是通过前台 `run` 适配器把 shell 字符串交给远程
+后端；verification 使用同一后端。宿主机编辑会在命令前上传，远程修改会在命令后
+安全回写。SDK、API Key 或传输校验失败会终止 Actor，绝不静默回退到宿主机执行。
+完整取舍见 [ADR-0004](docs/adr/0004-sandbox-execution-boundary.md)。
 
 ## 事件与 Trace
 

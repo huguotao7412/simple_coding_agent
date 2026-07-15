@@ -7,6 +7,7 @@ import pytest
 
 from core.verification.models import GateSpec, VerificationConfig
 from core.verification.runner import VerificationRunner
+from core.sandbox.contracts import SandboxExecutionResult
 
 
 @pytest.mark.asyncio
@@ -106,3 +107,44 @@ async def test_runner_times_out_and_terminates_process(tmp_path: Path) -> None:
     assert result.timed_out
     assert result.exit_code is None
     assert "started" in Path(result.output_artifact).read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_runner_uses_injected_isolated_backend_and_container_python(
+    tmp_path: Path,
+) -> None:
+    requests = []
+
+    class FakeBackend:
+        name = "e2b"
+        isolated = True
+        python_executable = "python"
+
+        async def ensure_available(self):
+            return None
+
+        async def execute(self, request):
+            requests.append(request)
+            return SandboxExecutionResult(
+                backend=self.name,
+                isolated=self.isolated,
+                command=request.command,
+                exit_code=0,
+                output="isolated pass",
+                duration_ms=8,
+            )
+
+    runner = VerificationRunner(
+        artifact_root=tmp_path / "artifacts",
+        sandbox_backend=FakeBackend(),
+    )
+    report = await runner.run(
+        VerificationConfig(gates=(GateSpec("unit", ("{python}", "-m", "pytest")),)),
+        worktree=tmp_path,
+        task_id="task",
+        attempt=1,
+    )
+
+    assert requests[0].command == ("python", "-m", "pytest")
+    assert report.results[0].execution_backend == "e2b"
+    assert report.results[0].isolated is True

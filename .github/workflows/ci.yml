@@ -33,13 +33,14 @@ jobs:
       - name: Type check trusted runtime modules
         run: >-
           python -m mypy
-          core/execution
+          core/execution core/sandbox
           core/actors/contracts.py core/policy.py core/events.py
           core/runs/models.py core/runs/store.py core/runs/sqlite_store.py
           core/runs/context.py core/runtime/engine.py core/actors/worktree.py
           core/verification
           core/planner.py core/actors/agent.py core/mcp/client.py
           core/tools/update_state.py core/tools/delegate.py
+          core/tools/sandbox_run.py
           cli/report.py cli/runs.py cli/main.py evals/run_evals.py
 
       - name: Compile Python sources

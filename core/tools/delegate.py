@@ -130,6 +130,8 @@ class DelegateTool(BaseTool):
                                 "exit_code": gate.exit_code,
                                 "timed_out": gate.timed_out,
                                 "duration_ms": gate.duration_ms,
+                                "execution_backend": gate.execution_backend,
+                                "isolated": gate.isolated,
                                 "output_artifact": gate.output_artifact,
                                 "output_excerpt": gate.output_excerpt[:2000],
                             }

@@ -1,7 +1,7 @@
 """MCP Tool Provider: manages MCP Server lifecycles for Actor agents.
 
 Each Actor gets its own MCPToolProvider bound to its worktree.
-Two MCP Servers are spawned per Actor:
+In local mode two MCP Servers are spawned per Actor:
   - @modelcontextprotocol/server-filesystem: file read/write/edit/search/list
   - bash-mcp: shell command execution
 """
@@ -25,6 +25,8 @@ from ..tools.base import BaseTool, ToolResult
 from ..policy import ToolPolicy
 from ..events import AgentEvent
 from ..runs.context import RunContext
+from ..sandbox.contracts import SandboxBackend
+from ..tools.sandbox_run import SandboxRunTool
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,7 @@ class MCPToolProvider:
         self,
         run_context: RunContext | None = None,
         actor_id: str = "",
+        sandbox_backend: SandboxBackend | None = None,
     ) -> None:
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._sessions: dict[str, ClientSession] = {}
@@ -84,6 +87,12 @@ class MCPToolProvider:
         self._policy = ToolPolicy.for_role("legacy", None)
         self._run_context = run_context
         self._actor_id = actor_id
+        self._sandbox_backend = sandbox_backend
+
+    def configure_sandbox(self, backend: SandboxBackend) -> None:
+        if self._sessions:
+            raise RuntimeError("sandbox backend must be configured before MCP startup")
+        self._sandbox_backend = backend
 
     def set_policy(self, policy: ToolPolicy) -> None:
         """Set the execution policy used for both schemas and dispatch."""
@@ -101,6 +110,15 @@ class MCPToolProvider:
             tool_policy or ToolPolicy.for_role("actor", tool_allowlist)
         )
 
+        if self._sandbox_backend is not None and self._sandbox_backend.isolated:
+            await self._sandbox_backend.ensure_available()
+            run_tool = SandboxRunTool(
+                self._sandbox_backend,
+                run_context=self._run_context,
+                actor_id=self._actor_id,
+            )
+            self._local_tools[run_tool.name] = run_tool
+
         servers: list[tuple[str, list[str]]] = [
             (
                 "filesystem",
@@ -112,11 +130,12 @@ class MCPToolProvider:
                     self._worktree_path,
                 ],
             ),
-            (
+        ]
+        if self._sandbox_backend is None or not self._sandbox_backend.isolated:
+            servers.append((
                 "bash",
                 _node_bin_command("bash-mcp", f"bash-mcp@{BASH_MCP_VERSION}"),
-            ),
-        ]
+            ))
 
         for server_name, cmd_and_args in servers:
             server_params = StdioServerParameters(
@@ -149,7 +168,7 @@ class MCPToolProvider:
         if not self._tool_schemas:
             await self._build_routing_table()
         if self._policy.allowed_tools is None:
-            return self._tool_schemas
+            return list(self._tool_schemas)
         return [
             tool
             for tool in self._tool_schemas
@@ -175,6 +194,14 @@ class MCPToolProvider:
                 "Tool service circuit breaker is open; report this to the Planner "
                 "(CRITICAL: MCP circuit breaker open)"
             )
+
+        command = _extract_shell_command(args)
+        if name in {"run", "run_background"} and command:
+            if is_destructive_shell_command(command):
+                return ToolResult.fail(
+                    "Destructive shell command blocked by Actor safety policy. "
+                    "Ask the Planner/user for an explicit safer workflow instead."
+                )
 
         local_tool = self._local_tools.get(name)
         if local_tool is not None:
@@ -202,13 +229,6 @@ class MCPToolProvider:
                         return ToolResult.fail(
                             f"Path access denied: '{value}' escapes the workspace"
                         )
-        elif server_name == "bash":
-            command = _extract_shell_command(args)
-            if command and is_destructive_shell_command(command):
-                return ToolResult.fail(
-                    "Destructive shell command blocked by Actor safety policy. "
-                    "Ask the Planner/user for an explicit safer workflow instead."
-                )
 
         try:
             result = await asyncio.wait_for(
@@ -265,6 +285,13 @@ class MCPToolProvider:
                 continue
 
             for tool in response.tools:
+                if tool.name in self._local_tools:
+                    logger.debug(
+                        "MCP tool '%s' from '%s' skipped; local adapter owns the name",
+                        tool.name,
+                        server_name,
+                    )
+                    continue
                 if tool.name not in self._tool_routing:
                     self._tool_routing[tool.name] = server_name
                 else:

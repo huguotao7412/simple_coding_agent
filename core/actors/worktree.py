@@ -28,6 +28,8 @@ from ..verification.config import load_verification_config
 from ..verification.models import VerificationConfig, VerificationReport
 from ..verification.repair import build_repair_prompt
 from ..verification.runner import VerificationRunner
+from ..sandbox.contracts import SandboxBackend
+from ..sandbox.factory import create_sandbox_backend
 
 
 ARTIFACT_DIR = os.path.join(".sca", "artifacts", "actor-diffs")
@@ -197,6 +199,7 @@ class WorktreeActorExecutor:
         actor_factory: ActorFactory = _default_actor_factory,
         verification_config_loader: VerificationConfigLoader = load_verification_config,
         verification_runner: VerificationRunnerPort | None = None,
+        sandbox_backend: SandboxBackend | None = None,
     ) -> None:
         self.llm = llm_client
         self.workspace_dir = workspace_dir
@@ -207,13 +210,15 @@ class WorktreeActorExecutor:
         self.tool_provider_factory = tool_provider_factory
         self.actor_factory = actor_factory
         self.verification_config_loader = verification_config_loader
+        self.sandbox_backend = sandbox_backend or create_sandbox_backend()
         self.verification_runner = verification_runner or VerificationRunner(
             artifact_root=os.path.join(
                 workspace_dir,
                 ".sca",
                 "artifacts",
                 "verification",
-            )
+            ),
+            sandbox_backend=self.sandbox_backend,
         )
         self._orphan_cleanup_lock = asyncio.Lock()
         self._orphan_cleanup_done = False
@@ -291,6 +296,9 @@ class WorktreeActorExecutor:
 
             phase = "MCP startup"
             tool_provider = self.tool_provider_factory(run_context, spec.task_id)
+            configure_sandbox = getattr(tool_provider, "configure_sandbox", None)
+            if callable(configure_sandbox):
+                configure_sandbox(self.sandbox_backend)
             await tool_provider.start(
                 worktree_path,
                 tool_policy=ToolPolicy.for_role(
@@ -471,6 +479,16 @@ class WorktreeActorExecutor:
                         exc_info=True,
                     )
             if worktree_path is not None:
+                try:
+                    await self.sandbox_backend.close_workspace(
+                        Path(worktree_path)
+                    )
+                except Exception:
+                    logger.warning(
+                        "Sandbox cleanup error for %s",
+                        spec.task_id,
+                        exc_info=True,
+                    )
                 try:
                     self.worktree_cleanup(worktree_path)
                 except Exception:

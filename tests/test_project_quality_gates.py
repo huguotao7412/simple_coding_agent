@@ -40,6 +40,8 @@ def test_actor_executor_modules_are_in_trusted_mypy_boundary() -> None:
         "core/actors/contracts.py",
         "core/actors/worktree.py",
         "core/verification",
+        "core/sandbox",
+        "core/tools/sandbox_run.py",
     }
 
     configured_files = set(config["tool"]["mypy"]["files"])

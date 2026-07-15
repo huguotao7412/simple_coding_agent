@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 import re
-import sys
-from time import monotonic
 
+from ..sandbox.contracts import SandboxBackend, SandboxExecutionRequest
+from ..sandbox.local import LocalSandboxBackend
 from .models import GateResult, GateSpec, VerificationConfig, VerificationReport
 
 
@@ -17,20 +16,30 @@ def _safe_segment(value: str, *, fallback: str) -> str:
     return (sanitized or fallback)[:80]
 
 
-def _expand_command(command: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(sys.executable if argument == "{python}" else argument for argument in command)
-
-
-def _decode_output(output: bytes) -> str:
-    return output.decode("utf-8", errors="replace")
+def _expand_command(
+    command: tuple[str, ...],
+    *,
+    python_executable: str,
+) -> tuple[str, ...]:
+    return tuple(
+        python_executable if argument == "{python}" else argument
+        for argument in command
+    )
 
 
 class VerificationRunner:
-    def __init__(self, *, artifact_root: str | Path, excerpt_limit: int = 4000) -> None:
+    def __init__(
+        self,
+        *,
+        artifact_root: str | Path,
+        excerpt_limit: int = 4000,
+        sandbox_backend: SandboxBackend | None = None,
+    ) -> None:
         if excerpt_limit <= 0:
             raise ValueError("excerpt_limit must be positive")
         self._artifact_root = Path(artifact_root)
         self._excerpt_limit = excerpt_limit
+        self._sandbox_backend = sandbox_backend or LocalSandboxBackend()
 
     async def run(
         self,
@@ -66,48 +75,32 @@ class VerificationRunner:
         task_id: str,
         attempt: int,
     ) -> GateResult:
-        command = _expand_command(gate.command)
-        started = monotonic()
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            cwd=worktree,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+        command = _expand_command(
+            gate.command,
+            python_executable=self._sandbox_backend.python_executable,
         )
-        if process.stdout is None:  # pragma: no cover - guaranteed by PIPE above
-            raise RuntimeError("verification process stdout pipe was not created")
-        output_task = asyncio.create_task(process.stdout.read())
-        timed_out = False
-        try:
-            await asyncio.wait_for(process.wait(), timeout=gate.timeout_seconds)
-        except TimeoutError:
-            timed_out = True
-            process.kill()
-            await process.wait()
-        except asyncio.CancelledError:
-            process.kill()
-            await process.wait()
-            await output_task
-            raise
-        output = await output_task
-
-        duration_ms = round((monotonic() - started) * 1000)
-        output_text = _decode_output(output)
+        execution = await self._sandbox_backend.execute(SandboxExecutionRequest(
+            workspace=worktree,
+            command=command,
+            timeout_seconds=gate.timeout_seconds,
+        ))
+        output_text = execution.output
         artifact_path = self._artifact_path(task_id, attempt, gate.name)
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
         artifact_path.write_text(output_text, encoding="utf-8")
-        exit_code = None if timed_out else process.returncode
 
         return GateResult(
             gate_name=gate.name,
             command=command,
             required=gate.required,
-            passed=not timed_out and exit_code == 0,
-            exit_code=exit_code,
-            duration_ms=duration_ms,
+            passed=execution.succeeded,
+            exit_code=execution.exit_code,
+            duration_ms=execution.duration_ms,
             output_artifact=str(artifact_path.resolve()),
             output_excerpt=output_text[-self._excerpt_limit :],
-            timed_out=timed_out,
+            timed_out=execution.timed_out,
+            execution_backend=execution.backend,
+            isolated=execution.isolated,
         )
 
     def _artifact_path(self, task_id: str, attempt: int, gate_name: str) -> Path:

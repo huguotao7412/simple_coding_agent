@@ -151,6 +151,10 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_parser.add_argument("run_id")
     resume_parser = commands.add_parser("resume", help="Resume an interrupted run")
     resume_parser.add_argument("run_id")
+    commands.add_parser(
+        "sandbox-check",
+        help="Validate the configured command-execution sandbox",
+    )
     return parser
 
 
@@ -189,11 +193,42 @@ def _cleanup_workspace(workspace_dir: str) -> None:
         print(f"[init] Warning: worktree cleanup failed: {e}", file=sys.stderr)
 
 
+async def _sandbox_check() -> int:
+    from core.sandbox.config import load_sandbox_config
+    from core.sandbox.factory import create_sandbox_backend
+
+    config = load_sandbox_config()
+    backend = create_sandbox_backend(config)
+    print(f"Backend: {backend.name}")
+    print(f"OS isolated: {'yes' if backend.isolated else 'no'}")
+    if not backend.isolated:
+        print(
+            "Warning: local mode executes Actor shell and verification commands "
+            "with the current host user's permissions."
+        )
+    try:
+        await backend.ensure_available()
+    except Exception as error:
+        print(f"Unavailable: {error}", file=sys.stderr)
+        return 1
+    print("Status: available")
+    if config.mode.value == "e2b":
+        print(f"Template: {config.e2b_template}")
+        print(
+            "Outbound internet: "
+            f"{'enabled' if config.e2b_allow_internet else 'blocked'}"
+        )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
     workspace_dir = os.path.abspath(args.workspace or args.dir or os.getcwd())
+
+    if args.command == "sandbox-check":
+        return asyncio.run(_sandbox_check())
 
     if args.command in {"runs", "inspect"}:
         try:

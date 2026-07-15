@@ -20,6 +20,7 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - Durable checkpoints for listing, inspecting, and resuming non-interactive runs.
 - Local eval runner with aggregate `eval_results.json` metrics.
 - Versioned deterministic task assessment with auditable strategy recommendations.
+- Replaceable local/E2B sandbox protocol shared by Actor shell and verification.
 - Safety eval fixtures for path escape, dirty workspace, and destructive command behavior.
 - Deterministic unit tests for runtime, isolation, reports, and eval behavior.
 
@@ -66,6 +67,7 @@ core/
   actors/           Actor behavior, contracts, roles, worktree adapter
   verification/     Quality-gate config, execution evidence, repair prompts
   execution/        Deterministic task assessment and strategy contracts
+  sandbox/          Command sandbox protocol, E2B adapter, and workspace transport
   planner.py        Planner wrapper around the runtime engine
   events.py         cross-domain AgentEvent protocol
   llm.py            OpenAI-compatible async streaming client
@@ -117,9 +119,42 @@ SCA_API_BASE=https://api.deepseek.com
 SCA_MODEL=deepseek-v4-pro
 SCA_MAX_TOKENS=128000
 SCA_MAX_ACTORS=4
+SCA_SANDBOX_BACKEND=e2b
+E2B_API_KEY=e2b_your_key_here
+SCA_E2B_TEMPLATE=base
+SCA_E2B_ALLOW_INTERNET=false
+SCA_SANDBOX_MAX_TIMEOUT=300
+SCA_SANDBOX_MAX_TRANSFER=50000000
 ```
 
 The client uses an OpenAI-compatible chat completions API.
+
+### Command sandbox
+
+`local` is the compatibility default and is **not OS-isolated**. Check the active
+backend with:
+
+```powershell
+sca sandbox-check
+```
+
+To enable the zero-local-runtime E2B backend, create an account and API key at
+<https://e2b.dev/dashboard>, then set:
+
+```powershell
+$env:SCA_SANDBOX_BACKEND = "e2b"
+$env:E2B_API_KEY = "e2b_your_key"
+sca sandbox-check
+```
+
+E2B mode keeps Git/worktree lifecycle on the trusted host and executes shell and
+verification commands in a remote Linux sandbox. A bounded archive transport syncs
+the Actor worktree before and after each command. It rejects path traversal and never
+uploads `.env`, Git metadata, virtual environments, package caches, or common
+credential files. Internet access is blocked by default and must be explicitly
+enabled for dependency installation. Selecting E2B fails closed when its SDK or API
+key is unavailable; it never falls back to host execution. Remote execution sends
+eligible repository files to E2B, so operators must account for source-code privacy.
 
 Optionally define deterministic coder quality gates in `.sca/quality-gates.toml`:
 
@@ -205,6 +240,7 @@ The current safety model is pragmatic rather than magical:
 - full Actor diffs are persisted as patch artifacts, while Planner context receives a compact preview
 - MCP server packages are pinned and launched from local `node_modules/.bin` when installed
 - destructive Actor shell commands such as recursive delete and hard reset are blocked before reaching bash MCP
+- E2B mode routes Actor shell and deterministic verification through one fail-closed remote backend
 - Actor role allowlists are enforced again immediately before local or MCP tool dispatch
 - committed root tool-call results are reused during recovery instead of being executed again
 
@@ -223,7 +259,7 @@ Run all tests:
 Type-check the trusted runtime boundary:
 
 ```bash
-.\.venv\Scripts\python.exe -m mypy core/execution core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/verification core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy core/execution core/sandbox core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/verification core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py core/tools/sandbox_run.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
 ```
 
 Compile-check Python modules:

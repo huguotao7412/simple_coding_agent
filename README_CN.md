@@ -20,6 +20,7 @@ Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重
 - 非交互任务会持久化 Run checkpoint，可列出、检查并恢复中断任务。
 - 本地 eval runner 会输出聚合的 `eval_results.json` 指标。
 - 版本化的确定性任务评估会记录意图、复杂度、风险和推荐执行策略。
+- Actor shell 与 verification 共享可替换的本地/E2B 沙箱协议。
 - 单元测试覆盖 runtime、隔离、报告和 eval 行为。
 
 当前目标不是宣称它已经是完全自治的生产级 coding system，而是打磨一个可靠、可审计、可持续评测的本地 agent 核心。
@@ -67,6 +68,7 @@ core/
   actors/           Actor 行为、执行契约、角色和 worktree 适配器
   verification/     质量门禁配置、执行证据与修复提示
   execution/        确定性任务评估与执行策略契约
+  sandbox/          命令沙箱协议、配置、E2B 适配器与工作区传输
   planner.py        Planner 对 runtime engine 的封装
   events.py         跨域 AgentEvent 协议
   llm.py            OpenAI-compatible 异步流式客户端
@@ -120,9 +122,38 @@ SCA_API_BASE=https://api.deepseek.com
 SCA_MODEL=deepseek-v4-pro
 SCA_MAX_TOKENS=128000
 SCA_MAX_ACTORS=4
+SCA_SANDBOX_BACKEND=e2b
+E2B_API_KEY=e2b_your_key_here
+SCA_E2B_TEMPLATE=base
+SCA_E2B_ALLOW_INTERNET=false
+SCA_SANDBOX_MAX_TIMEOUT=300
+SCA_SANDBOX_MAX_TRANSFER=50000000
 ```
 
 客户端使用 OpenAI-compatible chat completions API。
+
+### 命令沙箱
+
+`local` 是兼容性默认值，**不提供 OS 隔离**。无需 API key 即可检查：
+
+```powershell
+sca sandbox-check
+```
+
+启用 E2B 后端前，请在 <https://e2b.dev/dashboard> 注册并创建 API Key：
+
+```powershell
+$env:SCA_SANDBOX_BACKEND = "e2b"
+$env:E2B_API_KEY = "e2b_your_key"
+sca sandbox-check
+```
+
+E2B 模式仍由可信宿主机管理 Git/worktree，命令与确定性验证在远程 Linux 沙箱中
+运行。受限 archive transport 会在每条命令前后同步 Actor worktree，并拒绝路径
+穿越；`.env`、Git 元数据、虚拟环境、依赖缓存和常见凭证文件不会上传。默认禁止
+远程出站网络，需要安装依赖时必须显式设置 `SCA_E2B_ALLOW_INTERNET=true`。
+SDK、API Key 或远程服务不可用时会明确失败，绝不会静默退回宿主机执行。使用者
+也必须理解：符合传输规则的仓库源代码会发送至 E2B 云端。
 
 项目可选地在 `.sca/quality-gates.toml` 中声明确定性 Coder 质量门禁：
 
@@ -236,6 +267,7 @@ eval runner 会把同一条事件流写成 JSONL trace，方便调试、复盘�
 - Actor 任务使用独立 git worktree。
 - 下游 Actor 会接收上游 diff baseline，避免 Verifier 验证空代码。
 - Actor 角色 allowlist 会在本地或 MCP 工具真正执行前再次强制校验。
+- E2B 模式让 Actor shell 与确定性 verification 共用同一个 fail-closed 远程后端。
 - 已落盘的 root tool-call 结果会在恢复时复用，避免 checkpoint 之后重复执行。
 
 Git worktree 提供版本控制和默认工作目录隔离，不是操作系统沙箱。Actor 子进程仍拥有当前用户的系统权限。这些机制能降低风险，但不能替代进程级沙箱；请只在你愿意让 agent 修改的仓库和环境中运行。
@@ -253,7 +285,7 @@ SQLite checkpoint 也不能与任意 shell、文件系统或网络副作用组�
 对可信运行时边界执行类型检查：
 
 ```powershell
-.\.venv\Scripts\python.exe -m mypy core/execution core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/verification core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy core/execution core/sandbox core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/verification core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py core/tools/sandbox_run.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
 ```
 
 编译检查：

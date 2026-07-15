@@ -8,6 +8,7 @@ from typing import Any
 
 TIMELINE_EVENT_TYPES = {
     "task_assessment",
+    "sandbox_execution",
     "thought",
     "tool_call",
     "tool_result",

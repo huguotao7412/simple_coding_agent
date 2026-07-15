@@ -24,6 +24,8 @@ class GateResult:
     output_artifact: str
     output_excerpt: str
     timed_out: bool = False
+    execution_backend: str = "local"
+    isolated: bool = False
 
 
 @dataclass(frozen=True)

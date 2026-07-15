@@ -11,6 +11,7 @@ The modular monolith groups cohesive implementation details without hiding depen
 - `core/actors/`: Actor behavior, execution contracts, roles, and the worktree adapter.
 - `core/verification/`: deterministic gate configuration, subprocess execution, evidence, and repair prompts.
 - `core/execution/`: versioned task assessment contracts and deterministic strategy selection.
+- `core/sandbox/`: command-execution port, local/E2B adapters, and guarded workspace transport.
 - `core/events.py`: the cross-domain event contract shared by runtime, runs, MCP, CLI, and evals.
 - `core/planner.py`: the application orchestration entry point.
 
@@ -128,6 +129,30 @@ The provider sets the MCP subprocess current working directory to the Actor work
 MCP server packages are pinned in `package.json`. At runtime the provider prefers local `node_modules/.bin` executables and falls back to `npx --no-install <package>@<version>`, avoiding unpinned runtime downloads.
 
 Before routing commands to bash MCP, the provider rejects destructive shell patterns such as recursive delete, `git reset --hard`, and `git clean -fd`. These failures are returned as ordinary tool results so the Actor can report the blocked operation instead of mutating the workspace.
+
+## Sandbox Execution Boundary
+
+Worktree isolation and OS execution isolation are separate, composable boundaries.
+The trusted host owns worktree setup, dependency baselines, Git staging, diff
+extraction, and cleanup. `SandboxBackend` owns untrusted Actor shell and repository
+verification commands.
+
+```mermaid
+flowchart LR
+    HOST["Trusted host"] --> WT["Git worktree"]
+    WT --> SB["SandboxBackend"]
+    SB --> LOCAL["Local adapter\nnot isolated"]
+    SB --> E2B["E2B adapter\nremote Linux sandbox"]
+    E2B --> SYNC["bounded workspace archive\nsecrets excluded"]
+    WT --> DIFF["Host Git diff extraction"]
+```
+
+In E2B mode the provider does not start bash MCP. A foreground `run` adapter sends
+the shell string through the remote backend, while verification sends argv through
+the same backend. Host filesystem edits are uploaded before each command and remote
+changes are safely applied afterward. Missing SDK/key or transfer validation failure
+is terminal and never falls back to host execution. See
+[ADR-0004](docs/adr/0004-sandbox-execution-boundary.md).
 
 A worktree is not an OS sandbox. It isolates branches, diffs, and default working directories, but Actor subprocesses still have the current user's operating-system permissions. The command and path policies are defense-in-depth controls, not a claim of complete process containment.
 
