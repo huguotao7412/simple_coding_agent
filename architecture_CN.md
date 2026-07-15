@@ -118,7 +118,17 @@ Actor 都会生成不可变的 `AgentMessage`，当前 schema 为 `a2a-lite/1.0`
 
 ## Worktree 隔离
 
-每个被委派的 Actor 都会在 `.worktrees/` 下获得一个临时分支和独立 worktree。
+每个被委派的 Actor 都会获得一个临时分支和独立 Git worktree。干净的 Git
+工作区直接使用项目仓库，并在 `.worktrees/` 下创建 Actor worktree。非 Git
+目录或包含未提交改动的 Git 工作区会使用进程私有的临时影子仓库。影子仓库
+只对当前可见工作区建立一次快照，再从该 baseline 创建标准 Git worktree；
+它不会在用户工作区执行 `git init`，也不会写入任何 Git 元数据。
+
+影子快照会排除运行时元数据以及常见依赖和缓存目录，并继续遵循项目的
+`.gitignore`。可信宿主机会记录原工作区文件哈希；应用 Actor patch 前只检查
+patch 涉及的路径。如果用户在 Actor 执行期间修改了同一文件，合并会 fail
+closed，而不是覆盖用户改动。成功合并后会推进对应 baseline 哈希。每个 Actor
+结束后立即清理其 worktree，进程正常退出时清理进程持有的影子仓库。
 
 这样可以提供：
 

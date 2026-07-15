@@ -72,6 +72,7 @@ files = [
     "core/planner.py",
     "core/actors/agent.py",
     "core/actors/worktree.py",
+    "core/git_utils.py",
     "core/verification",
     "core/mcp/client.py",
     "core/tools/update_state.py",

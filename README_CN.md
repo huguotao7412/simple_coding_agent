@@ -127,7 +127,7 @@ sca config init
 sca config path
 ```
 
-编辑 `sca config path` 输出的用户配置文件，填入 `SCA_API_KEY`。之后可以在任意 Git 工作区直接启动，当前目录就是默认 workspace：
+编辑 `sca config path` 输出的用户配置文件，填入 `SCA_API_KEY`。之后可以在任意项目目录直接启动，当前目录就是默认 workspace。干净的 Git 仓库使用原生 worktree；非 Git 目录或包含未提交改动的 Git 工作区使用临时影子仓库，不会修改项目的 Git 元数据：
 
 ```powershell
 cd C:\path\to\any-project
@@ -323,13 +323,14 @@ eval runner 会把同一条事件流写成 JSONL trace，方便调试、复盘�
 - 重复的相同工具调用会触发熔断。
 - 最大步数限制防止无限循环。
 - 本地工具和 MCP provider 都会校验文件访问边界。
-- Actor 任务使用独立 git worktree。
+- Actor 任务使用独立 Git worktree；非 Git 和 dirty Git 工作区会先快照到临时影子仓库。
+- 影子工作区合并会比较 patch 涉及文件的哈希，拒绝覆盖用户的并发修改。
 - 下游 Actor 会接收上游 diff baseline，避免 Verifier 验证空代码。
 - Actor 角色 allowlist 会在本地或 MCP 工具真正执行前再次强制校验。
 - E2B 模式让 Actor shell 与确定性 verification 共用同一个 fail-closed 远程后端。
 - 已落盘的 root tool-call 结果会在恢复时复用，避免 checkpoint 之后重复执行。
 
-Git worktree 提供版本控制和默认工作目录隔离，不是操作系统沙箱。Actor 子进程仍拥有当前用户的系统权限。这些机制能降低风险，但不能替代进程级沙箱；请只在你愿意让 agent 修改的仓库和环境中运行。
+Git worktree 和影子仓库提供版本控制及默认工作目录隔离，不是操作系统沙箱。Actor 子进程仍拥有当前用户的系统权限。这些机制能降低风险，但不能替代进程级沙箱；请只在你愿意让 agent 修改的项目和环境中运行。
 
 SQLite checkpoint 也不能与任意 shell、文件系统或网络副作用组成同一个原子事务。如果进程恰好在副作用成功后、tool result 落盘前崩溃，该操作仍可能在恢复时重试。完整取舍见 [ADR-0002](docs/adr/0002-durable-run-store.md)。
 

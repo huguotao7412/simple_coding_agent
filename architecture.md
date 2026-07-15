@@ -122,7 +122,22 @@ The dependency baseline matters because verifier tasks must see the coder change
 
 ## Worktree Isolation
 
-Each delegated Actor gets a throwaway branch under `.worktrees/`.
+Each delegated Actor gets a throwaway branch and a Git worktree. A clean Git
+workspace uses the project's repository directly and stores Actor worktrees under
+`.worktrees/`. A non-Git workspace, or a Git workspace with uncommitted changes,
+uses a process-owned shadow repository under the operating system temporary
+directory. The shadow repository snapshots the visible workspace once and creates
+ordinary Git worktrees from that baseline; it never initializes or writes Git
+metadata into the user's workspace.
+
+The shadow snapshot excludes runtime metadata and common generated dependency or
+cache directories. Existing `.gitignore` rules still control which copied files are
+committed into the Actor baseline. The trusted host records hashes for the original
+workspace files. Before applying an Actor patch, only paths touched by that patch
+are compared with the baseline, and concurrent user changes fail closed instead of
+being overwritten. Successful patches advance those hashes for subsequent merges.
+Process-owned shadow repositories are removed during normal interpreter shutdown;
+each Actor worktree is still removed immediately after execution.
 
 This provides:
 

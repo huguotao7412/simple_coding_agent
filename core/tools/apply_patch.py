@@ -8,7 +8,13 @@ import subprocess
 import tempfile
 
 from .base import BaseTool, ToolResult
-from ..git_utils import is_clean
+from ..git_utils import (
+    has_shadow_baseline,
+    is_clean,
+    is_git_repository,
+    refresh_shadow_baseline,
+    shadow_patch_conflicts,
+)
 from ..runs.context import RunContext
 from ..runs.task_state import GlobalState
 
@@ -31,8 +37,19 @@ def _cleanup_rej_files(base_dir: str) -> dict[str, str]:
     return rejected
 
 
-def _run_git(*args: str, cwd: str, timeout: int = 30) -> tuple[int, str, str]:
+def _run_git(
+    *args: str,
+    cwd: str,
+    timeout: int = 30,
+    isolate_from_parent_repo: bool = False,
+) -> tuple[int, str, str]:
     """Run a git command. Returns (returncode, stdout, stderr)."""
+    environment = None
+    if isolate_from_parent_repo:
+        environment = os.environ.copy()
+        environment["GIT_CEILING_DIRECTORIES"] = os.path.dirname(
+            os.path.realpath(cwd)
+        )
     result = subprocess.run(
         ["git", *args],
         capture_output=True,
@@ -40,6 +57,7 @@ def _run_git(*args: str, cwd: str, timeout: int = 30) -> tuple[int, str, str]:
         encoding="utf-8",
         errors="replace",
         cwd=cwd,
+        env=environment,
         timeout=timeout,
     )
     return result.returncode, result.stdout.strip(), result.stderr.strip()
@@ -118,10 +136,18 @@ class ApplyPatchTool(BaseTool):
             return ToolResult.ok(f"No changes to apply for task {task_id} (empty diff).")
 
         base_dir = workspace_dir or os.getcwd()
-        if not is_clean(base_dir):
+        shadow_baseline = has_shadow_baseline(base_dir)
+        if not shadow_baseline and not is_clean(base_dir):
             return ToolResult.fail(
                 "Main workspace is dirty (uncommitted changes exist). "
                 "Commit or stash current changes before applying Actor patches."
+            )
+        conflicts = shadow_patch_conflicts(base_dir, diff)
+        if conflicts:
+            return ToolResult.fail(
+                "Workspace files changed after the Actor baseline was created. "
+                "Refusing to overwrite concurrent user changes in: "
+                + ", ".join(conflicts)
             )
 
         patch_path = ""
@@ -134,12 +160,23 @@ class ApplyPatchTool(BaseTool):
                 newline="",
             ) as patch_file:
                 patch_file.write(diff)
+                if not diff.endswith("\n"):
+                    patch_file.write("\n")
                 patch_path = patch_file.name
         except OSError as e:
             return ToolResult.fail(f"Failed to write patch file: {e}")
 
         try:
-            rc, _, stderr = _run_git("apply", "--check", patch_path, cwd=base_dir)
+            apply_prefix = () if is_git_repository(base_dir) else ("--no-index",)
+            isolate_from_parent = bool(apply_prefix)
+            rc, _, stderr = _run_git(
+                "apply",
+                *apply_prefix,
+                "--check",
+                patch_path,
+                cwd=base_dir,
+                isolate_from_parent_repo=isolate_from_parent,
+            )
             if rc != 0:
                 conflict_files = _parse_conflict_files(stderr)
                 if strategy != "fuzz":
@@ -155,7 +192,14 @@ class ApplyPatchTool(BaseTool):
                         f"Original diff preview:\n{diff[:2000]}"
                     )
 
-                rc2, _, stderr2 = _run_git("apply", "--reject", patch_path, cwd=base_dir)
+                rc2, _, stderr2 = _run_git(
+                    "apply",
+                    *apply_prefix,
+                    "--reject",
+                    patch_path,
+                    cwd=base_dir,
+                    isolate_from_parent_repo=isolate_from_parent,
+                )
                 rejected = _cleanup_rej_files(base_dir)
                 result_parts = [
                     f"Patch for {task_id} partially applied (fuzz mode).",
@@ -172,9 +216,17 @@ class ApplyPatchTool(BaseTool):
                     result_parts.append("No .rej files were generated.")
                 return ToolResult.ok("\n".join(result_parts))
 
-            rc, _, stderr = _run_git("apply", patch_path, cwd=base_dir)
+            rc, _, stderr = _run_git(
+                "apply",
+                *apply_prefix,
+                patch_path,
+                cwd=base_dir,
+                isolate_from_parent_repo=isolate_from_parent,
+            )
             if rc != 0:
                 return ToolResult.fail(f"git apply failed for {task_id}: {stderr}")
+
+            refresh_shadow_baseline(base_dir, diff)
 
             return ToolResult.ok(
                 f"Patch for {task_id} applied successfully. "

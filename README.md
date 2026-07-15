@@ -118,7 +118,7 @@ sca config init
 sca config path
 ```
 
-Edit the user config printed by `sca config path` and set `SCA_API_KEY`. The CLI can then be launched from any Git workspace; the current directory is the default workspace:
+Edit the user config printed by `sca config path` and set `SCA_API_KEY`. The CLI can then be launched from any project directory; the current directory is the default workspace. Clean Git repositories use native worktrees, while non-Git or dirty Git directories use a temporary shadow repository without modifying the project's Git metadata:
 
 ```powershell
 cd C:\path\to\any-project
@@ -288,7 +288,8 @@ The current safety model is pragmatic rather than magical:
 - repeated identical tool calls are circuit-broken
 - max-step limits prevent unbounded loops
 - file operations validate workspace boundaries in local tools and MCP providers
-- delegated Actor tasks use isolated git worktrees
+- delegated Actor tasks use isolated Git worktrees; non-Git and dirty Git workspaces are snapshotted into an ephemeral shadow repository
+- shadow-workspace merges compare touched-file hashes and refuse to overwrite concurrent user changes
 - dependent Actor tasks receive upstream diffs as a committed worktree baseline
 - full Actor diffs are persisted as patch artifacts, while Planner context receives a compact preview
 - MCP server packages are pinned and launched from local `node_modules/.bin` when installed
@@ -297,7 +298,7 @@ The current safety model is pragmatic rather than magical:
 - Actor role allowlists are enforced again immediately before local or MCP tool dispatch
 - committed root tool-call results are reused during recovery instead of being executed again
 
-Git worktrees provide version-control and working-directory separation, not an operating-system sandbox. Shell processes still run with the permissions of the current user, so only run the agent against repositories and environments you are willing to modify.
+Git worktrees and shadow repositories provide version-control and working-directory separation, not an operating-system sandbox. Shell processes still run with the permissions of the current user, so only run the agent against projects and environments you are willing to modify.
 
 SQLite cannot atomically commit an arbitrary shell, filesystem, or network side effect together with its tool-result checkpoint. A crash after the side effect but before the checkpoint can still cause a retry. See [ADR-0002](docs/adr/0002-durable-run-store.md) for the exact transaction boundary.
 
