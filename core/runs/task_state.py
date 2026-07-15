@@ -5,6 +5,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Literal, ClassVar, cast
 
+from ..a2a_lite.models import AgentMessage
+
 
 @dataclass
 class TaskNode:
@@ -17,6 +19,7 @@ class TaskNode:
     diff: str | None = None  # unified diff from Actor's worktree changes
     files_modified: list[str] = field(default_factory=list)
     diff_artifact: str | None = None
+    handoff_message: AgentMessage | None = None
 
 
 @dataclass
@@ -90,6 +93,7 @@ class GlobalState:
         diff: str = "",
         files_modified: list[str] | None = None,
         diff_artifact: str | None = None,
+        handoff_message: AgentMessage | None = None,
     ) -> None:
         import time
         async with self._lock:
@@ -98,6 +102,7 @@ class GlobalState:
             if files_modified is not None:
                 self.task_tree[task_id].files_modified = files_modified
             self.task_tree[task_id].diff_artifact = diff_artifact
+            self.task_tree[task_id].handoff_message = handoff_message
             self.change_log.append(ChangeRecord(
                 type="summary_added",
                 task_id=task_id,
@@ -107,6 +112,9 @@ class GlobalState:
                     "diff": diff,
                     "files_modified": files_modified or [],
                     "diff_artifact": diff_artifact,
+                    "handoff_message": (
+                        handoff_message.to_dict() if handoff_message else None
+                    ),
                 },
             ))
 
@@ -163,6 +171,11 @@ class GlobalState:
                     if raw_node.get("diff_artifact") is not None
                     else None
                 ),
+                handoff_message=(
+                    AgentMessage.from_dict(raw_node["handoff_message"])
+                    if isinstance(raw_node.get("handoff_message"), dict)
+                    else None
+                ),
             )
         state._change_offset = int(snapshot.get("change_count", 0) or 0)
         return state
@@ -185,6 +198,9 @@ class GlobalState:
                         ),
                         "files_modified": t.files_modified,
                         "diff_artifact": t.diff_artifact,
+                        "handoff_message": (
+                            t.handoff_message.to_dict() if t.handoff_message else None
+                        ),
                     }
                     for tid, t in self.task_tree.items()
                 },

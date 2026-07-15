@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
+from ..a2a_lite.models import AgentHandoff, AgentMessage, ArtifactRef
 from ..runs.context import RunContext
 from ..verification.models import VerificationReport
 
@@ -25,6 +26,7 @@ class ActorTaskSpec:
     role: str = "coder"
     max_steps: int | None = None
     dependencies: tuple[str, ...] = ()
+    dependency_handoffs: tuple[AgentMessage, ...] = ()
 
     @classmethod
     def from_mapping(
@@ -58,6 +60,8 @@ class ActorExecutionResult:
     diff_artifact: str = ""
     diff: str = ""
     verification_reports: tuple[VerificationReport, ...] = ()
+    handoff: AgentHandoff | None = None
+    artifacts: tuple[ArtifactRef, ...] = ()
 
 
 @runtime_checkable

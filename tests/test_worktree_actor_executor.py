@@ -418,3 +418,41 @@ def test_injected_context_refuses_files_outside_workspace(tmp_path: Path) -> Non
 
     assert "outside secret" not in context
     assert "(unable to read)" in context
+
+
+def test_injected_context_renders_versioned_dependency_handoff(tmp_path: Path) -> None:
+    from core.a2a_lite.models import AgentHandoff, AgentMessage, ArtifactRef
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    message = AgentMessage.handoff_message(
+        run_id="run_1",
+        task_id="parent",
+        sender_id="actor:parent",
+        recipient_id="planner",
+        handoff=AgentHandoff(
+            findings=("Change parser.py",),
+            artifacts=(ArtifactRef.create(
+                kind="patch",
+                uri=".sca/artifacts/parent.patch",
+                media_type="text/x-diff",
+                producer_task_id="parent",
+                content="diff",
+            ),),
+        ),
+    )
+    executor = WorktreeActorExecutor(
+        llm_client=FakeLLM(),
+        workspace_dir=str(workspace),
+    )
+
+    context = executor._build_injected_context(ActorTaskSpec(
+        task_id="child",
+        description="Continue parent work",
+        dependency_handoffs=(message,),
+    ))
+
+    assert "A2A_lite Structured Dependency Handoffs" in context
+    assert '"schema_version": "a2a-lite/1.0"' in context
+    assert '"uri": ".sca/artifacts/parent.patch"' in context
+    assert "Change parser.py" in context

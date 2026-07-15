@@ -14,6 +14,7 @@ class RecordingExecutor:
     def __init__(self, outcomes: dict[str, str]) -> None:
         self.outcomes = outcomes
         self.calls: list[str] = []
+        self.specs: list[ActorTaskSpec] = []
 
     async def execute(
         self,
@@ -21,6 +22,7 @@ class RecordingExecutor:
         run_context: RunContext,
     ) -> ActorExecutionResult:
         self.calls.append(spec.task_id)
+        self.specs.append(spec)
         outcome = self.outcomes.get(spec.task_id, "done")
         if outcome == "raise":
             raise RuntimeError("executor crashed")
@@ -101,7 +103,21 @@ async def test_delegate_runs_dependencies_in_order_and_records_results() -> None
     assert context.state.task_tree[second].status == "done"
     assert context.state.task_tree[first].result_summary == f"completed {first}"
     assert context.state.task_tree[first].diff == f"diff for {first}"
+    assert context.state.task_tree[first].handoff_message is not None
+    assert executor.specs[1].dependency_handoffs == (
+        context.state.task_tree[first].handoff_message,
+    )
+    assert executor.specs[1].dependency_handoffs[0].handoff.findings == (
+        f"completed {first}",
+    )
     assert "2 done, 0 failed, 0 blocked" in result.content
+    assert "<a2a_lite_messages>" in result.content
+    assert '"schema_version": "a2a-lite/1.0"' in result.content
+
+    first_event = await context.events.get()
+    second_event = await context.events.get()
+    assert first_event.type == "a2a_lite_message"
+    assert second_event.type == "a2a_lite_message"
 
 
 @pytest.mark.asyncio

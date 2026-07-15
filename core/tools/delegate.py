@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dataclasses import replace
 from typing import Any, cast
 
+from ..a2a_lite.models import AgentHandoff, AgentMessage, ArtifactRef
+from ..events import AgentEvent
 from .base import BaseTool, ToolResult
 from ..actors.contracts import ActorExecutionResult, ActorExecutor, ActorTaskSpec
 from ..runs.context import RunContext
@@ -100,7 +103,10 @@ class DelegateTool(BaseTool):
         return self._actor_executor
 
     @staticmethod
-    def _result_payload(result: ActorExecutionResult) -> dict[str, Any]:
+    def _result_payload(
+        result: ActorExecutionResult,
+        message: AgentMessage | None = None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "task_id": result.task_id,
             "status": result.status,
@@ -111,7 +117,14 @@ class DelegateTool(BaseTool):
             "suggested_next_steps": result.suggested_next_steps,
             "diff_artifact": result.diff_artifact,
             "diff": result.diff[:8000],
+            "artifacts": [artifact.to_dict() for artifact in result.artifacts],
         }
+        if message is not None:
+            payload["artifacts"] = [
+                artifact.to_dict() for artifact in message.handoff.artifacts
+            ]
+            payload["a2a_lite_message"] = message.to_dict()
+            payload["a2a_lite_prompt"] = message.to_prompt_json()
         if result.verification_reports:
             final_report = result.verification_reports[-1]
             payload["verification"] = {
@@ -145,18 +158,55 @@ class DelegateTool(BaseTool):
 
     @staticmethod
     async def _record_result(
-        state: GlobalState,
+        run_context: RunContext,
         result: ActorExecutionResult,
-    ) -> None:
+    ) -> AgentMessage:
+        state = run_context.state
         summary = result.key_findings or result.error or "Task completed."
+        artifacts = result.artifacts
+        if not artifacts and result.diff_artifact:
+            artifacts = (ArtifactRef.create(
+                kind="patch",
+                uri=result.diff_artifact,
+                media_type="text/x-diff",
+                producer_task_id=result.task_id,
+                content=result.diff,
+                description="Full unified diff produced by the Actor.",
+            ),)
+        handoff = result.handoff or AgentHandoff(
+            findings=(summary,),
+            unresolved_questions=(
+                (result.suggested_next_steps,)
+                if result.suggested_next_steps
+                else ()
+            ),
+            artifacts=artifacts,
+        )
+        message = AgentMessage.handoff_message(
+            run_id=run_context.run_id,
+            task_id=result.task_id,
+            sender_id=f"actor:{result.task_id}",
+            recipient_id="planner",
+            handoff=handoff,
+            failed=result.status == "failed",
+        )
         await state.add_summary(
             result.task_id,
             summary,
             diff=result.diff,
             files_modified=list(result.files_modified),
             diff_artifact=result.diff_artifact or None,
+            handoff_message=message,
         )
         await state.update_task(result.task_id, status=result.status)
+        await run_context.emit(AgentEvent(
+            type="a2a_lite_message",
+            content=message.to_json(),
+            actor_id=result.task_id,
+            task_id=result.task_id,
+            parent_id="planner",
+        ))
+        return message
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         """Schedule ready tasks and delegate single-task execution to an executor."""
@@ -199,7 +249,19 @@ class DelegateTool(BaseTool):
                     key_findings="ERROR: LLM failed to provide description",
                 )
             async with semaphore:
-                return await executor.execute(spec, run_context)
+                dependency_handoffs = tuple(
+                    node.handoff_message
+                    for dependency_id in spec.dependencies
+                    if (
+                        (node := state.task_tree.get(dependency_id)) is not None
+                        and node.handoff_message is not None
+                    )
+                )
+                resolved_spec = replace(
+                    spec,
+                    dependency_handoffs=dependency_handoffs,
+                )
+                return await executor.execute(resolved_spec, run_context)
 
         completed: set[str] = set()
         failed: set[str] = set()
@@ -265,8 +327,8 @@ class DelegateTool(BaseTool):
                 batch_results.append(result)
 
             for result in batch_results:
-                await self._record_result(state, result)
-                all_results.append(self._result_payload(result))
+                message = await self._record_result(run_context, result)
+                all_results.append(self._result_payload(result, message))
                 if result.status == "done":
                     completed.add(result.task_id)
                 else:
@@ -302,4 +364,13 @@ class DelegateTool(BaseTool):
             lines.append(
                 f"  [{status_icon}] {payload['task_id']}: {detail}{suffix}"
             )
+        message_observations = [
+            str(payload["a2a_lite_prompt"])
+            for payload in all_results
+            if payload.get("a2a_lite_prompt")
+        ]
+        if message_observations:
+            lines.append("\n<a2a_lite_messages>")
+            lines.extend(message_observations)
+            lines.append("</a2a_lite_messages>")
         return ToolResult.ok("\n".join(lines))

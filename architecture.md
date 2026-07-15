@@ -9,6 +9,7 @@ The modular monolith groups cohesive implementation details without hiding depen
 - `core/runtime/`: the ReAct execution engine and conversation compaction.
 - `core/runs/`: durable-run models, task state, `RunContext`, the store port, and SQLite adapter.
 - `core/actors/`: Actor behavior, execution contracts, roles, and the worktree adapter.
+- `core/a2a_lite/`: versioned Agent messages, structured handoffs, and artifact references.
 - `core/verification/`: deterministic gate configuration, subprocess execution, evidence, and repair prompts.
 - `core/execution/`: versioned task assessment contracts and deterministic strategy selection.
 - `core/sandbox/`: command-execution port, local/E2B adapters, and guarded workspace transport.
@@ -60,7 +61,7 @@ without embedding orchestration decisions only in prompt prose.
 
 The Planner owns orchestration. Each Planner receives a `RunContext` with an independent task ledger, run ID, event queue, and usage accumulator. It decomposes work, delegates isolated subtasks, receives Actor summaries and diffs, applies selected patches, and synthesizes the final response.
 
-Actors own execution. Each Actor receives one concrete task plus scoped context, runs in its own git worktree, and reports a summary plus an extracted diff. The full extracted diff is persisted as a patch artifact, while compact previews and file lists are sent back through Planner-visible state.
+Actors own execution. Each Actor receives one concrete task plus scoped context, runs in its own git worktree, and reports a structured A2A_lite handoff plus an extracted diff. The full extracted diff is persisted as a patch artifact, while the handoff carries typed artifact references instead of copying large payloads into prompts.
 
 ## Delegation Execution Boundary
 
@@ -82,6 +83,14 @@ flowchart LR
 
 `WorktreeActorExecutor` owns context injection, one-time orphan cleanup, worktree setup, dependency baselines, MCP startup and shutdown, Actor construction, diff extraction, artifact persistence, and worktree cleanup. Context file paths are resolved against both the main workspace and Actor worktree before any pre-MCP read or copy, preventing absolute-path and `..` traversal from bypassing the tool policy.
 
+## A2A_lite Communication Contract
+
+`A2A_lite` is an in-process, transport-independent communication contract. Every completed or failed Actor execution produces an immutable `AgentMessage` using schema `a2a-lite/1.0`. Its `AgentHandoff` separates findings, decisions, constraints, unresolved questions, and `ArtifactRef` values. Patch references include a content digest; verification log references retain the producing task and gate metadata.
+
+The message is stored in the task snapshot, emitted as an `a2a_lite_message` event, returned to the Planner, and automatically attached to ready dependent tasks. The downstream prompt receives the serialized structured envelope and artifact metadata; the full patch remains in `.sca/artifacts/` and is independently applied as the worktree baseline. Legacy `context_summaries` remain accepted for compatibility but are no longer required for dependency handoff.
+
+This phase intentionally adds no broker, network transport, discovery, authentication, acknowledgement, or retry protocol. See [ADR-0005](docs/adr/0005-a2a-lite-handoffs.md).
+
 For coder tasks, it is also the deterministic verification boundary. If `.sca/quality-gates.toml` exists, configured commands run sequentially inside the Actor worktree with `shell=False`. Required failures are converted into bounded repair turns on the same Actor context, then rerun by the runtime rather than trusted on the Actor's claim. Repeated failure fingerprints terminate early as no progress. Only a passing coder diff is exported; every attempt retains a complete log under `.sca/artifacts/verification/` and a compact structured report in `ActorExecutionResult`.
 
 The default adapter currently reads dependency diffs through `RunContext.state`. This keeps P1 backward compatible, but a future durable or remote executor should receive dependency artifacts through a narrower execution context or directly in the task specification. See [ADR-0001](docs/adr/0001-actor-executor-boundary.md).
@@ -95,8 +104,9 @@ The default adapter currently reads dependency diffs through `RunContext.state`.
 5. Dependency diffs are applied to dependent Actor worktrees as a committed baseline.
 6. The Actor runs with role-specific prompts and an execution-time enforced tool policy.
 7. The Actor worktree diff is extracted with `git diff --cached --binary`.
-8. The diff is stored under `.sca/artifacts/actor-diffs/`, and the task state records the artifact path plus modified files.
-9. The Planner reviews and applies successful diffs to the main workspace.
+8. The diff is stored under `.sca/artifacts/actor-diffs/`, and an A2A_lite handoff records its typed artifact reference.
+9. The versioned handoff is persisted, emitted, and automatically injected into dependent Actors.
+10. The Planner reviews and applies successful diffs to the main workspace.
 
 The dependency baseline matters because verifier tasks must see the coder changes they are validating, while their own final diff should contain only verifier-created artifacts such as tests.
 

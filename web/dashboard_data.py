@@ -13,6 +13,7 @@ TIMELINE_EVENT_TYPES = {
     "tool_call",
     "tool_result",
     "actor_update",
+    "a2a_lite_message",
     "compaction",
     "token_stats",
     "error",
@@ -181,6 +182,9 @@ def _timeline_event_from_record(record: dict[str, Any]) -> TimelineEvent:
     success = tool_result.get("success")
     if event_type == "task_assessment":
         label = "Task assessment"
+        content = str(record.get("content") or "")
+    elif event_type == "a2a_lite_message":
+        label = "A2A_lite handoff"
         content = str(record.get("content") or "")
     elif event_type == "tool_call":
         label = f"Tool call: {record.get('tool_name') or 'unknown'}"

@@ -76,6 +76,21 @@ flowchart LR
 
 默认适配器目前仍通过 `RunContext.state` 读取依赖任务 diff，以保持 P1 向后兼容。未来持久化或远程执行器应使用更窄的执行上下文，或直接从 task spec 接收依赖 artifact。详见 [ADR-0001](docs/adr/0001-actor-executor-boundary.md)。
 
+## A2A_lite 通信契约
+
+`A2A_lite` 是进程内、与传输方式无关的 Agent 通信契约。每个完成或失败的
+Actor 都会生成不可变的 `AgentMessage`，当前 schema 为 `a2a-lite/1.0`。
+其中 `AgentHandoff` 分别表达 findings、decisions、constraints、未解决问题以及
+`ArtifactRef`；patch 引用包含内容摘要，verification 引用保留产出任务和证据位置。
+
+消息会写入任务快照、作为 `a2a_lite_message` 进入 Run 事件流、返回 Planner，
+并由 DAG 调度器自动注入已就绪的下游任务。完整 diff 仍保存在 `.sca/artifacts/`
+并作为下游 worktree baseline 应用，prompt 只接收结构化 handoff 和 artifact 元数据。
+旧的 `context_summaries` 暂时保留兼容，但依赖任务间传递不再要求 Planner 手工复制摘要。
+
+本阶段不引入 broker、网络传输、服务发现、鉴权、ACK 或重试协议。完整决策见
+[ADR-0005](docs/adr/0005-a2a-lite-handoffs.md)。
+
 ## Planner / Actor 流程
 
 1. Planner 接收用户请求。

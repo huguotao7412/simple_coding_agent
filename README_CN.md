@@ -25,6 +25,15 @@ Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重
 
 当前目标不是宣称它已经是完全自治的生产级 coding system，而是打磨一个可靠、可审计、可持续评测的本地 agent 核心。
 
+## A2A_lite
+
+Actor 完成或失败后会生成版本化的 `A2A_lite` 消息。结构化 handoff 分别记录
+发现、决策、约束、未解决问题和 artifact 引用；DAG 调度器会自动把依赖任务的
+handoff 注入下游 Actor。完整 patch 与验证日志保留在 `.sca/artifacts/`，prompt
+只传递引用和结构化元数据，从而减少隐式共享状态和手工摘要传递。
+
+当前实现保持进程内运行，不引入消息 broker 或网络服务。
+
 ## 当前状态
 
 主要入口：

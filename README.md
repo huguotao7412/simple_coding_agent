@@ -12,6 +12,8 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - Runtime safety controls such as max-step limits and repeated-action circuit breaking.
 - Run-scoped task state and correlation IDs, without process-global Planner state.
 - Planner/Actor orchestration with execution-time role tool authorization.
+- Versioned A2A_lite messages with automatic structured dependency handoffs.
+- Typed artifact references with integrity digests for Actor patches.
 - MCP-backed file and shell tools for isolated Actor execution.
 - Git worktree isolation for delegated Actor tasks.
 - Deterministic project quality gates with bounded automatic repair.
@@ -62,6 +64,7 @@ The codebase keeps the Planner/Actor split:
 
 ```text
 core/
+  a2a_lite/         versioned messages, structured handoffs, artifact references
   runtime/          execution engine and conversation context
   runs/             durable run lifecycle, task state, persistence adapters
   actors/           Actor behavior, contracts, roles, worktree adapter

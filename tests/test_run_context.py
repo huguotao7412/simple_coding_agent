@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from core.a2a_lite.models import AgentHandoff, AgentMessage
 from core.runtime.conversation import ContextManager
 from core.events import AgentEvent
 from core.planner import Planner
@@ -88,6 +89,13 @@ async def test_global_state_round_trips_full_task_snapshot():
         diff=full_diff,
         files_modified=["a.py"],
         diff_artifact=".sca/artifacts/a.patch",
+        handoff_message=AgentMessage.handoff_message(
+            run_id="run_snapshot",
+            task_id=task_id,
+            sender_id=f"actor:{task_id}",
+            recipient_id="planner",
+            handoff=AgentHandoff(findings=("implemented",)),
+        ),
     )
     await state.update_task(task_id, status="done", assigned_actor="coder_1")
 
@@ -102,6 +110,9 @@ async def test_global_state_round_trips_full_task_snapshot():
     assert node.diff == full_diff
     assert node.files_modified == ["a.py"]
     assert node.diff_artifact == ".sca/artifacts/a.patch"
+    assert node.handoff_message is not None
+    assert node.handoff_message.schema_version == "a2a-lite/1.0"
+    assert node.handoff_message.handoff.findings == ("implemented",)
 
 
 @pytest.mark.asyncio
