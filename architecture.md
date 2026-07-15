@@ -224,6 +224,15 @@ The Streamlit dashboard reads the same eval artifacts without invoking the agent
 
 Non-interactive `--prompt` runs use a `RunStore` port backed by a workspace-keyed `runs.db` in the per-user SCA state directory. Reports, Actor patches, and verification logs use the same external root. The target workspace only owns optional configuration such as `.sca/quality-gates.toml`. The SQLite adapter owns schema setup, WAL configuration, checkpoint JSON encoding, event ordering, and optimistic version checks. `RunContext` owns the current record, full task snapshot, usage totals, and committed root tool-call results.
 
+State lifecycle is owned by `core.lifecycle`, outside Planner and Actor behavior.
+`workspace.json` records path identity and access/orphan timestamps. Reports are
+archived by run ID while `final_report.md` remains the latest pointer. GC retains
+runs that are within the age window or newest-count window, never age-prunes active
+or paused durable runs, and enforces a global oldest-first artifact byte limit.
+Missing workspaces are marked orphaned on one GC pass and become eligible for
+deletion only after the retention window. Run deletion cascades SQLite events and
+removes matching report and run-scoped artifact directories.
+
 The root runtime checkpoints only complete message boundaries. Nested Actors share usage and task state but do not overwrite the root conversation checkpoint. On cancellation the run becomes `paused`; `sca resume <run_id>` reconstructs the conversation, task state, usage, and completed-call cache before continuing.
 
 ```mermaid

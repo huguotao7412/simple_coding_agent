@@ -257,6 +257,25 @@ sca --dir C:\path\to\project resume run_abc123
 
 Checkpoints, reports, Actor patches, and verification logs are stored under a workspace-keyed directory in `%LOCALAPPDATA%\\sca\\workspaces` on Windows or `$XDG_STATE_HOME/sca/workspaces` on Unix. Set `SCA_STATE_HOME` to override this root. Target workspaces are not populated with runtime reports or databases; `.sca/quality-gates.toml` remains the optional project-owned configuration. `runs` and `inspect` are read-only and do not require a model API key.
 
+Each workspace state directory contains `workspace.json` with the original
+workspace path, creation time, last-access time, and optional orphan timestamp.
+`final_report.md` always contains the latest report, while `reports/<run-id>.md`
+retains run history. Lifecycle defaults keep every run from the last 30 days plus
+the newest 50 runs, and cap total Actor/verification artifacts at 1 GiB. Override
+these with `SCA_RETENTION_DAYS`, `SCA_RETAIN_RUNS`, and
+`SCA_ARTIFACT_MAX_BYTES`.
+
+```powershell
+sca gc --dry-run
+sca gc
+sca runs delete <run-id>
+```
+
+GC is conservative for missing workspaces: the first real GC marks the state as
+orphaned, and a later GC removes it only after the retention period. `--dry-run`
+does not mutate state. Artifact capacity is enforced globally, oldest files first.
+Active or paused durable runs are never removed by age/count retention.
+
 Experimental Web UI:
 
 ```bash

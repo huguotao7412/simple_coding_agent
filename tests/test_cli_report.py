@@ -100,7 +100,7 @@ def test_run_report_renders_and_writes_eval_friendly_markdown(
     report.observe(AgentEvent(type="done", content="All set."))
 
     markdown = report.to_markdown()
-    report_path = report.write_final_report(workspace)
+    report_path = report.write_final_report(workspace, "run_test")
 
     assert "## Files" in markdown
     assert "## Tests" in markdown
@@ -108,6 +108,7 @@ def test_run_report_renders_and_writes_eval_friendly_markdown(
     assert "python -m pytest -q" in markdown
     assert report_path.parent.parent == state_home / "workspaces"
     assert report_path.name == "final_report.md"
+    assert (report_path.parent / "reports" / "run_test.md").is_file()
     assert not (workspace / ".sca").exists()
     assert report_path.read_text(encoding="utf-8") == markdown
 
@@ -136,6 +137,17 @@ def test_run_report_records_versioned_task_assessment():
     assert report.task_assessment["strategy"] == "coder_with_gates"
     assert "## Task Assessment" in markdown
     assert "Strategy: coder_with_gates" in markdown
+
+
+def test_report_run_id_cannot_escape_state_directory(tmp_path, monkeypatch):
+    state_home = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    monkeypatch.setenv("SCA_STATE_HOME", str(state_home))
+
+    report_path = RunReport().write_final_report(workspace, "../../outside")
+
+    assert report_path.is_relative_to(state_home)
+    assert not (tmp_path / "outside.md").exists()
 
 
 def test_run_report_risk_section_respects_high_task_risk():

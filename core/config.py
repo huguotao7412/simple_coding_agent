@@ -16,6 +16,9 @@ SCA_MAX_ACTORS=4
 SCA_SANDBOX_BACKEND=local
 # Optional runtime state override (reports, checkpoints, patches, verification logs)
 # SCA_STATE_HOME=C:\\path\\to\\sca-state
+SCA_RETENTION_DAYS=30
+SCA_RETAIN_RUNS=50
+SCA_ARTIFACT_MAX_BYTES=1073741824
 
 # Optional E2B remote sandbox
 # E2B_API_KEY=e2b_your-key

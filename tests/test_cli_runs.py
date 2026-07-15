@@ -16,6 +16,7 @@ from cli.runs import (
 from core.runtime.conversation import ContextManager
 from core.runs.models import RunRecord, RunStatus
 from core.runs.sqlite_store import SQLiteRunStore
+from core.paths import touch_workspace_state
 
 
 @pytest.fixture(autouse=True)
@@ -46,6 +47,54 @@ async def test_create_durable_context_persists_initial_checkpoint(tmp_path: Path
     assert database_path.parent.parent == tmp_path / "state" / "workspaces"
     assert database_path.name == "runs.db"
     assert not (tmp_path / ".sca").exists()
+
+
+def test_runs_delete_command_removes_run_and_history(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = SQLiteRunStore(run_database_path(str(workspace)))
+
+    async def seed() -> None:
+        await store.initialize()
+        record = RunRecord(
+            run_id="run_delete",
+            workspace_dir=str(workspace),
+            model="test",
+            status=RunStatus.COMPLETED,
+            created_at=1.0,
+            updated_at=1.0,
+        )
+        await store.create_run(record)
+
+    import asyncio
+
+    asyncio.run(seed())
+    history = run_database_path(str(workspace)).parent / "reports" / "run_delete.md"
+    history.parent.mkdir(parents=True, exist_ok=True)
+    history.write_text("report", encoding="utf-8")
+    assert main(["--dir", str(workspace), "runs", "delete", "run_delete"]) == 0
+    assert "Deleted durable run run_delete" in capsys.readouterr().out
+    assert asyncio.run(store.load_run("run_delete")) is None
+    assert not history.exists()
+
+
+def test_gc_dry_run_command_is_read_only(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    state_dir = touch_workspace_state(workspace, now=1.0)
+    metadata_before = (state_dir / "workspace.json").read_text(encoding="utf-8")
+
+    assert main(["gc", "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "dry_run=True" in output
+    assert (state_dir / "workspace.json").read_text(encoding="utf-8") == metadata_before
 
 
 @pytest.mark.asyncio

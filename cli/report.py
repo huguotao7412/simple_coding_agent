@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from core.events import AgentEvent
-from core.paths import workspace_state_dir
+from core.paths import safe_state_component, touch_workspace_state
 
 
 FILE_ARG_KEYS = ("path", "file_path", "filepath", "source", "destination")
@@ -223,10 +223,25 @@ class RunReport:
 
         return "\n".join(lines).rstrip() + "\n"
 
-    def write_final_report(self, workspace_dir: str | Path) -> Path:
-        report_path = workspace_state_dir(workspace_dir) / "final_report.md"
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(self.to_markdown(), encoding="utf-8")
+    def write_final_report(
+        self,
+        workspace_dir: str | Path,
+        run_id: str,
+        *,
+        state_dir: str | Path | None = None,
+    ) -> Path:
+        output_dir = (
+            Path(state_dir)
+            if state_dir is not None
+            else touch_workspace_state(workspace_dir)
+        )
+        report_path = output_dir / "final_report.md"
+        safe_run_id = safe_state_component(run_id, fallback="run")
+        history_path = output_dir / "reports" / f"{safe_run_id}.md"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        content = self.to_markdown()
+        history_path.write_text(content, encoding="utf-8")
+        report_path.write_text(content, encoding="utf-8")
         return report_path
 
     def _record_file_args(self, args: dict[str, Any]) -> None:

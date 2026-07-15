@@ -103,7 +103,7 @@ async def run_once(
             final_output = event.content
         elif event.type == "error" and not final_output:
             final_output = event.content
-    report.write_final_report(workspace_dir)
+    report.write_final_report(workspace_dir, run_context.run_id)
     return final_output or report.final_output
 
 
@@ -148,7 +148,7 @@ async def resume_once(
             final_output = event.content
         elif event.type == "error" and not final_output:
             final_output = event.content
-    report.write_final_report(workspace_dir)
+    report.write_final_report(workspace_dir, run_context.run_id)
     return final_output or report.final_output
 
 
@@ -173,10 +173,22 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command")
     runs_parser = commands.add_parser("runs", help="List durable runs")
     runs_parser.add_argument("--limit", type=int, default=50)
+    runs_commands = runs_parser.add_subparsers(dest="runs_command")
+    runs_delete = runs_commands.add_parser("delete", help="Delete one durable run")
+    runs_delete.add_argument("run_id")
     inspect_parser = commands.add_parser("inspect", help="Inspect one durable run")
     inspect_parser.add_argument("run_id")
     resume_parser = commands.add_parser("resume", help="Resume an interrupted run")
     resume_parser.add_argument("run_id")
+    gc_parser = commands.add_parser("gc", help="Garbage-collect user-level SCA state")
+    gc_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show planned lifecycle actions without changing state",
+    )
+    gc_parser.add_argument("--retention-days", type=int, default=None)
+    gc_parser.add_argument("--retain-runs", type=int, default=None)
+    gc_parser.add_argument("--artifact-max-bytes", type=int, default=None)
     commands.add_parser(
         "sandbox-check",
         help="Validate the configured command-execution sandbox",
@@ -220,6 +232,19 @@ async def _read_run_command(args: argparse.Namespace, workspace_dir: str) -> int
 
     store = await open_run_store(workspace_dir)
     if args.command == "runs":
+        if args.runs_command == "delete":
+            deleted = await store.delete_run(args.run_id)
+            if not deleted:
+                print(
+                    f"Error: durable run {args.run_id} was not found",
+                    file=sys.stderr,
+                )
+                return 1
+            from core.lifecycle import delete_run_artifacts
+
+            delete_run_artifacts(workspace_dir, args.run_id)
+            print(f"Deleted durable run {args.run_id}")
+            return 0
         print(render_run_list(await store.list_runs(limit=args.limit)))
         return 0
     stored = await store.load_run(args.run_id)
@@ -248,6 +273,61 @@ def _cleanup_workspace(workspace_dir: str) -> None:
             )
     except Exception as e:
         print(f"[init] Warning: worktree cleanup failed: {e}", file=sys.stderr)
+
+
+async def _gc_command(args: argparse.Namespace, workspace_dir: str) -> int:
+    from core.lifecycle import (
+        DEFAULT_ARTIFACT_MAX_BYTES,
+        DEFAULT_RETAIN_RUNS,
+        DEFAULT_RETENTION_DAYS,
+        garbage_collect,
+    )
+    from core.paths import touch_workspace_state
+
+    if not args.dry_run:
+        touch_workspace_state(workspace_dir)
+
+    retention_days = (
+        args.retention_days
+        if args.retention_days is not None
+        else int(os.getenv("SCA_RETENTION_DAYS", str(DEFAULT_RETENTION_DAYS)))
+    )
+    retain_runs = (
+        args.retain_runs
+        if args.retain_runs is not None
+        else int(os.getenv("SCA_RETAIN_RUNS", str(DEFAULT_RETAIN_RUNS)))
+    )
+    artifact_max_bytes = (
+        args.artifact_max_bytes
+        if args.artifact_max_bytes is not None
+        else int(
+            os.getenv(
+                "SCA_ARTIFACT_MAX_BYTES",
+                str(DEFAULT_ARTIFACT_MAX_BYTES),
+            )
+        )
+    )
+    report = await garbage_collect(
+        dry_run=bool(args.dry_run),
+        retention_days=retention_days,
+        retain_runs=retain_runs,
+        artifact_max_bytes=artifact_max_bytes,
+    )
+    prefix = "Would" if report.dry_run else "Did"
+    if not report.actions:
+        print("No lifecycle actions needed.")
+    for action in report.actions:
+        print(
+            f"{prefix} {action.action}: {action.target} "
+            f"({action.reason}; bytes={action.bytes_reclaimed})"
+        )
+    for warning in report.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+    print(
+        f"GC summary: actions={len(report.actions)}, "
+        f"bytes={report.bytes_reclaimed}, dry_run={report.dry_run}"
+    )
+    return 0
 
 
 async def _sandbox_check() -> int:
@@ -293,6 +373,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "sandbox-check":
         return asyncio.run(_sandbox_check())
+
+    if args.command == "gc":
+        try:
+            return asyncio.run(_gc_command(args, workspace_dir))
+        except (OSError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
 
     if args.command in {"runs", "inspect"}:
         try:

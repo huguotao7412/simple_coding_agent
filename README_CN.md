@@ -262,6 +262,24 @@ sca --dir C:\path\to\project resume run_abc123
 
 Run checkpoint、最终报告、Actor patch 和 verification 日志默认按工作区分别保存在 Windows 的 `%LOCALAPPDATA%\\sca\\workspaces` 或 Unix 的 `$XDG_STATE_HOME/sca/workspaces`。可通过 `SCA_STATE_HOME` 覆盖根目录。目标工作区不再写入运行报告和数据库；`.sca/quality-gates.toml` 仍是可选的项目配置。`runs` 和 `inspect` 是只读命令，不需要模型 API key。
 
+每个 workspace state 目录包含 `workspace.json`，记录原始 workspace 路径、
+创建时间、最后访问时间和可选的 orphan 时间。`final_report.md` 始终表示最新
+报告，历史报告保存在 `reports/<run-id>.md`。默认保留最近 30 天内的所有 Run，
+并至少保留最新 50 个 Run；Actor 与 verification artifact 全局总容量上限为
+1 GiB。可通过 `SCA_RETENTION_DAYS`、`SCA_RETAIN_RUNS` 和
+`SCA_ARTIFACT_MAX_BYTES` 调整。
+
+```powershell
+sca gc --dry-run
+sca gc
+sca runs delete <run-id>
+```
+
+GC 对失联 workspace 采用保守的两阶段处理：第一次实际 GC 只标记 orphan，
+超过保留期后的后续 GC 才删除；`--dry-run` 不修改 state。artifact 超限时按
+最旧文件优先清理。处于 created、running 或 paused 状态的持久化 Run 不会因
+时间或数量策略被删除。
+
 实验 Web UI：
 
 ```powershell

@@ -137,7 +137,10 @@ class Bridge:
                     stream.__exit__(None, None, None)
                 self.ui.render_run_report(report)
                 try:
-                    report_path = report.write_final_report(self.agent.workspace_dir)
+                    report_path = report.write_final_report(
+                        self.agent.workspace_dir,
+                        self.agent.run_context.run_id,
+                    )
                 except OSError as exc:
                     self.ui.render_info(f"Warning: final report could not be written: {exc}")
                 else:

@@ -117,7 +117,12 @@ async def test_worktree_executor_owns_actor_lifecycle(tmp_path: Path) -> None:
         events.append("diff:extract")
         return "diff --git a/module.py b/module.py\n"
 
-    def write_artifact(workspace_dir: str, task_id: str, diff: str) -> str:
+    def write_artifact(
+        workspace_dir: str,
+        task_id: str,
+        diff: str,
+        run_id: str,
+    ) -> str:
         events.append("artifact:write")
         return ".sca/artifacts/actor-diffs/task_1.patch"
 
@@ -187,7 +192,7 @@ async def test_coder_diff_is_exported_only_after_required_gates_pass(tmp_path: P
         worktree_factory=setup,
         worktree_cleanup=lambda path: None,
         diff_extractor=extract,
-        artifact_writer=lambda workspace, task, diff: "task.patch",
+        artifact_writer=lambda workspace, task, diff, run_id: "task.patch",
         tool_provider_factory=lambda context, actor_id: FakeProvider(events),
         actor_factory=lambda **kwargs: FakeActor(events),
         verification_config_loader=lambda workspace: VerificationConfig(
@@ -317,7 +322,7 @@ async def test_failed_gate_is_repaired_and_reverified_before_diff_export(
         worktree_factory=lambda workspace, task: str(worktree),
         worktree_cleanup=lambda path: None,
         diff_extractor=extract,
-        artifact_writer=lambda workspace, task, diff: "task.patch",
+        artifact_writer=lambda workspace, task, diff, run_id: "task.patch",
         tool_provider_factory=lambda context, actor_id: FakeProvider(events),
         actor_factory=lambda **kwargs: actor,
         verification_config_loader=lambda workspace: VerificationConfig(

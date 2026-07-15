@@ -204,6 +204,13 @@ tmp/eval-runs/<task_id>/.sca/traces/run_trace.jsonl
 
 非交互 `--prompt` 任务通过 `RunStore` 端口写入用户级 SCA state 目录中按 workspace 隔离的 `runs.db`。最终报告、Actor patch 与 verification 日志使用同一外部根目录，目标工作区只保留 `.sca/quality-gates.toml` 等可选项目配置。SQLite 适配器负责 schema、WAL、checkpoint JSON、事件顺序和乐观版本检查；`RunContext` 持有当前 Run record、完整任务快照、usage 汇总与已落盘的 root tool-call 结果。
 
+State 生命周期由 `core.lifecycle` 独立负责，不进入 Planner/Actor 行为层。
+`workspace.json` 记录路径身份、访问时间和 orphan 时间；报告按 run ID 归档，
+同时以 `final_report.md` 保持最新视图。GC 保留处于时间窗口内或最新数量窗口内
+的 Run，不会按时间清理 active/paused 持久化 Run，并对全局 artifact 执行最旧
+优先的容量限制。失联 workspace 会在一次 GC 中先标记 orphan，超过保留窗口后
+才可删除。删除 Run 会级联清除 SQLite events、对应历史报告和 run-scoped artifact。
+
 root runtime 只在完整消息边界写 checkpoint。嵌套 Actor 仍共享 usage 和任务状态，但不会覆盖 root 对话 checkpoint。任务被取消时状态转为 `paused`；`sca resume <run_id>` 会先恢复对话、任务树、usage 和已完成调用缓存，再继续执行。
 
 ```mermaid

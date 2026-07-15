@@ -44,6 +44,8 @@ class RunStore(Protocol):
 
     async def load_run(self, run_id: str) -> StoredRun | None: ...
 
+    async def delete_run(self, run_id: str) -> bool: ...
+
     async def list_runs(
         self,
         workspace_dir: str | None = None,

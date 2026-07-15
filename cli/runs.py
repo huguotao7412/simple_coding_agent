@@ -10,7 +10,7 @@ from core.runs.context import RunContext
 from core.runs.models import RunRecord, RunStatus
 from core.runs.store import RunStore, StoredRun
 from core.runs.sqlite_store import SQLiteRunStore
-from core.paths import workspace_state_dir
+from core.paths import touch_workspace_state, workspace_state_dir
 
 
 class RunLookupError(ValueError):
@@ -22,6 +22,7 @@ def run_database_path(workspace_dir: str) -> Path:
 
 
 async def open_run_store(workspace_dir: str) -> SQLiteRunStore:
+    touch_workspace_state(workspace_dir)
     store = SQLiteRunStore(run_database_path(workspace_dir))
     await store.initialize()
     return store

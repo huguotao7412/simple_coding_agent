@@ -70,6 +70,19 @@ async def test_sqlite_store_persists_across_store_instances(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_delete_run_cascades_events(tmp_path: Path) -> None:
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    await store.initialize()
+    await store.create_run(make_record(), make_checkpoint())
+    await store.append_event("run_test", "created", {}, 100.0)
+
+    assert await store.delete_run("run_test") is True
+    assert await store.delete_run("run_test") is False
+    assert await store.load_run("run_test") is None
+    assert await store.list_events("run_test") == []
+
+
+@pytest.mark.asyncio
 async def test_sqlite_store_lists_newest_runs_and_filters_workspace(tmp_path: Path) -> None:
     store = SQLiteRunStore(tmp_path / "runs.db")
     await store.initialize()

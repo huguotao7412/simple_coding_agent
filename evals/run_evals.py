@@ -265,7 +265,11 @@ async def run_eval_task(
                     runtime_error = f"trace persistence failed: {trace_error}"
 
     duration_ms = int((time.perf_counter() - start) * 1000)
-    report_path = report.write_final_report(candidate_dir)
+    report_path = report.write_final_report(
+        candidate_dir,
+        f"eval_{task_id}",
+        state_dir=Path(candidate_dir) / ".sca",
+    )
     eval_result = evaluate_task(task, candidate_root)
     failures = list(eval_result.failures)
     if runtime_error:

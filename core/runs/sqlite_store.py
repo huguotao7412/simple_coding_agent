@@ -35,6 +35,9 @@ class SQLiteRunStore:
     async def load_run(self, run_id: str) -> StoredRun | None:
         return await asyncio.to_thread(self._load_run_sync, run_id)
 
+    async def delete_run(self, run_id: str) -> bool:
+        return await asyncio.to_thread(self._delete_run_sync, run_id)
+
     async def list_runs(
         self,
         workspace_dir: str | None = None,
@@ -173,6 +176,14 @@ class SQLiteRunStore:
             raise RunStoreCorruptionError(
                 f"stored run {run_id} is corrupt: {error}"
             ) from error
+
+    def _delete_run_sync(self, run_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM runs WHERE run_id = ?",
+                (run_id,),
+            )
+        return cursor.rowcount == 1
 
     def _list_runs_sync(
         self,

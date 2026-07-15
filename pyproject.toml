@@ -63,6 +63,7 @@ files = [
     "core/actors/contracts.py",
     "core/policy.py",
     "core/paths.py",
+    "core/lifecycle.py",
     "core/events.py",
     "core/runs/models.py",
     "core/runs/store.py",

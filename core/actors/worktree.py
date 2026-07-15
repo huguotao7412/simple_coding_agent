@@ -22,7 +22,7 @@ from ..git_utils import (
     teardown_worktree,
 )
 from ..policy import ToolPolicy
-from ..paths import workspace_state_dir
+from ..paths import safe_state_component, touch_workspace_state
 from ..execution.policy import PolicyViolation
 from .roles import ActorRole, get_role_config
 from ..runs.context import RunContext
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 WorktreeFactory = Callable[[str, str], str]
 WorktreeCleanup = Callable[[str], None]
 DiffExtractor = Callable[[str], Awaitable[str]]
-ArtifactWriter = Callable[[str, str, str], str]
+ArtifactWriter = Callable[[str, str, str, str], str]
 ToolProviderFactory = Callable[[RunContext, str], Any]
 ActorFactory = Callable[..., Any]
 VerificationConfigLoader = Callable[[str], VerificationConfig]
@@ -145,15 +145,22 @@ def _apply_dependency_diffs_to_worktree(
     return applied
 
 
-def _write_diff_artifact(workspace_dir: str, task_id: str, diff: str) -> str:
+def _write_diff_artifact(
+    workspace_dir: str,
+    task_id: str,
+    diff: str,
+    run_id: str = "legacy",
+) -> str:
     """Persist the full Actor diff and return a workspace-relative path."""
     if not diff.strip():
         return ""
 
     safe_task_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", task_id).strip("._") or "task"
     artifact_abs = str(
-        workspace_state_dir(workspace_dir)
+        touch_workspace_state(workspace_dir)
         / "artifacts"
+        / "runs"
+        / safe_state_component(run_id, fallback="run")
         / "actor-diffs"
         / f"{safe_task_id}.patch"
     )
@@ -217,14 +224,7 @@ class WorktreeActorExecutor:
         self.actor_factory = actor_factory
         self.verification_config_loader = verification_config_loader
         self.sandbox_backend = sandbox_backend or create_sandbox_backend()
-        self.verification_runner = verification_runner or VerificationRunner(
-            artifact_root=(
-                workspace_state_dir(workspace_dir)
-                / "artifacts"
-                / "verification"
-            ),
-            sandbox_backend=self.sandbox_backend,
-        )
+        self.verification_runner = verification_runner
         self._orphan_cleanup_lock = asyncio.Lock()
         self._orphan_cleanup_done = False
 
@@ -311,6 +311,16 @@ class WorktreeActorExecutor:
             role_config = get_role_config(role)
             execution_policy = run_context.execution_policy
             verification_config = VerificationConfig()
+            verification_runner = self.verification_runner or VerificationRunner(
+                artifact_root=(
+                    touch_workspace_state(self.workspace_dir)
+                    / "artifacts"
+                    / "runs"
+                    / safe_state_component(run_context.run_id, fallback="run")
+                    / "verification"
+                ),
+                sandbox_backend=self.sandbox_backend,
+            )
             if role is ActorRole.CODER:
                 verification_config = self.verification_config_loader(
                     self.workspace_dir
@@ -394,7 +404,7 @@ class WorktreeActorExecutor:
             if status == "done" and role is ActorRole.CODER:
                 phase = "project verification"
                 if verification_config.enabled:
-                    verification = await self.verification_runner.run(
+                    verification = await verification_runner.run(
                         verification_config,
                         worktree=worktree_path,
                         task_id=spec.task_id,
@@ -435,7 +445,7 @@ class WorktreeActorExecutor:
                             break
 
                         phase = "project verification"
-                        verification = await self.verification_runner.run(
+                        verification = await verification_runner.run(
                             verification_config,
                             worktree=worktree_path,
                             task_id=spec.task_id,
@@ -472,6 +482,7 @@ class WorktreeActorExecutor:
                         self.workspace_dir,
                         spec.task_id,
                         diff,
+                        run_context.run_id,
                     )
                 except Exception:
                     logger.warning("Failed to extract diff for %s", spec.task_id)
