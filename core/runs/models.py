@@ -46,6 +46,8 @@ class RunCheckpoint:
     completion_tokens: int = 0
     usage_estimated: bool = False
     completed_tool_calls: dict[str, str] | None = None
+    execution_policy: dict[str, Any] | None = None
+    budget_snapshot: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.run_id:
@@ -54,6 +56,14 @@ class RunCheckpoint:
             raise ValueError("token counts must not be negative")
         if self.completed_tool_calls is None:
             object.__setattr__(self, "completed_tool_calls", {})
+        if self.execution_policy is not None and not isinstance(
+            self.execution_policy, dict
+        ):
+            raise ValueError("execution_policy must be an object")
+        if self.budget_snapshot is not None and not isinstance(
+            self.budget_snapshot, dict
+        ):
+            raise ValueError("budget_snapshot must be an object")
 
 
 _LEGAL_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {

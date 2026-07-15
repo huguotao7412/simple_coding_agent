@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator, Callable
 from .runtime.conversation import ContextManager
 from .execution.assessment import TaskAssessor
 from .execution.models import TaskAssessment
+from .execution.policy import ExecutionPolicy
 from .llm import LLMClient
 from .events import AgentEvent
 from .runtime.engine import AgentRuntime
@@ -26,6 +27,7 @@ class Planner:
         max_steps: int = 50,
         run_context: RunContext | None = None,
         task_assessor: TaskAssessor | None = None,
+        high_risk_approved: bool = False,
     ):
         self.llm = llm_client
         self.workspace_dir = workspace_dir
@@ -35,6 +37,7 @@ class Planner:
         self.state = self.run_context.state
         self.task_assessor = task_assessor or TaskAssessor(workspace_dir)
         self.current_task_assessment: TaskAssessment | None = None
+        self.high_risk_approved = high_risk_approved
 
         for tool in tools:
             if tool.name == "delegate":
@@ -44,6 +47,9 @@ class Planner:
                 setattr(tool, "_run_context", self.run_context)
             elif tool.name == "update_state":
                 setattr(tool, "_state", self.state)
+            elif tool.name == "apply_patch":
+                setattr(tool, "_state", self.state)
+                setattr(tool, "_run_context", self.run_context)
 
         self.tools_by_name = {tool.name: tool for tool in tools}
 
@@ -59,12 +65,18 @@ class Planner:
         ]
 
     def _runtime(self, *, emit_token_stats: bool = False) -> AgentRuntime:
+        policy = self.run_context.execution_policy
+        max_steps = (
+            min(self.max_steps, policy.budget.max_planner_steps)
+            if policy is not None
+            else self.max_steps
+        )
         return AgentRuntime(
             llm_client=self.llm,
             context_manager=self.ctx,
             tools=list(self.tools_by_name.values()),
             workspace_dir=self.workspace_dir,
-            max_steps=self.max_steps,
+            max_steps=max_steps,
             after_tool_call=self._after_tool_call,
             emit_token_stats=emit_token_stats,
             run_context=self.run_context,
@@ -92,12 +104,29 @@ class Planner:
         resume: bool = False,
     ) -> AsyncGenerator[AgentEvent, None]:
         if not resume:
+            if self.run_context.execution_policy is not None:
+                self._remove_prior_task_control_messages()
             assessment = self.task_assessor.assess(user_input)
             self.current_task_assessment = assessment
             self.ctx.add_system_message(assessment.to_system_message())
+            policy = ExecutionPolicy.from_assessment(
+                assessment,
+                human_approved=self.high_risk_approved,
+            )
+            if self.run_context.execution_policy is None:
+                self.run_context.install_execution_policy(policy)
+            elif self.run_context.store is None and self.run_context.record is None:
+                self.run_context.begin_interactive_task(policy)
+            else:
+                self.run_context.install_execution_policy(policy)
+            self.ctx.add_system_message(policy.to_system_message())
             await self.run_context.emit(AgentEvent(
                 type="task_assessment",
                 content=assessment.to_json(),
+            ))
+            await self.run_context.emit(AgentEvent(
+                type="execution_policy",
+                content=policy.to_json(),
             ))
         else:
             restored_assessment = self._restored_assessment_json()
@@ -105,6 +134,12 @@ class Planner:
                 await self.run_context.emit(AgentEvent(
                     type="task_assessment",
                     content=restored_assessment,
+                ))
+            restored_policy = self.run_context.execution_policy
+            if restored_policy is not None:
+                await self.run_context.emit(AgentEvent(
+                    type="execution_policy",
+                    content=restored_policy.to_json(),
                 ))
 
         async def produce() -> None:
@@ -155,3 +190,15 @@ class Planner:
             if isinstance(payload, dict) and payload.get("schema_version") == 1:
                 return json.dumps(payload, ensure_ascii=False, sort_keys=True)
         return ""
+
+    def _remove_prior_task_control_messages(self) -> None:
+        prefixes = ("<task_assessment>\n", "<execution_policy>\n")
+        self.ctx.messages = [
+            message
+            for message in self.ctx.messages
+            if not (
+                message.get("role") == "system"
+                and isinstance(message.get("content"), str)
+                and str(message["content"]).startswith(prefixes)
+            )
+        ]

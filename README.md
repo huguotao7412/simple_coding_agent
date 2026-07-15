@@ -22,6 +22,8 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - Durable checkpoints for listing, inspecting, and resuming non-interactive runs.
 - Local eval runner with aggregate `eval_results.json` metrics.
 - Versioned deterministic task assessment with auditable strategy recommendations.
+- Versioned runtime-enforced execution policies for Actor topology, model calls, tokens, failed tools, repairs, and active wall time.
+- Fail-closed high-risk approval plus durable policy and budget consumption in checkpoints.
 - Replaceable local/E2B sandbox protocol shared by Actor shell and verification.
 - Safety eval fixtures for path escape, dirty workspace, and destructive command behavior.
 - Deterministic unit tests for runtime, isolation, reports, and eval behavior.
@@ -43,6 +45,7 @@ Dashboard interface:
 ```text
 User request
   -> TaskAssessor (intent / complexity / risk / strategy)
+  -> ExecutionPolicy / RunBudgetLedger
   -> Planner
   -> AgentRuntime
   -> LLM response
@@ -58,6 +61,7 @@ The codebase keeps the Planner/Actor split:
 - `Planner` decides how to break down work and can delegate subtasks.
 - `ActorAgent` executes isolated subtasks with role-specific permissions.
 - `AgentRuntime` owns the shared loop: LLM calls, tool parsing, tool execution, context compaction, step limits, repeated-action detection, and event emission.
+- `ExecutionPolicy` compiles assessment output into topology and resource limits that tool calls cannot override; one `RunBudgetLedger` is shared by Planner and all Actors.
 - `GlobalState` records task state and Actor updates.
 
 ## Project Layout
@@ -197,6 +201,15 @@ Run a resumable non-interactive task:
 sca --dir C:\path\to\project --prompt "Fix the failing tests"
 ```
 
+Tasks deterministically classified as high risk stop before the first model call. After reviewing the intended side effects, explicitly approve a new or resumed run:
+
+```bash
+sca --approve-high-risk --dir C:\path\to\project --prompt "Run the reviewed database migration"
+sca --approve-high-risk --dir C:\path\to\project resume run_abc123
+```
+
+This flag is a local CLI authorization signal, not a multi-party approval service. It does not bypass tool allowlists, command guards, workspace boundaries, or the sandbox.
+
 Inspect and resume local runs:
 
 ```bash
@@ -323,10 +336,10 @@ sca-web
 Near-term:
 
 - Calibrate task-assessment rules against repeated real-model eval baselines.
-- Enforce per-strategy actor, model-call, token, repair, and wall-clock budgets.
+- Expand multi-file, recovery, conflict, and fault-injection evals and compare cost per success.
 
 Longer-term:
 
 - Better merge/conflict workflows for Actor diffs.
 - More robust model/provider routing.
-- Human approval gates for destructive or high-risk operations.
+- Auditable interactive or multi-party approval workflows for destructive/high-risk operations.

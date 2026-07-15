@@ -22,6 +22,7 @@ from ..git_utils import (
     teardown_worktree,
 )
 from ..policy import ToolPolicy
+from ..execution.policy import PolicyViolation
 from .roles import ActorRole, get_role_config
 from ..runs.context import RunContext
 from ..runs.task_state import GlobalState
@@ -305,6 +306,22 @@ class WorktreeActorExecutor:
             except ValueError:
                 role = ActorRole.CODER
             role_config = get_role_config(role)
+            execution_policy = run_context.execution_policy
+            verification_config = VerificationConfig()
+            if role is ActorRole.CODER:
+                verification_config = self.verification_config_loader(
+                    self.workspace_dir
+                )
+            if (
+                role is ActorRole.CODER
+                and execution_policy is not None
+                and execution_policy.require_quality_gates
+                and not verification_config.enabled
+            ):
+                raise PolicyViolation(
+                    "coder_with_gates requires a non-empty "
+                    ".sca/quality-gates.toml configuration"
+                )
 
             phase = "MCP startup"
             tool_provider = self.tool_provider_factory(run_context, spec.task_id)
@@ -341,6 +358,11 @@ class WorktreeActorExecutor:
                         pass
 
             max_steps = spec.max_steps or role_config.default_max_steps
+            if execution_policy is not None:
+                max_steps = min(
+                    max_steps,
+                    execution_policy.budget.max_actor_steps,
+                )
             actor_context = ContextManager(
                 system_prompt=role_config.system_prompt,
                 max_tokens=self.llm.max_tokens,
@@ -368,9 +390,6 @@ class WorktreeActorExecutor:
             verification_error = ""
             if status == "done" and role is ActorRole.CODER:
                 phase = "project verification"
-                verification_config = self.verification_config_loader(
-                    self.workspace_dir
-                )
                 if verification_config.enabled:
                     verification = await self.verification_runner.run(
                         verification_config,
@@ -381,18 +400,26 @@ class WorktreeActorExecutor:
                     verification_reports.append(verification)
                     seen_failures = {verification.failure_fingerprint}
                     repair_attempt = 0
+                    max_repair_attempts = verification_config.max_repair_attempts
+                    if execution_policy is not None:
+                        max_repair_attempts = min(
+                            max_repair_attempts,
+                            execution_policy.budget.max_repair_attempts,
+                        )
                     while (
                         not verification.passed
-                        and repair_attempt < verification_config.max_repair_attempts
+                        and repair_attempt < max_repair_attempts
                     ):
                         repair_attempt += 1
+                        if run_context.budget_ledger is not None:
+                            await run_context.budget_ledger.claim_repair_attempt()
                         phase = f"repair attempt {repair_attempt}"
                         repair_summary = await actor.run(
                             build_repair_prompt(
                                 verification,
                                 repair_attempt=repair_attempt,
                                 max_repair_attempts=(
-                                    verification_config.max_repair_attempts
+                                    max_repair_attempts
                                 ),
                             )
                         )

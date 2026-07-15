@@ -129,11 +129,11 @@ class ContextManager:
 
         return (1, safe_end)
 
-    async def compress(self, llm_client) -> None:
+    async def compress(self, llm_client) -> dict:
         start, end = self.get_compressible_range()
         if start >= end:
             self._truncate_large_messages(self.messages)
-            return
+            return {}
 
         messages_to_drop = self.messages[start:end]
         slim_entries: list[str] = []
@@ -157,8 +157,10 @@ class ContextManager:
         try:
             result = await llm_client.chat([{"role": "user", "content": summary_prompt[:8000]}])
             summary = result.get("content", "Previous conversation summarized.")
+            usage = result.get("_usage", {})
         except Exception:
             summary = "(Conversation compressed but summary failed due to error.)"
+            usage = {}
 
         tail = self.messages[end:]
         self._truncate_large_messages(tail)
@@ -168,6 +170,7 @@ class ContextManager:
         new_messages.extend(tail)
         self.messages = new_messages
         self._result_hashes.clear()
+        return usage if isinstance(usage, dict) else {}
 
     def _truncate_large_messages(self, msgs: list[dict], max_chars: int = 12000) -> None:
         """Head-tail truncate large messages while preserving code fence integrity."""

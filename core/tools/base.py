@@ -9,6 +9,7 @@ class ToolResult:
     success: bool
     content: str = ""
     error: str | None = None
+    policy_denied: bool = False
 
     @classmethod
     def ok(cls, content: str) -> ToolResult:
@@ -17,6 +18,10 @@ class ToolResult:
     @classmethod
     def fail(cls, error: str, content: str = "") -> ToolResult:
         return cls(success=False, content=content, error=error)
+
+    @classmethod
+    def deny(cls, error: str) -> ToolResult:
+        return cls(success=False, error=error, policy_denied=True)
 
 
 class BaseTool(ABC):

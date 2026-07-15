@@ -317,6 +317,8 @@ class SQLiteRunStore:
                 "completion_tokens": checkpoint.completion_tokens,
                 "usage_estimated": checkpoint.usage_estimated,
                 "completed_tool_calls": checkpoint.completed_tool_calls,
+                "execution_policy": checkpoint.execution_policy,
+                "budget_snapshot": checkpoint.budget_snapshot,
                 "saved_at": checkpoint.saved_at,
             },
             ensure_ascii=False,
@@ -336,6 +338,8 @@ class SQLiteRunStore:
         raw_messages = payload["messages"]
         raw_snapshot = payload["task_snapshot"]
         raw_completed = payload.get("completed_tool_calls", {})
+        raw_policy = payload.get("execution_policy")
+        raw_budget = payload.get("budget_snapshot")
         if not isinstance(raw_messages, list):
             raise ValueError("checkpoint messages must be a list")
         if not all(isinstance(message, dict) for message in raw_messages):
@@ -344,6 +348,10 @@ class SQLiteRunStore:
             raise ValueError("checkpoint task snapshot must be an object")
         if not isinstance(raw_completed, dict):
             raise ValueError("completed tool calls must be an object")
+        if raw_policy is not None and not isinstance(raw_policy, dict):
+            raise ValueError("execution policy must be an object")
+        if raw_budget is not None and not isinstance(raw_budget, dict):
+            raise ValueError("budget snapshot must be an object")
         return RunCheckpoint(
             run_id=stored_run_id,
             messages=tuple(cast(list[dict[str, Any]], raw_messages)),
@@ -354,6 +362,8 @@ class SQLiteRunStore:
             completed_tool_calls={
                 str(key): str(value) for key, value in raw_completed.items()
             },
+            execution_policy=cast(dict[str, Any] | None, raw_policy),
+            budget_snapshot=cast(dict[str, Any] | None, raw_budget),
             saved_at=float(payload["saved_at"]),
         )
 

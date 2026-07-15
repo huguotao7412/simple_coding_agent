@@ -7,6 +7,11 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from ..execution.policy import (
+    BudgetSnapshot,
+    ExecutionPolicy,
+    RunBudgetLedger,
+)
 from ..events import AgentEvent, QueueEventSink
 from .models import RunCheckpoint, RunRecord, RunStatus, transition_run
 from .store import RunStore
@@ -31,6 +36,8 @@ class RunContext:
     events: QueueEventSink
     usage: UsageTotals = field(default_factory=UsageTotals)
     completed_tool_calls: dict[str, str] = field(default_factory=dict)
+    execution_policy: ExecutionPolicy | None = None
+    budget_ledger: RunBudgetLedger | None = None
     record: RunRecord | None = None
     store: RunStore | None = None
     _usage_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -66,6 +73,16 @@ class RunContext:
     ) -> RunContext:
         if record.run_id != checkpoint.run_id:
             raise ValueError("checkpoint run_id does not match record run_id")
+        policy = (
+            ExecutionPolicy.from_dict(checkpoint.execution_policy)
+            if checkpoint.execution_policy is not None
+            else None
+        )
+        budget_snapshot = (
+            BudgetSnapshot.from_dict(checkpoint.budget_snapshot)
+            if checkpoint.budget_snapshot is not None
+            else None
+        )
         return cls(
             run_id=record.run_id,
             state=GlobalState.from_snapshot(checkpoint.task_snapshot),
@@ -76,6 +93,12 @@ class RunContext:
                 estimated=checkpoint.usage_estimated,
             ),
             completed_tool_calls=dict(checkpoint.completed_tool_calls or {}),
+            execution_policy=policy,
+            budget_ledger=(
+                RunBudgetLedger(policy, budget_snapshot)
+                if policy is not None
+                else None
+            ),
             record=record,
             store=store,
         )
@@ -95,7 +118,46 @@ class RunContext:
             self.usage.prompt_tokens += prompt_tokens
             self.usage.completion_tokens += completion_tokens
             self.usage.estimated = self.usage.estimated or estimated
-            return replace(self.usage)
+            snapshot = replace(self.usage)
+        if self.budget_ledger is not None:
+            await self.budget_ledger.charge_tokens(
+                prompt_tokens + completion_tokens
+            )
+        return snapshot
+
+    def install_execution_policy(self, policy: ExecutionPolicy) -> None:
+        """Install an immutable policy exactly once for a new Run."""
+        if self.execution_policy is not None:
+            if self.execution_policy != policy:
+                raise ValueError("execution policy is already installed for this Run")
+            return
+        self.execution_policy = policy
+        self.budget_ledger = RunBudgetLedger(policy)
+
+    def begin_interactive_task(self, policy: ExecutionPolicy) -> None:
+        """Start a fresh policy scope for a non-durable REPL turn."""
+        if self.store is not None or self.record is not None:
+            raise ValueError("durable Runs cannot replace their execution policy")
+        self.execution_policy = policy
+        self.budget_ledger = RunBudgetLedger(policy)
+
+    async def grant_human_approval(self) -> None:
+        """Record an explicit external approval while preserving consumption."""
+        policy = self.execution_policy
+        if (
+            policy is None
+            or not policy.requires_human_approval
+            or policy.human_approved
+        ):
+            return
+        snapshot = (
+            await self.budget_ledger.snapshot()
+            if self.budget_ledger is not None
+            else BudgetSnapshot()
+        )
+        approved = policy.with_approval(True)
+        self.execution_policy = approved
+        self.budget_ledger = RunBudgetLedger(approved, snapshot)
 
     async def usage_snapshot(self) -> UsageTotals:
         async with self._usage_lock:
@@ -109,6 +171,11 @@ class RunContext:
     ) -> RunCheckpoint:
         usage = await self.usage_snapshot()
         task_snapshot = await self.state.snapshot(truncate_diffs=False)
+        budget_snapshot = (
+            await self.budget_ledger.snapshot()
+            if self.budget_ledger is not None
+            else None
+        )
         return RunCheckpoint(
             run_id=self.run_id,
             messages=tuple(deepcopy(messages)),
@@ -117,6 +184,16 @@ class RunContext:
             completion_tokens=usage.completion_tokens,
             usage_estimated=usage.estimated,
             completed_tool_calls=dict(self.completed_tool_calls),
+            execution_policy=(
+                self.execution_policy.to_dict()
+                if self.execution_policy is not None
+                else None
+            ),
+            budget_snapshot=(
+                budget_snapshot.to_dict()
+                if budget_snapshot is not None
+                else None
+            ),
             saved_at=time.time() if saved_at is None else saved_at,
         )
 

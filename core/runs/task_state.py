@@ -14,12 +14,14 @@ class TaskNode:
     description: str
     status: Literal["pending", "running", "verifying", "done", "failed", "blocked"] = "pending"
     assigned_actor: str | None = None
+    actor_role: str | None = None
     dependencies: list[str] = field(default_factory=list)
     result_summary: str | None = None
     diff: str | None = None  # unified diff from Actor's worktree changes
     files_modified: list[str] = field(default_factory=list)
     diff_artifact: str | None = None
     handoff_message: AgentMessage | None = None
+    verification_passed: bool | None = None
 
 
 @dataclass
@@ -27,7 +29,7 @@ class ChangeRecord:
     type: str  # "task_added" | "task_updated" | "summary_added"
     task_id: str
     timestamp: float
-    payload: dict
+    payload: dict[str, Any]
 
 
 class GlobalState:
@@ -74,7 +76,7 @@ class GlobalState:
             ))
         return task_id
 
-    async def update_task(self, task_id: str, **kwargs) -> None:
+    async def update_task(self, task_id: str, **kwargs: Any) -> None:
         import time
         async with self._lock:
             node = self.task_tree[task_id]
@@ -94,6 +96,7 @@ class GlobalState:
         files_modified: list[str] | None = None,
         diff_artifact: str | None = None,
         handoff_message: AgentMessage | None = None,
+        verification_passed: bool | None = None,
     ) -> None:
         import time
         async with self._lock:
@@ -103,6 +106,7 @@ class GlobalState:
                 self.task_tree[task_id].files_modified = files_modified
             self.task_tree[task_id].diff_artifact = diff_artifact
             self.task_tree[task_id].handoff_message = handoff_message
+            self.task_tree[task_id].verification_passed = verification_passed
             self.change_log.append(ChangeRecord(
                 type="summary_added",
                 task_id=task_id,
@@ -115,6 +119,7 @@ class GlobalState:
                     "handoff_message": (
                         handoff_message.to_dict() if handoff_message else None
                     ),
+                    "verification_passed": verification_passed,
                 },
             ))
 
@@ -144,6 +149,11 @@ class GlobalState:
             files_modified = raw_node.get("files_modified", [])
             if not isinstance(dependencies, list) or not isinstance(files_modified, list):
                 raise ValueError("task dependencies and files_modified must be lists")
+            verification_passed = raw_node.get("verification_passed")
+            if verification_passed is not None and not isinstance(
+                verification_passed, bool
+            ):
+                raise ValueError("task verification_passed must be a boolean or null")
             normalized_id = str(task_id)
             state.task_tree[normalized_id] = TaskNode(
                 task_id=str(raw_node.get("task_id", normalized_id)),
@@ -176,6 +186,16 @@ class GlobalState:
                     if isinstance(raw_node.get("handoff_message"), dict)
                     else None
                 ),
+                actor_role=(
+                    str(raw_node["actor_role"])
+                    if raw_node.get("actor_role") is not None
+                    else None
+                ),
+                verification_passed=(
+                    verification_passed
+                    if verification_passed is not None
+                    else None
+                ),
             )
         state._change_offset = int(snapshot.get("change_count", 0) or 0)
         return state
@@ -189,6 +209,7 @@ class GlobalState:
                         "description": t.description,
                         "status": t.status,
                         "assigned_actor": t.assigned_actor,
+                        "actor_role": t.actor_role,
                         "dependencies": t.dependencies,
                         "result_summary": t.result_summary,
                         "diff": (
@@ -201,6 +222,7 @@ class GlobalState:
                         "handoff_message": (
                             t.handoff_message.to_dict() if t.handoff_message else None
                         ),
+                        "verification_passed": t.verification_passed,
                     }
                     for tid, t in self.task_tree.items()
                 },

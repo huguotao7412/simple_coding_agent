@@ -50,6 +50,19 @@ class Bridge:
                         except (json.JSONDecodeError, AttributeError):
                             pass
 
+                    elif event.type == "execution_policy":
+                        try:
+                            policy = json.loads(event.content)
+                            budget = policy.get("budget", {})
+                            self.ui.render_info(
+                                "Execution policy: "
+                                f"actors={policy.get('max_actors', 'unknown')}, "
+                                f"model_calls={budget.get('max_model_calls', 'unknown')}, "
+                                f"tokens={budget.get('max_total_tokens', 'unknown')}"
+                            )
+                        except (json.JSONDecodeError, AttributeError):
+                            pass
+
                     elif event.type == "thought":
                         self.ui.clear_tool_status()
                         if stream is None:

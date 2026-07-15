@@ -96,6 +96,7 @@ async def test_global_state_round_trips_full_task_snapshot():
             recipient_id="planner",
             handoff=AgentHandoff(findings=("implemented",)),
         ),
+        verification_passed=True,
     )
     await state.update_task(task_id, status="done", assigned_actor="coder_1")
 
@@ -113,6 +114,7 @@ async def test_global_state_round_trips_full_task_snapshot():
     assert node.handoff_message is not None
     assert node.handoff_message.schema_version == "a2a-lite/1.0"
     assert node.handoff_message.handoff.findings == ("implemented",)
+    assert node.verification_passed is True
 
 
 @pytest.mark.asyncio

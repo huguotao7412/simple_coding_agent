@@ -33,12 +33,16 @@ class RunReport:
     errors: list[str] = field(default_factory=list)
     final_output: str = ""
     task_assessment: dict[str, Any] | None = None
+    execution_policy: dict[str, Any] | None = None
     sandbox_backends: set[str] = field(default_factory=set)
     isolated_execution_observed: bool = False
 
     def observe(self, event: AgentEvent) -> None:
         if event.type == "task_assessment":
             self._record_task_assessment(event.content)
+
+        elif event.type == "execution_policy":
+            self._record_execution_policy(event.content)
 
         elif event.type == "sandbox_execution":
             self._record_sandbox_execution(event.content)
@@ -126,6 +130,22 @@ class RunReport:
             if isinstance(reasons, list):
                 lines.extend(f"- Reason: {reason}" for reason in reasons if isinstance(reason, str))
             lines.append("")
+
+        if self.execution_policy:
+            budget = self.execution_policy.get("budget", {})
+            lines.extend([
+                "## Enforced Execution Policy",
+                "",
+                f"- Strategy: {self.execution_policy.get('strategy', 'unknown')}",
+                f"- Max actors: {self.execution_policy.get('max_actors', 'unknown')}",
+                f"- Allowed roles: {', '.join(self.execution_policy.get('allowed_actor_roles', [])) or 'none'}",
+                f"- Quality gates required: {bool(self.execution_policy.get('require_quality_gates', False))}",
+                f"- Human approval satisfied: {bool(self.execution_policy.get('human_approved', False)) or not bool(self.execution_policy.get('requires_human_approval', False))}",
+                f"- Model-call budget: {budget.get('max_model_calls', 'unknown')}",
+                f"- Token budget: {budget.get('max_total_tokens', 'unknown')}",
+                f"- Active wall-time budget: {budget.get('max_wall_time_seconds', 'unknown')}s",
+                "",
+            ])
 
         if self.sandbox_backends:
             lines.extend([
@@ -237,6 +257,15 @@ class RunReport:
         if not isinstance(payload, dict) or payload.get("schema_version") != 1:
             return
         self.task_assessment = payload
+
+    def _record_execution_policy(self, content: str) -> None:
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+            return
+        self.execution_policy = payload
 
     def _record_sandbox_execution(self, content: str) -> None:
         try:

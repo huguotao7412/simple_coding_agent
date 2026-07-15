@@ -30,6 +30,7 @@ def build_planner(
     *,
     run_context: RunContext | None = None,
     context_manager: ContextManager | None = None,
+    high_risk_approved: bool = False,
 ) -> Planner:
     api_key = os.getenv("SCA_API_KEY")
     if not api_key:
@@ -60,10 +61,17 @@ def build_planner(
         tools=tools,
         workspace_dir=workspace_dir,
         run_context=run_context or RunContext.create(),
+        high_risk_approved=high_risk_approved,
     )
 
 
-async def run_once(prompt: str, workspace_dir: str, model: str | None = None) -> str:
+async def run_once(
+    prompt: str,
+    workspace_dir: str,
+    model: str | None = None,
+    *,
+    high_risk_approved: bool = False,
+) -> str:
     from cli.report import RunReport
     from cli.runs import create_durable_run_context
     from core.runtime.conversation import ContextManager
@@ -80,6 +88,7 @@ async def run_once(prompt: str, workspace_dir: str, model: str | None = None) ->
         model=model,
         run_context=run_context,
         context_manager=context_manager,
+        high_risk_approved=high_risk_approved,
     )
     report = RunReport()
     final_output = ""
@@ -97,6 +106,8 @@ async def resume_once(
     run_id: str,
     workspace_dir: str,
     model: str | None = None,
+    *,
+    high_risk_approved: bool = False,
 ) -> str:
     from cli.report import RunReport
     from cli.runs import load_resumable_run, open_run_store
@@ -116,6 +127,8 @@ async def resume_once(
         checkpoint,
         store=store,
     )
+    if high_risk_approved:
+        await run_context.grant_human_approval()
     planner = build_planner(
         workspace_dir=workspace_dir,
         model=model or stored.record.model,
@@ -143,6 +156,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--prompt",
         default=None,
         help="Run one non-interactive task and print the final response.",
+    )
+    parser.add_argument(
+        "--approve-high-risk",
+        action="store_true",
+        help=(
+            "Explicitly approve execution of a task classified as high risk. "
+            "Only use after reviewing the requested side effects."
+        ),
     )
     commands = parser.add_subparsers(dest="command")
     runs_parser = commands.add_parser("runs", help="List durable runs")
@@ -242,7 +263,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "resume":
         try:
             result = asyncio.run(
-                resume_once(args.run_id, workspace_dir, args.model)
+                resume_once(
+                    args.run_id,
+                    workspace_dir,
+                    args.model,
+                    high_risk_approved=args.approve_high_risk,
+                )
             )
         except Exception as e:
             print(f"Error: {e}", file=sys.stderr)
@@ -252,7 +278,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.prompt:
         try:
-            result = asyncio.run(run_once(args.prompt, workspace_dir, args.model))
+            result = asyncio.run(run_once(
+                args.prompt,
+                workspace_dir,
+                args.model,
+                high_risk_approved=args.approve_high_risk,
+            ))
         except Exception as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
@@ -263,7 +294,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     from cli.ui import UI
 
     try:
-        planner = build_planner(workspace_dir=workspace_dir, model=args.model)
+        planner = build_planner(
+            workspace_dir=workspace_dir,
+            model=args.model,
+            high_risk_approved=args.approve_high_risk,
+        )
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1

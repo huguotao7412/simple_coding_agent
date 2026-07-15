@@ -54,14 +54,24 @@ User prompt
 Before a new Planner turn enters that loop, `TaskAssessor` performs a bounded,
 read-only workspace scan and classifies intent, complexity, and risk. It publishes a
 versioned `task_assessment` event and injects the same JSON as durable system context.
-The recommendation selects between Planner-only analysis, one Actor, a Coder backed
-by deterministic gates, Scout plus Coder, or a Scout-led Actor DAG. This first
-boundary is advisory and measurable; later policy layers can enforce its budgets
-without embedding orchestration decisions only in prompt prose.
+The assessment is deterministically compiled into an enforced `ExecutionPolicy`
+rather than remaining only a prompt recommendation.
 
 The Planner owns orchestration. Each Planner receives a `RunContext` with an independent task ledger, run ID, event queue, and usage accumulator. It decomposes work, delegates isolated subtasks, receives Actor summaries and diffs, applies selected patches, and synthesizes the final response.
 
 Actors own execution. Each Actor receives one concrete task plus scoped context, runs in its own git worktree, and reports a structured A2A_lite handoff plus an extracted diff. The full extracted diff is persisted as a patch artifact, while the handoff carries typed artifact references instead of copying large payloads into prompts.
+
+## Execution Policy and Budget Boundary
+
+`ExecutionPolicy` defines Actor topology and roles, required quality gates, high-risk approval, and budgets for Planner/Actor steps, model calls, total tokens, failed tool calls, repairs, and active wall time. Tool calls cannot override this immutable task policy.
+
+One lock-protected `RunBudgetLedger` is shared by Planner and all nested Actors. Model calls reserve capacity before dispatch and provider usage is charged after the response; a response that crosses the token limit is not allowed to drive tool execution. Delegation atomically reserves Actor capacity and distinguishes started roles from successfully completed roles, so a failed Scout cannot unlock a later Coder. `scout_then_coder` and `scout_then_dag` dependency shapes are enforced in `DelegateTool`, not left to prompt compliance.
+
+Policy and consumption snapshots are stored in `RunCheckpoint`. Resume continues with the original policy and cumulative consumption, while process downtime is excluded from active wall time. Legacy checkpoints without these fields remain loadable. Interactive REPL turns receive fresh task policy scopes; durable non-interactive Runs cannot be reclassified during resume, although an external CLI approval may satisfy a previously missing high-risk authorization.
+
+Policy and budget failures are fail-closed and emit `policy_denied` or `budget_exhausted`. This orchestration layer complements rather than replaces role tool allowlists, worktrees, sandboxing, path boundaries, and destructive-command guards. See the [execution policy plan](docs/plans/2026-07-15-enforced-execution-policy.md) for defaults and trade-offs.
+
+Merging into the main workspace is policy protected as well. `ApplyPatchTool` requires a completed Coder task and an exact match with the full diff held in task state; `coder_with_gates` additionally requires recorded passing verification evidence. A model cannot bypass the Actor/verification boundary by inventing a task ID or constructing its own diff.
 
 ## Delegation Execution Boundary
 

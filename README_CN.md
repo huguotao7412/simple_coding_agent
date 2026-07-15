@@ -20,6 +20,8 @@ Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重
 - 非交互任务会持久化 Run checkpoint，可列出、检查并恢复中断任务。
 - 本地 eval runner 会输出聚合的 `eval_results.json` 指标。
 - 版本化的确定性任务评估会记录意图、复杂度、风险和推荐执行策略。
+- 版本化执行策略会在运行时强制 Actor 拓扑、模型调用、token、失败工具、修复和活跃时长预算。
+- 高风险任务在首次模型调用前 fail-closed，需要 CLI 显式批准；策略和消费账本随 checkpoint 恢复。
 - Actor shell 与 verification 共享可替换的本地/E2B 沙箱协议。
 - 单元测试覆盖 runtime、隔离、报告和 eval 行为。
 
@@ -49,6 +51,7 @@ handoff 注入下游 Actor。完整 patch 与验证日志保留在 `.sca/artifac
 ```text
 用户请求
   -> TaskAssessor（意图 / 复杂度 / 风险 / 策略）
+  -> ExecutionPolicy / RunBudgetLedger
   -> Planner
   -> AgentRuntime
   -> LLM response
@@ -64,6 +67,7 @@ handoff 注入下游 Actor。完整 patch 与验证日志保留在 `.sca/artifac
 - `Planner` 负责拆解任务、委派子任务、接收 Actor summary/diff，并合成最终回复。
 - `ActorAgent` 在隔离 worktree 中执行单个子任务。
 - `AgentRuntime` 负责共享执行循环：LLM 调用、工具解析、工具执行、上下文压缩、步数限制、重复动作检测和事件输出。
+- `ExecutionPolicy` 将评估结果编译为不可由工具调用覆盖的拓扑与资源约束；`RunBudgetLedger` 由 Planner 和全部 Actor 共享。
 - `GlobalState` 记录任务树、任务状态和 Actor 更新。
 
 更完整的架构说明见 [architecture.md](architecture.md) 和 [architecture_CN.md](architecture_CN.md)。
@@ -202,6 +206,15 @@ sca --dir C:\path\to\project
 sca --dir C:\path\to\project --prompt "修复失败的测试"
 ```
 
+被确定性评估判定为高风险的任务会在第一次模型调用前停止。审查预期副作用后，使用显式批准参数重新运行或恢复：
+
+```powershell
+sca --approve-high-risk --dir C:\path\to\project --prompt "执行已审查的数据库迁移"
+sca --approve-high-risk --dir C:\path\to\project resume run_abc123
+```
+
+该参数只是本地 CLI 的显式授权信号，不是多人审批服务，也不会绕过工具 allowlist、命令防护、workspace 边界或 sandbox。
+
 检查和恢复本地 Run：
 
 ```powershell
@@ -314,13 +327,13 @@ CLI smoke check：
 近期：
 
 - 使用重复的真实模型 eval 基线校准任务评估规则。
-- 强制执行各策略的 Actor、模型调用、token、修复和总时长预算。
+- 扩展多文件、恢复、冲突和故障注入 eval，并比较单位成功成本。
 
 长期：
 
 - 更好的 Actor diff 合并和冲突处理流程。
 - 更稳健的模型/provider 路由。
-- 对破坏性或高风险操作增加人工审批门。
+- 为破坏性或高风险操作增加可审计的交互式/多人审批工作流。
 
 ## License
 

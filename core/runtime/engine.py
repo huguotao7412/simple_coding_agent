@@ -11,6 +11,8 @@ from typing import Any, cast
 from .conversation import ContextManager
 from ..events import AgentEvent
 from ..exceptions import LLMAPIError
+from ..execution.policy import BudgetExceeded, PolicyViolation
+from ..execution.models import ExecutionStrategy
 from ..llm import LLMClient
 from ..runs.context import RunContext
 from ..runs.models import RunStatus
@@ -97,6 +99,7 @@ class AgentRuntime:
         self.tools_by_name = {t.name: t for t in tools} if tools else {}
         self._recent_actions: deque[int] = deque(maxlen=10)
         self.last_result_success = True
+        self._terminal_budget_error = ""
 
     async def _list_tool_schemas(self) -> list[dict[str, Any]]:
         if self.tool_provider is not None:
@@ -270,7 +273,22 @@ class AgentRuntime:
                 tool_args=parsed.args,
                 actor_id=self.actor_id,
             ))
-            tool_name, _, result, _ = await self._execute_single_tool(tc)
+            policy_denial = self._planner_tool_policy_denial(parsed.tool_name)
+            if policy_denial:
+                tool_name = parsed.tool_name
+                result = ToolResult.fail(policy_denial)
+                self.ctx.add_tool_result(
+                    str(tc.get("id", "")),
+                    f"ERROR: {policy_denial}",
+                )
+                yield await self._emit(AgentEvent(
+                    type="policy_denied",
+                    content=policy_denial,
+                    tool_name=tool_name,
+                    actor_id=self.actor_id,
+                ))
+            else:
+                tool_name, _, result, _ = await self._execute_single_tool(tc)
             self._remember_tool_result(str(tc.get("id", "")), result)
             await self._persist_root("tool_result")
             yield await self._emit(AgentEvent(
@@ -279,8 +297,52 @@ class AgentRuntime:
                 tool_result=result,
                 actor_id=self.actor_id,
             ))
+            if result.policy_denied:
+                yield await self._emit(AgentEvent(
+                    type="policy_denied",
+                    content=result.error or "Tool action denied by execution policy",
+                    tool_name=tool_name,
+                    actor_id=self.actor_id,
+                ))
+            if not result.success and self.run_context.budget_ledger is not None:
+                try:
+                    await self.run_context.budget_ledger.charge_failed_tool_call()
+                except BudgetExceeded as error:
+                    self._terminal_budget_error = str(error)
+                    self.last_result_success = False
+                    self.ctx.add_assistant_message(content=str(error))
+                    await self._persist_root(
+                        "budget_exhausted",
+                        status=RunStatus.FAILED,
+                        error=str(error),
+                    )
+                    yield await self._emit(AgentEvent(
+                        type="budget_exhausted",
+                        content=str(error),
+                        actor_id=self.actor_id,
+                    ))
+                    yield await self._emit(AgentEvent(
+                        type="error",
+                        content=str(error),
+                        actor_id=self.actor_id,
+                    ))
+                    return
             for event in await self._run_after_tool_hook(tool_name, result):
                 yield await self._emit(event)
+
+    def _planner_tool_policy_denial(self, tool_name: str) -> str:
+        policy = self.run_context.execution_policy
+        if self.actor_id or policy is None:
+            return ""
+        if (
+            policy.strategy is ExecutionStrategy.PLANNER_DIRECT
+            and tool_name in {"apply_patch", "delegate"}
+        ):
+            return (
+                f"{policy.strategy.value} strategy does not permit "
+                f"Planner tool '{tool_name}'"
+            )
+        return ""
 
     async def _run_after_tool_hook(self, tool_name: str, result: ToolResult) -> list[AgentEvent]:
         if self.after_tool_call is None:
@@ -358,6 +420,35 @@ class AgentRuntime:
     async def _run_stream_loop(self) -> AsyncGenerator[AgentEvent, None]:
         tool_schemas = await self._list_tool_schemas()
 
+        ledger = self.run_context.budget_ledger
+        if ledger is not None:
+            try:
+                await ledger.ensure_can_execute()
+            except (BudgetExceeded, PolicyViolation) as error:
+                event_type = (
+                    "budget_exhausted"
+                    if isinstance(error, BudgetExceeded)
+                    else "policy_denied"
+                )
+                self.last_result_success = False
+                self.ctx.add_assistant_message(content=str(error))
+                await self._persist_root(
+                    event_type,
+                    status=RunStatus.FAILED,
+                    error=str(error),
+                )
+                yield await self._emit(AgentEvent(
+                    type=event_type,
+                    content=str(error),
+                    actor_id=self.actor_id,
+                ))
+                yield await self._emit(AgentEvent(
+                    type="error",
+                    content=str(error),
+                    actor_id=self.actor_id,
+                ))
+                return
+
         step_count = 0
         while True:
             step_count += 1
@@ -376,7 +467,19 @@ class AgentRuntime:
                 return
 
             if self.ctx.needs_compression(self.llm):
-                await self.ctx.compress(self.llm)
+                try:
+                    if ledger is not None:
+                        await ledger.claim_model_call()
+                    compression_usage = await self.ctx.compress(self.llm)
+                    await self.run_context.record_usage(
+                        int(compression_usage.get("prompt_tokens", 0) or 0),
+                        int(compression_usage.get("completion_tokens", 0) or 0),
+                        bool(compression_usage.get("estimated", True)),
+                    )
+                except (BudgetExceeded, PolicyViolation) as error:
+                    async for event in self._stop_for_policy_error(error):
+                        yield event
+                    return
                 await self._persist_root("compaction")
                 yield await self._emit(AgentEvent(type="compaction", actor_id=self.actor_id))
             elif self.ctx.needs_proactive_compression(self.llm):
@@ -388,6 +491,14 @@ class AgentRuntime:
 
             def on_token(token: str) -> None:
                 queue.put_nowait(token)
+
+            try:
+                if ledger is not None:
+                    await ledger.claim_model_call()
+            except (BudgetExceeded, PolicyViolation) as error:
+                async for event in self._stop_for_policy_error(error):
+                    yield event
+                return
 
             chat_task = asyncio.create_task(
                 self.llm.chat(
@@ -436,6 +547,10 @@ class AgentRuntime:
                     completion_tokens=completion_tokens,
                     usage_estimated=usage_estimated,
                 ))
+            except (BudgetExceeded, PolicyViolation) as error:
+                async for event in self._stop_for_policy_error(error):
+                    yield event
+                return
             except LLMAPIError as e:
                 error_msg = str(e)
                 self.last_result_success = False
@@ -476,3 +591,33 @@ class AgentRuntime:
 
             async for event in self._process_tool_calls(tool_calls):
                 yield event
+            if self._terminal_budget_error:
+                return
+
+    async def _stop_for_policy_error(
+        self,
+        error: BudgetExceeded | PolicyViolation,
+    ) -> AsyncGenerator[AgentEvent, None]:
+        event_type = (
+            "budget_exhausted"
+            if isinstance(error, BudgetExceeded)
+            else "policy_denied"
+        )
+        error_msg = str(error)
+        self.last_result_success = False
+        self.ctx.add_assistant_message(content=error_msg)
+        await self._persist_root(
+            event_type,
+            status=RunStatus.FAILED,
+            error=error_msg,
+        )
+        yield await self._emit(AgentEvent(
+            type=event_type,
+            content=error_msg,
+            actor_id=self.actor_id,
+        ))
+        yield await self._emit(AgentEvent(
+            type="error",
+            content=error_msg,
+            actor_id=self.actor_id,
+        ))

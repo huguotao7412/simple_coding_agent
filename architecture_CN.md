@@ -52,6 +52,18 @@ Planner 负责 orchestration：每个 Planner 拥有独立的 `RunContext`，其
 
 Actor 负责 execution：每个 Actor 只接收一个明确子任务，在自己的 git worktree 中运行，最后返回 summary 和提取出的 diff。
 
+## 执行策略与预算边界
+
+`TaskAssessment` 不再只是 prompt 建议。Planner 会将其确定性编译为版本化 `ExecutionPolicy`，并在首个模型调用前安装到 `RunContext`。策略声明 Actor 拓扑、允许角色、是否必须存在质量门禁、是否需要人工批准，以及 Planner/Actor 步数、模型调用、总 token、失败工具调用、修复次数和活跃时长预算。
+
+`RunBudgetLedger` 是 Planner 与所有嵌套 Actor 共享的异步原子账本。模型调用在请求前占用额度，token 在 provider 返回 usage 后记账；若单次响应导致越界，该响应不会再驱动工具执行。委派会在 Actor 启动前原子预留配额，并区分“已启动角色”和“成功完成角色”，避免失败 Scout 放行后续 Coder。`scout_then_coder` 和 `scout_then_dag` 的依赖关系在 `DelegateTool` 内强制校验，而不是依赖模型自觉遵循 prompt。
+
+策略与消费快照会随 `RunCheckpoint` 写入 SQLite。恢复时继续使用原策略和累计消费，进程中断期间的离线时间不计入活跃时长。旧 checkpoint 缺少字段时按 legacy 无新增限制方式加载。交互式 REPL 每轮请求建立新的任务策略范围；持久化非交互 Run 不允许在恢复时重新分类或替换策略，仅允许通过外部 CLI 显式补充高风险批准。
+
+预算越界和策略拒绝采用 fail-closed 语义，分别发出 `budget_exhausted` 和 `policy_denied` 事件。它们不替代角色工具 allowlist、worktree、sandbox、路径边界和破坏性命令检测，而是位于这些防线之上的编排控制层。完整取舍和默认预算见 [执行策略计划](docs/plans/2026-07-15-enforced-execution-policy.md)。
+
+主工作区合并同样受策略保护。`ApplyPatchTool` 会核对任务存在且已完成、执行角色为 Coder、传入 diff 与任务账本中的完整 diff 完全一致；`coder_with_gates` 还要求任务账本记录最终门禁通过。模型无法通过伪造 `task_id` 或自行构造 diff 绕过 Actor/verification 边界。
+
 ## 委派执行边界
 
 P1 不改变外部系统上下文或部署拓扑。`ActorExecutor` 是 Python Agent 进程内的端口，不是新的网络服务。这个边界将应用层调度与单个 Actor 的基础设施执行分开：

@@ -9,6 +9,8 @@ import tempfile
 
 from .base import BaseTool, ToolResult
 from ..git_utils import is_clean
+from ..runs.context import RunContext
+from ..runs.task_state import GlobalState
 
 
 def _cleanup_rej_files(base_dir: str) -> dict[str, str]:
@@ -69,13 +71,49 @@ class ApplyPatchTool(BaseTool):
     }
     required_params = ["diff", "task_id"]
 
-    async def execute(
+    def __init__(
+        self,
+        state: GlobalState | None = None,
+        run_context: RunContext | None = None,
+    ) -> None:
+        super().__init__()
+        self._state = state
+        self._run_context = run_context
+
+    def _authorize_patch(self, task_id: str, diff: str) -> str:
+        run_context = self._run_context
+        if run_context is None or run_context.execution_policy is None:
+            return ""
+        state = self._state or run_context.state
+        node = state.task_tree.get(task_id)
+        if node is None:
+            return f"Patch provenance denied: unknown task_id '{task_id}'"
+        if node.status != "done":
+            return f"Patch provenance denied: task '{task_id}' is not done"
+        if node.actor_role != "coder":
+            return f"Patch provenance denied: task '{task_id}' was not a Coder"
+        if (node.diff or "") != diff:
+            return f"Patch provenance denied: diff does not match task '{task_id}'"
+        if (
+            run_context.execution_policy.require_quality_gates
+            and node.verification_passed is not True
+        ):
+            return (
+                "Patch provenance denied: required quality gates did not produce "
+                "passing evidence"
+            )
+        return ""
+
+    async def execute(  # type: ignore[override]
         self,
         diff: str,
         task_id: str,
         strategy: str = "strict",
         workspace_dir: str = "",
     ) -> ToolResult:
+        denial = self._authorize_patch(task_id, diff)
+        if denial:
+            return ToolResult.deny(denial)
         if not diff or not diff.strip():
             return ToolResult.ok(f"No changes to apply for task {task_id} (empty diff).")
 

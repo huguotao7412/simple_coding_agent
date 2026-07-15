@@ -8,6 +8,8 @@ from typing import Any, cast
 
 from ..a2a_lite.models import AgentHandoff, AgentMessage, ArtifactRef
 from ..events import AgentEvent
+from ..execution.models import ExecutionStrategy
+from ..execution.policy import BudgetExceeded, PolicyViolation
 from .base import BaseTool, ToolResult
 from ..actors.contracts import ActorExecutionResult, ActorExecutor, ActorTaskSpec
 from ..runs.context import RunContext
@@ -197,6 +199,11 @@ class DelegateTool(BaseTool):
             files_modified=list(result.files_modified),
             diff_artifact=result.diff_artifact or None,
             handoff_message=message,
+            verification_passed=(
+                result.verification_reports[-1].passed
+                if result.verification_reports
+                else None
+            ),
         )
         await state.update_task(result.task_id, status=result.status)
         await run_context.emit(AgentEvent(
@@ -236,9 +243,110 @@ class DelegateTool(BaseTool):
                 subtask,
                 dependencies=tuple(node.dependencies),
             )
-            await state.update_task(task_id, status="running")
 
-        semaphore = asyncio.Semaphore(MAX_CONCURRENT_ACTORS)
+        policy = run_context.execution_policy
+        ledger = run_context.budget_ledger
+        if policy is not None and ledger is not None:
+            try:
+                roles = tuple(spec.role for spec in specs.values())
+                if policy.strategy is ExecutionStrategy.PLANNER_DIRECT:
+                    raise PolicyViolation(
+                        "planner_direct strategy does not permit Actor delegation"
+                    )
+                invalid_roles = sorted(set(roles) - set(policy.allowed_actor_roles))
+                if invalid_roles:
+                    raise PolicyViolation(
+                        "Actor role(s) not permitted by execution policy: "
+                        + ", ".join(invalid_roles)
+                    )
+                consumed = await ledger.snapshot()
+                if policy.strategy in {
+                    ExecutionStrategy.SINGLE_ACTOR,
+                    ExecutionStrategy.CODER_WITH_GATES,
+                } and any(role != "coder" for role in roles):
+                    raise PolicyViolation(
+                        f"{policy.strategy.value} permits only one Coder Actor"
+                    )
+                if policy.strategy is ExecutionStrategy.SCOUT_THEN_CODER:
+                    combined_roles = consumed.actor_roles + roles
+                    if combined_roles.count("scout") > 1 or combined_roles.count("coder") > 1:
+                        raise PolicyViolation(
+                            "scout_then_coder permits at most one Scout and one Coder"
+                        )
+                    scout_task_ids = {
+                        spec.task_id for spec in specs.values() if spec.role == "scout"
+                    }
+                    for spec in specs.values():
+                        if (
+                            spec.role != "coder"
+                            or "scout" in consumed.completed_actor_roles
+                        ):
+                            continue
+                        if not scout_task_ids.intersection(spec.dependencies):
+                            raise PolicyViolation(
+                                "scout_then_coder requires the Coder to depend on "
+                                "a Scout, or to run after a completed Scout"
+                            )
+                if policy.strategy is ExecutionStrategy.SCOUT_THEN_DAG:
+                    scout_task_ids = {
+                        spec.task_id for spec in specs.values() if spec.role == "scout"
+                    }
+                    coder_task_ids = {
+                        spec.task_id for spec in specs.values() if spec.role == "coder"
+                    }
+                    if (
+                        "scout" not in consumed.completed_actor_roles
+                        and not scout_task_ids
+                    ):
+                        raise PolicyViolation(
+                            "scout_then_dag requires a Scout before downstream Actors"
+                        )
+                    for spec in specs.values():
+                        if (
+                            spec.role != "scout"
+                            and "scout" not in consumed.completed_actor_roles
+                            and not scout_task_ids.intersection(spec.dependencies)
+                        ):
+                            raise PolicyViolation(
+                                "Downstream DAG Actors must depend on a Scout"
+                            )
+                        if (
+                            spec.role == "verifier"
+                            and "coder" not in consumed.completed_actor_roles
+                            and not coder_task_ids.intersection(spec.dependencies)
+                        ):
+                            raise PolicyViolation(
+                                "Verifier Actors must depend on a Coder"
+                            )
+                await ledger.reserve_actors(roles)
+            except (BudgetExceeded, PolicyViolation) as error:
+                event_type = (
+                    "budget_exhausted"
+                    if isinstance(error, BudgetExceeded)
+                    else "policy_denied"
+                )
+                await run_context.emit(AgentEvent(
+                    type=event_type,
+                    content=str(error),
+                    tool_name=self.name,
+                    parent_id="planner",
+                ))
+                return ToolResult.fail(str(error))
+
+        for task_id, spec in specs.items():
+            await state.update_task(
+                task_id,
+                status="running",
+                assigned_actor=task_id,
+                actor_role=spec.role,
+            )
+
+        concurrency = (
+            min(MAX_CONCURRENT_ACTORS, policy.max_actors)
+            if policy is not None
+            else MAX_CONCURRENT_ACTORS
+        )
+        semaphore = asyncio.Semaphore(max(1, concurrency))
 
         async def execute_one(spec: ActorTaskSpec) -> ActorExecutionResult:
             if not spec.description:
@@ -331,6 +439,10 @@ class DelegateTool(BaseTool):
                 all_results.append(self._result_payload(result, message))
                 if result.status == "done":
                     completed.add(result.task_id)
+                    if ledger is not None:
+                        await ledger.record_actor_completed(
+                            specs[result.task_id].role
+                        )
                 else:
                     failed.add(result.task_id)
                 remaining.pop(result.task_id, None)
