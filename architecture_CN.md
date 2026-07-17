@@ -227,6 +227,19 @@ flowchart LR
 
 ## Eval 设计
 
+评估被拆成两个信任边界不同的层次。本地 fixture suite 是产品回归与安全
+smoke suite；它刻意保持小而确定，不应把其分数表述为通用编码能力证明。
+
+外部维护的 coding benchmark 通过 Harbor 运行。Harbor adapter 会上传从当前
+checkout 构建的 wheel，在任务容器内创建隔离的 Python 3.12 环境，自动发现任务仓库并
+调用 headless `sca-harbor-agent`。Harbor 负责任务准备、外层隔离、隐藏验证、
+并发和结果聚合；SCA 在这个已经隔离的环境内使用 local command backend。
+
+adapter 将 SCA 状态写到 `/logs/artifacts/sca`，将 JSONL 事件流写到
+`/logs/agent/run-trace.jsonl`，并将可移植汇总写到 `/logs/agent/sca-run.json`。
+Harbor 用汇总填充输入/输出 token 和 agent metadata，同时保留原生 final report
+与 Actor patches 用于调试。
+
 本地 eval suite 的检查阶段是确定性的、离线的。
 
 `sca-eval run --model <model>` 会执行完整的可衡量流程：

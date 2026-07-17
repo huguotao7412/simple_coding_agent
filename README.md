@@ -388,6 +388,26 @@ The same artifacts can be inspected visually with:
 sca-web
 ```
 
+The fixture suite above is a project-specific regression and safety smoke suite,
+not a general coding benchmark. Standard coding-agent evaluation is delegated to
+Harbor. Install the optional integration and run the continuously refreshed
+SWE-rebench dataset with:
+
+```bash
+python -m pip install -e ".[benchmark]"
+sca-eval harbor --model deepseek/deepseek-v4-pro
+```
+
+Run these commands from a Python 3.12 environment; this is also the version used
+by the project CI and by the adapter inside Harbor task containers.
+
+`sca-eval harbor` builds the current checkout into a wheel, installs that exact
+artifact in each Harbor task container, discovers its task repository, runs SCA
+headlessly there, and exports
+token metadata, JSONL traces, final reports, and Actor artifacts to the Harbor
+job. See [evals/README.md](evals/README.md) for dataset selection, forwarded
+Harbor options, and the recommended nightly/release cadence.
+
 ## Roadmap
 
 Near-term:

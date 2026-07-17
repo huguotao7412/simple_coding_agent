@@ -29,6 +29,7 @@ dependencies = [
 [project.scripts]
 sca = "cli.main:main"
 sca-eval = "evals.cli:main"
+sca-harbor-agent = "evals.harbor_entrypoint:main"
 sca-web = "web.cli:main"
 
 [project.urls]
@@ -44,6 +45,13 @@ dev = [
 ]
 web = [
     "streamlit>=1.40",
+]
+benchmark = [
+    "harbor>=0.18,<0.19",
+    # Newer LiteLLM releases currently fall back to a Rust source build on Windows.
+    "litellm==1.83.14",
+    "setuptools>=75",
+    "wheel",
 ]
 
 [tool.setuptools.packages.find]
@@ -85,6 +93,9 @@ files = [
     "cli/runs.py",
     "cli/main.py",
     "evals/run_evals.py",
+    "evals/harbor_entrypoint.py",
+    "evals/harbor_runner.py",
+    "evals/harbor_support.py",
 ]
 
 [[tool.mypy.overrides]]

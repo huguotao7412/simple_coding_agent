@@ -249,6 +249,25 @@ Committed tool-result checkpoints prevent replay of the same root tool-call ID. 
 
 ## Eval Design
 
+Evaluation has two layers with different trust boundaries. The local fixture
+suite is a product regression and safety smoke suite. It intentionally remains
+small and deterministic, and its score must not be presented as evidence of
+general coding capability.
+
+Externally maintained coding benchmarks run through Harbor. The Harbor adapter
+uploads a wheel built from the exact checkout under test, installs it in an
+isolated Python 3.12 environment inside the task container, and invokes the
+headless `sca-harbor-agent` entrypoint against the discovered task repository.
+Harbor owns task setup, outer isolation, hidden verification, concurrency, and
+result aggregation. The
+agent uses its local command backend inside that already-isolated environment.
+
+The adapter writes SCA runtime state below `/logs/artifacts/sca`, a JSONL event
+trace to `/logs/agent/run-trace.jsonl`, and a portable summary to
+`/logs/agent/sca-run.json`. Harbor uses the summary to populate input/output token
+counts and agent metadata while retaining native SCA reports and Actor patches
+for debugging.
+
 The local eval suite is intentionally deterministic and offline at check time.
 
 `sca-eval run --model <model>` performs the full measurable loop:

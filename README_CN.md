@@ -318,6 +318,23 @@ sca --dir tmp/eval-runs/<task_id>
 sca-eval check
 ```
 
+现有 fixture suite 被定位为项目自身的回归与安全 smoke suite，而不是通用编码能力榜单。
+标准 coding-agent 评估交给 Harbor 执行。安装可选依赖并运行持续更新的
+SWE-rebench 数据集：
+
+```bash
+python -m pip install -e ".[benchmark]"
+sca-eval harbor --model deepseek/deepseek-v4-pro
+```
+
+请在 Python 3.12 虚拟环境中运行这些命令；项目 CI 与 Harbor 任务容器内的
+adapter 也统一使用 Python 3.12。
+
+`sca-eval harbor` 会把当前 checkout 构建成 wheel，在每个 Harbor 任务容器中
+安装同一个构建产物，自动发现任务仓库后以 headless 模式运行 SCA，并将 token
+统计、JSONL trace、final report 和 Actor artifacts 写入 Harbor job。数据集选择、
+参数透传和建议的 nightly/release 运行节奏见 `evals/README.md`。
+
 ## CLI 事件透明性
 
 CLI 会渲染 runtime 事件流：

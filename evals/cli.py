@@ -12,6 +12,7 @@ from .run_evals import (
     print_run_results,
     run_eval_suite,
 )
+from .harbor_support import DEFAULT_HARBOR_DATASET
 
 
 DEFAULT_CANDIDATE_ROOT = Path("tmp") / "eval-runs"
@@ -76,6 +77,44 @@ def main(argv: list[str] | None = None) -> int:
         help=f"Markdown comparison report path. Default: {DEFAULT_COMPARE_PATH}",
     )
 
+    harbor = subparsers.add_parser(
+        "harbor",
+        help="Run a standard Harbor coding-agent benchmark with the current SCA wheel.",
+    )
+    harbor.add_argument(
+        "--dataset",
+        default=DEFAULT_HARBOR_DATASET,
+        help=f"Harbor dataset reference. Default: {DEFAULT_HARBOR_DATASET}",
+    )
+    harbor.add_argument(
+        "--model",
+        required=True,
+        help="Harbor provider/model identifier, for example deepseek/deepseek-v4-pro.",
+    )
+    harbor.add_argument(
+        "--n-concurrent",
+        type=int,
+        default=4,
+        help="Number of concurrent Harbor trials. Default: 4",
+    )
+    harbor.add_argument(
+        "--wheel",
+        type=Path,
+        default=None,
+        help="Use an existing SCA wheel instead of building the current checkout.",
+    )
+    harbor.add_argument(
+        "--wheel-dir",
+        type=Path,
+        default=Path("tmp") / "harbor-wheel",
+        help="Directory for the automatically built wheel.",
+    )
+    harbor.add_argument(
+        "harbor_args",
+        nargs=argparse.REMAINDER,
+        help="Arguments after `--` are forwarded to `harbor run`.",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "prepare":
@@ -85,12 +124,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "check":
-        results = evaluate_all(args.candidate_root)
-        print_results(results)
-        return 0 if all(result.passed for result in results) else 1
+        check_results = evaluate_all(args.candidate_root)
+        print_results(check_results)
+        return 0 if all(result.passed for result in check_results) else 1
 
     if args.command == "run":
-        results = asyncio.run(
+        run_results = asyncio.run(
             run_eval_suite(
                 candidate_root=args.candidate_root,
                 model=args.model,
@@ -98,8 +137,8 @@ def main(argv: list[str] | None = None) -> int:
                 prepare=not args.no_prepare,
             )
         )
-        print_run_results(results, args.results_path)
-        return 0 if all(result.passed for result in results) else 1
+        print_run_results(run_results, args.results_path)
+        return 0 if all(result.passed for result in run_results) else 1
 
     if args.command == "compare":
         try:
@@ -109,6 +148,28 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"Wrote eval comparison to {output_path}")
         return 0
+
+    if args.command == "harbor":
+        from core.config import load_runtime_environment
+
+        from .harbor_runner import HarborSetupError, run_harbor
+
+        load_runtime_environment(Path.cwd())
+        extra_args = list(args.harbor_args)
+        if extra_args[:1] == ["--"]:
+            extra_args = extra_args[1:]
+        try:
+            return run_harbor(
+                dataset=args.dataset,
+                model=args.model,
+                concurrency=args.n_concurrent,
+                wheel=args.wheel,
+                wheel_dir=args.wheel_dir,
+                extra_args=extra_args,
+            )
+        except (HarborSetupError, ValueError) as error:
+            print(f"Error: {error}")
+            return 1
 
     parser.error(f"unknown command: {args.command}")
     return 2
