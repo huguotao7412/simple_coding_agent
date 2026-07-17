@@ -5,11 +5,20 @@ import asyncio
 import json
 import os
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from cli.main import build_planner
 from cli.report import RunReport
+from core.execution.assessment import TaskAssessor
+from core.execution.models import (
+    ExecutionStrategy,
+    TaskAssessment,
+    TaskComplexity,
+    TaskIntent,
+    TaskRisk,
+)
 from evals.harbor_support import SUMMARY_FILENAME, TRACE_FILENAME
 from evals.run_evals import _event_to_trace_record
 
@@ -17,6 +26,47 @@ from evals.run_evals import _event_to_trace_record
 DEFAULT_WORKSPACE = Path("/app")
 DEFAULT_AGENT_LOG_DIR = Path("/logs/agent")
 DEFAULT_ARTIFACT_DIR = Path("/logs/artifacts/sca")
+
+
+class HarborTaskAssessor(TaskAssessor):
+    """Use a single Coder Actor for isolated benchmark repository tasks."""
+
+    def assess(self, prompt: str) -> TaskAssessment:
+        assessment = super().assess(prompt)
+        return replace(
+            assessment,
+            intent=TaskIntent.CODE_CHANGE,
+            complexity=TaskComplexity.MEDIUM,
+            risk=TaskRisk.LOW,
+            strategy=ExecutionStrategy.SINGLE_ACTOR,
+            reasons=(
+                "Harbor benchmark tasks run in disposable isolated repositories",
+                "benchmark issues should be solved by one focused Coder Actor",
+                "selected single_actor for Harbor adapter",
+            ),
+            explicit_paths=(),
+            max_actors=1,
+            verifier_recommended=False,
+            requires_human_approval=False,
+        )
+
+
+def build_harbor_task_prompt(instruction: str) -> str:
+    """Frame benchmark issues as repository-changing coding tasks for SCA."""
+    stripped = instruction.strip()
+    return (
+        "You are running inside an automated coding benchmark task repository.\n\n"
+        "Implement the necessary code changes in the current repository to resolve "
+        "the issue below. Do not stop at explaining the cause. Modify the source "
+        "files, preserve unrelated behavior, and run the most relevant tests or "
+        "checks you can before finishing. Leave a concise final summary of the "
+        "files changed and the verification result.\n\n"
+        "Planner instruction: immediately create exactly one focused Coder subtask "
+        "and delegate it. Do not perform extended Planner-side scouting for this "
+        "benchmark issue.\n\n"
+        "Benchmark issue:\n"
+        f"{stripped}\n"
+    )
 
 
 async def run_harbor_agent(
@@ -39,8 +89,13 @@ async def run_harbor_agent(
 
     with trace_path.open("w", encoding="utf-8") as trace_file:
         try:
-            planner = build_planner(str(workspace), model=model)
-            async for event in planner.run_stream(instruction):
+            planner = build_planner(
+                str(workspace),
+                model=model,
+                task_assessor=HarborTaskAssessor(workspace),
+            )
+            task_prompt = build_harbor_task_prompt(instruction)
+            async for event in planner.run_stream(task_prompt):
                 report.observe(event)
                 record = _event_to_trace_record(event)
                 record["elapsed_ms"] = int((time.perf_counter() - started) * 1000)

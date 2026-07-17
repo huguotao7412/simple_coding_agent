@@ -9,7 +9,11 @@ import pytest
 
 from evals.harbor_runner import build_harbor_command
 from evals.cli import main as eval_cli_main
-from evals.harbor_entrypoint import run_harbor_agent
+from evals.harbor_entrypoint import (
+    HarborTaskAssessor,
+    build_harbor_task_prompt,
+    run_harbor_agent,
+)
 from evals.harbor_support import (
     HARBOR_AGENT_IMPORT,
     apply_summary_to_context,
@@ -17,6 +21,8 @@ from evals.harbor_support import (
     load_run_summary,
     normalize_harbor_model,
 )
+from core.execution.assessment import TaskAssessor
+from core.execution.models import ExecutionStrategy, TaskComplexity, TaskIntent, TaskRisk
 
 
 def test_normalize_harbor_model_strips_provider_prefix():
@@ -107,6 +113,32 @@ def test_build_harbor_command_uses_import_path_agent():
     assert command[-2:] == ["--include-task-name", "demo"]
 
 
+def test_harbor_prompt_frames_issue_as_code_change(tmp_path: Path):
+    prompt = build_harbor_task_prompt(
+        "[Bug]: Connection failed\n\nCan anyone tell me why this happens?"
+    )
+
+    assert "Implement the necessary code changes" in prompt
+    assert "Can anyone tell me why this happens?" in prompt
+    assert TaskAssessor(tmp_path).assess(prompt).intent is TaskIntent.CODE_CHANGE
+
+
+def test_harbor_task_assessor_uses_single_coder_for_benchmark_issue(tmp_path: Path):
+    prompt = build_harbor_task_prompt(
+        "[Bug]: broken\n"
+        "Traceback in litellm/llms/vertex_ai/gemini/foo.py and tests/a/b.py"
+    )
+
+    assessment = HarborTaskAssessor(tmp_path).assess(prompt)
+
+    assert assessment.intent is TaskIntent.CODE_CHANGE
+    assert assessment.strategy is ExecutionStrategy.SINGLE_ACTOR
+    assert assessment.complexity is TaskComplexity.MEDIUM
+    assert assessment.risk is TaskRisk.LOW
+    assert assessment.max_actors == 1
+    assert assessment.requires_human_approval is False
+
+
 def test_harbor_cli_loads_runtime_environment(monkeypatch, tmp_path: Path):
     loaded: list[Path] = []
     monkeypatch.chdir(tmp_path)
@@ -124,8 +156,13 @@ def test_harbor_entrypoint_writes_trace_summary_and_report(monkeypatch, tmp_path
     from core.events import AgentEvent
 
     class FakePlanner:
+        def __init__(self, task_assessor):
+            self.task_assessor = task_assessor
+
         async def run_stream(self, instruction: str):
-            assert instruction == "Fix the repository"
+            assert isinstance(self.task_assessor, HarborTaskAssessor)
+            assert "Implement the necessary code changes" in instruction
+            assert "Benchmark issue:\nFix the repository" in instruction
             yield AgentEvent(type="tool_call", tool_name="read", tool_args={"path": "app.py"})
             yield AgentEvent(
                 type="token_stats",
@@ -137,7 +174,7 @@ def test_harbor_entrypoint_writes_trace_summary_and_report(monkeypatch, tmp_path
 
     monkeypatch.setattr(
         "evals.harbor_entrypoint.build_planner",
-        lambda workspace, model=None: FakePlanner(),
+        lambda workspace, model=None, task_assessor=None: FakePlanner(task_assessor),
     )
     workspace = tmp_path / "workspace"
     logs = tmp_path / "logs"

@@ -20,10 +20,25 @@ class ReadOutlineTool(BaseTool):
             "type": "string",
             "description": "Absolute or workspace-relative path to the file.",
         },
+        "offset": {
+            "type": "integer",
+            "description": "Optional 1-based line number to center the outline around.",
+        },
+        "limit": {
+            "type": "integer",
+            "description": "Optional maximum number of outline lines to return.",
+        },
     }
     required_params = ["file_path"]
+    MAX_OUTLINE_LINES = 200
 
-    async def execute(self, file_path: str, workspace_dir: str = "") -> ToolResult:
+    async def execute(  # type: ignore[override]
+        self,
+        file_path: str,
+        workspace_dir: str = "",
+        offset: int | None = None,
+        limit: int | None = None,
+    ) -> ToolResult:
         if not os.path.isabs(file_path):
             file_path = os.path.join(workspace_dir, file_path)
 
@@ -39,7 +54,12 @@ class ReadOutlineTool(BaseTool):
 
         # --- Non-Python files: regex-based outline ---
         if not file_path.endswith(".py"):
-            return await self._regex_outline(file_path, rel_path)
+            return await self._regex_outline(
+                file_path,
+                rel_path,
+                offset=offset,
+                limit=limit,
+            )
 
         # --- Python files: AST-based outline ---
         try:
@@ -48,7 +68,13 @@ class ReadOutlineTool(BaseTool):
             tree = ast.parse(source)
         except SyntaxError as e:
             # Fall back to regex for syntactically invalid Python
-            return await self._regex_outline(file_path, rel_path, note=f"SyntaxError: {e}")
+            return await self._regex_outline(
+                file_path,
+                rel_path,
+                note=f"SyntaxError: {e}",
+                offset=offset,
+                limit=limit,
+            )
         except Exception as e:
             return ToolResult.fail(f"Cannot parse {rel_path}: {e}")
 
@@ -78,12 +104,16 @@ class ReadOutlineTool(BaseTool):
 
                 lines_out.append(f"  L{node.lineno:>5d}  {prefix:>11s}  {sig}{doc_summary}")
 
-        return ToolResult.ok("\n".join(lines_out))
+        return ToolResult.ok(self._slice_outline(lines_out, offset=offset, limit=limit))
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _build_signature(self, node: ast.AST, source: str) -> str:
+    def _build_signature(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+        source: str,
+    ) -> str:
         """Build a single-line signature for a function or class definition."""
         try:
             lines = source.splitlines()
@@ -91,20 +121,22 @@ class ReadOutlineTool(BaseTool):
             if hasattr(node, "body") and node.body:
                 body_start = node.body[0].lineno
                 end_line = body_start - 1 if body_start > node.lineno else node.lineno
-            elif hasattr(node, "end_lineno"):
+            elif node.end_lineno is not None:
                 end_line = node.end_lineno
             else:
                 end_line = node.lineno
             sig_lines = lines[start_line:end_line]
             return " ".join(line.strip() for line in sig_lines)[:200]
         except Exception:
-            return str(node.name)
+            return node.name
 
     async def _regex_outline(
         self,
         file_path: str,
         rel_path: str,
         note: str | None = None,
+        offset: int | None = None,
+        limit: int | None = None,
     ) -> ToolResult:
         """Fallback: regex-based outline for non-Python or broken Python files."""
         try:
@@ -135,4 +167,48 @@ class ReadOutlineTool(BaseTool):
         if len(lines_out) <= (2 if note else 1):
             lines_out.append("  (no recognizable symbols found)")
 
-        return ToolResult.ok("\n".join(lines_out[:200]))  # cap at 200 lines
+        return ToolResult.ok(self._slice_outline(lines_out, offset=offset, limit=limit))
+
+    def _slice_outline(
+        self,
+        lines_out: list[str],
+        *,
+        offset: int | None = None,
+        limit: int | None = None,
+    ) -> str:
+        if len(lines_out) <= 1:
+            return "\n".join(lines_out)
+
+        header = lines_out[0]
+        body = lines_out[1:]
+        max_lines = self.MAX_OUTLINE_LINES
+        if limit is not None:
+            max_lines = max(1, min(max_lines, int(limit)))
+
+        if offset is not None:
+            line_pattern = re.compile(r"\bL\s*(\d+)")
+            target = max(1, int(offset))
+            scored: list[tuple[int, int, str]] = []
+            for index, line in enumerate(body):
+                match = line_pattern.search(line)
+                line_number = int(match.group(1)) if match else target
+                scored.append((abs(line_number - target), index, line))
+            selected = [
+                line for _, _, line in sorted(scored)[:max_lines]
+            ]
+            selected.sort(key=lambda line: self._outline_line_number(line, target))
+            body = selected
+        elif len(body) > max_lines:
+            body = body[:max_lines]
+
+        omitted = len(lines_out) - 1 - len(body)
+        if omitted > 0:
+            body.append(
+                f"  ... [{omitted} outline entries omitted; refine offset/limit] ..."
+            )
+        return "\n".join([header, *body])
+
+    @staticmethod
+    def _outline_line_number(line: str, fallback: int) -> int:
+        match = re.search(r"\bL\s*(\d+)", line)
+        return int(match.group(1)) if match else fallback

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.runtime.conversation import ContextManager
+    from core.execution.assessment import TaskAssessor
     from core.planner import Planner
     from core.runs.context import RunContext
 
@@ -25,6 +26,7 @@ def build_planner(
     *,
     run_context: RunContext | None = None,
     context_manager: ContextManager | None = None,
+    task_assessor: TaskAssessor | None = None,
     high_risk_approved: bool = False,
 ) -> Planner:
     from core.config import load_runtime_environment
@@ -64,6 +66,7 @@ def build_planner(
         tools=tools,
         workspace_dir=workspace_dir,
         run_context=run_context or RunContext.create(),
+        task_assessor=task_assessor,
         high_risk_approved=high_risk_approved,
     )
 
