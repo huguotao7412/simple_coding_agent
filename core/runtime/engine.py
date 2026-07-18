@@ -20,6 +20,7 @@ from ..tools.base import BaseTool, ToolResult
 
 
 EXPLORATION_TOOLS = {"list_dir", "read", "read_outline", "search_codebase"}
+ACTOR_EXPLORATION_LIMIT = 8
 MUTATION_TOOLS = {
     "apply_patch",
     "edit",
@@ -111,6 +112,7 @@ class AgentRuntime:
         self._outline_reads_by_file: dict[str, int] = {}
         self._available_tool_names: set[str] = set()
         self._exploration_calls_without_mutation = 0
+        self._actor_exploration_locked = False
         self._planner_exploration_calls = 0
         self._delegation_calls = 0
         self._successful_mutations = 0
@@ -166,7 +168,7 @@ class AgentRuntime:
             self.ctx.add_tool_result(tool_call_id, planner_intervention)
             return tool_name, args, result, True
 
-        exploration_intervention = self._exploration_loop_intervention(tool_name)
+        exploration_intervention = self._exploration_loop_intervention(tool_name, args)
         if exploration_intervention:
             result = ToolResult.ok(exploration_intervention)
             self.ctx.add_tool_result(tool_call_id, exploration_intervention)
@@ -235,6 +237,7 @@ class AgentRuntime:
             return
         self._successful_mutations += 1
         self._exploration_calls_without_mutation = 0
+        self._actor_exploration_locked = False
 
     def _has_mutation_capability(self) -> bool:
         return bool(self._available_tool_names & MUTATION_TOOLS)
@@ -245,25 +248,69 @@ class AgentRuntime:
             return self.actor_id != "" and self._has_mutation_capability()
         return policy.strategy is not ExecutionStrategy.PLANNER_DIRECT
 
-    def _exploration_loop_intervention(self, tool_name: str) -> str:
+    def _exploration_loop_intervention(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+    ) -> str:
         if (
             not self.actor_id
             or self._successful_mutations
-            or tool_name not in EXPLORATION_TOOLS
             or not self._is_code_change_runtime()
             or not self._has_mutation_capability()
         ):
             return ""
-        self._exploration_calls_without_mutation += 1
-        if self._exploration_calls_without_mutation < 6:
+
+        is_exploration = tool_name in EXPLORATION_TOOLS
+        if tool_name in {"bash", "run"}:
+            is_exploration = self._is_source_reading_command(args.get("command"))
+        if not is_exploration:
             return ""
+
+        if not self._actor_exploration_locked:
+            self._exploration_calls_without_mutation += 1
+            if self._exploration_calls_without_mutation <= ACTOR_EXPLORATION_LIMIT:
+                if self._exploration_calls_without_mutation == ACTOR_EXPLORATION_LIMIT:
+                    self._actor_exploration_locked = True
+                return ""
         return (
-            "System Alert: You have spent enough calls exploring this code-change "
-            "task without making an edit. Stop broad scouting now. If one exact "
-            "source range is still missing, call read once for that range; otherwise "
-            "make the smallest complete change with edit_file/write_file/apply_patch, "
-            "then run a focused check."
+            "System Alert: The source-exploration allowance for this code-change "
+            "task is exhausted. Search/read tools and shell commands used only to "
+            "inspect files are temporarily unavailable. Use the context already "
+            "collected to make the smallest complete change with "
+            "edit_file/write_file/apply_patch. After a successful edit, source "
+            "inspection is available again; focused tests and diagnostics may run now."
         )
+
+    @staticmethod
+    def _is_source_reading_command(command: Any) -> bool:
+        if not isinstance(command, str) or not command.strip():
+            return False
+        source_readers = re.compile(
+            r"(?:^|[;&|]\s*)(?:"
+            r"cat|head|tail|less|more|sed\s+-n|grep|rg|find|ls|dir|tree|"
+            r"get-content|select-string|get-childitem"
+            r")\b",
+            flags=re.IGNORECASE,
+        )
+        return bool(source_readers.search(command.strip()))
+
+    def _tool_schemas_for_step(
+        self,
+        tool_schemas: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if (
+            not self.actor_id
+            or not self._actor_exploration_locked
+            or self._successful_mutations
+        ):
+            return tool_schemas
+        return [
+            schema
+            for schema in tool_schemas
+            if str(schema.get("function", {}).get("name") or schema.get("name") or "")
+            not in EXPLORATION_TOOLS
+        ]
 
     def _planner_exploration_intervention(self, tool_name: str) -> str:
         if (
@@ -647,7 +694,11 @@ class AgentRuntime:
             chat_task = asyncio.create_task(
                 self.llm.chat(
                     messages=self._payload_messages(),
-                    tools=tool_schemas if tool_schemas else None,
+                    tools=(
+                        self._tool_schemas_for_step(tool_schemas)
+                        if tool_schemas
+                        else None
+                    ),
                     on_token=on_token,
                 )
             )

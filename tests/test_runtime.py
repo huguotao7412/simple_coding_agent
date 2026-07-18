@@ -46,6 +46,19 @@ class FakeLLM:
         return self.responses.pop(0)
 
 
+class ToolRecordingLLM(FakeLLM):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.tool_names_by_call: list[set[str]] = []
+
+    async def chat(self, messages, tools=None, on_token=None):
+        self.tool_names_by_call.append({
+            str(schema.get("function", {}).get("name") or schema.get("name") or "")
+            for schema in (tools or [])
+        })
+        return await super().chat(messages, tools=tools, on_token=on_token)
+
+
 class EchoTool(BaseTool):
     name = "echo"
     description = "Echo a value."
@@ -142,6 +155,16 @@ class FakeEditTool(BaseTool):
 
     async def execute(self, **kwargs):
         return ToolResult.ok("Edited file.")
+
+
+class FakeRunTool(BaseTool):
+    name = "run"
+    description = "Run a command."
+    parameters = {"command": {"type": "string"}}
+    required_params = ["command"]
+
+    async def execute(self, **kwargs):
+        return ToolResult.ok("command output")
 
 
 class FakeNestedEventTool(BaseTool):
@@ -542,9 +565,9 @@ async def test_coder_runtime_redirects_long_exploration_to_editing():
                 f"search_{index}",
             )],
         }
-        for index in range(8)
+        for index in range(9)
     ]
-    llm = FakeLLM([
+    llm = ToolRecordingLLM([
         *calls,
         {
             "role": "assistant",
@@ -564,14 +587,78 @@ async def test_coder_runtime_redirects_long_exploration_to_editing():
         tools=[FakeSearchTool(), FakeEditTool()],
         workspace_dir=".",
         actor_id="task_coder",
-        max_steps=12,
+        max_steps=13,
     )
 
     result = await runtime.run("fix bug")
 
     assert result == "done"
     tool_messages = [message["content"] for message in ctx.messages if message["role"] == "tool"]
-    assert any("spent enough calls exploring" in message for message in tool_messages)
+    assert any("source-exploration allowance" in message for message in tool_messages)
+    assert "search_codebase" not in llm.tool_names_by_call[-2]
+
+
+@pytest.mark.asyncio
+async def test_coder_runtime_blocks_shell_source_reading_after_exploration_limit():
+    search_calls = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "search_codebase",
+                f'{{"query":"bug {index}"}}',
+                f"search_{index}",
+            )],
+        }
+        for index in range(8)
+    ]
+    llm = FakeLLM([
+        *search_calls,
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "run",
+                '{"command":"sed -n \'20,80p\' app.py"}',
+                "run_read_1",
+            )],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "run",
+                '{"command":"pytest -q tests/test_app.py"}',
+                "run_test_1",
+            )],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "edit_file",
+                '{"path":"app.py"}',
+                "edit_1",
+            )],
+        },
+        {"role": "assistant", "content": "done"},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[FakeSearchTool(), FakeRunTool(), FakeEditTool()],
+        workspace_dir=".",
+        actor_id="task_coder",
+        max_steps=13,
+    )
+
+    result = await runtime.run("fix bug")
+
+    assert result == "done"
+    tool_messages = [message["content"] for message in ctx.messages if message["role"] == "tool"]
+    assert any("source-exploration allowance" in message for message in tool_messages)
+    assert "command output" in tool_messages
 
 
 @pytest.mark.asyncio
