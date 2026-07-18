@@ -134,6 +134,17 @@ def test_read_only_request_stays_in_planner(tmp_path: Path):
     assert assessment.strategy is ExecutionStrategy.PLANNER_DIRECT
 
 
+@pytest.mark.parametrize("prompt", ["hello", "Hi!", "\u4f60\u597d", "\u5728\u5417\uff1f"])
+def test_small_talk_stays_in_planner(tmp_path: Path, prompt: str):
+    (tmp_path / ".sca").mkdir()
+    (tmp_path / ".sca" / "quality-gates.toml").write_text("gates = []\n", encoding="utf-8")
+
+    assessment = TaskAssessor(tmp_path).assess(prompt)
+
+    assert assessment.intent is TaskIntent.READ_ONLY
+    assert assessment.strategy is ExecutionStrategy.PLANNER_DIRECT
+
+
 def test_read_only_production_question_does_not_request_approval(tmp_path: Path):
     assessment = TaskAssessor(tmp_path).assess(
         "Explain the current production deployment configuration"

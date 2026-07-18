@@ -841,7 +841,7 @@ async def test_planner_stream_preserves_delegate_actor_update_and_token_stats():
         max_steps=3,
     )
 
-    events = [event async for event in planner.run_stream("hello")]
+    events = [event async for event in planner.run_stream("Fix app.py")]
     event_types = [event.type for event in events]
 
     assert "actor_update" in event_types
@@ -872,7 +872,7 @@ async def test_planner_stream_includes_nested_actor_events_once():
         max_steps=3,
     )
 
-    events = [event async for event in planner.run_stream("hello")]
+    events = [event async for event in planner.run_stream("Fix app.py")]
     tool_calls = [event for event in events if event.type == "tool_call"]
 
     assert nested_tool._run_context is planner.run_context

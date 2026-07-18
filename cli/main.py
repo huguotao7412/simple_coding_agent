@@ -7,6 +7,7 @@ import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from cli.encoding import configure_stdio_encoding
 from core.model_names import normalize_model_name
 
 if TYPE_CHECKING:
@@ -15,8 +16,7 @@ if TYPE_CHECKING:
     from core.planner import Planner
     from core.runs.context import RunContext
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
+configure_stdio_encoding()
 
 def _resolved_model(model: str | None) -> str:
     return normalize_model_name(model or os.getenv("SCA_MODEL"))

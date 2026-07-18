@@ -64,6 +64,29 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(_contains_term(text, term) for term in terms)
 
 
+def _is_small_talk(text: str) -> bool:
+    compact = re.sub(r"[\s.!?,;:\uFF0C\u3002\uFF01\uFF1F\u3001~\uFF5E]+", "", text)
+    greetings = {
+        "hello",
+        "hi",
+        "hey",
+        "thanks",
+        "thankyou",
+        "goodmorning",
+        "goodafternoon",
+        "goodevening",
+        "\u4f60\u597d",
+        "\u60a8\u597d",
+        "\u55e8",
+        "\u54c8\u55bd",
+        "\u54c8\u7f57",
+        "\u5728\u5417",
+        "\u8c22\u8c22",
+        "\u65e9\u4e0a\u597d",
+    }
+    return compact in greetings
+
+
 class TaskAssessor:
     """Create a bounded, deterministic assessment before Planner execution."""
 
@@ -244,6 +267,8 @@ class TaskAssessor:
             "给出建议", "制定计划",
         )
         has_change = _contains_any(text, change_terms)
+        if not has_change and _is_small_talk(text):
+            return TaskIntent.READ_ONLY
         if not has_change and _contains_any(text, read_only_terms):
             return TaskIntent.READ_ONLY
         if _contains_any(text, operations_terms):

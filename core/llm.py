@@ -156,9 +156,6 @@ class LLMClient:
         tool_call_buf: dict[int, dict] = {}
         provider_usage: dict[str, Any] | None = None
 
-        reasoning_started = False
-        content_started = False
-
         try:
             async for line in response.aiter_lines():
                 if not line.startswith("data: "):
@@ -190,19 +187,11 @@ class LLMClient:
                 if "reasoning_content" in delta and delta["reasoning_content"]:
                     token = delta["reasoning_content"]
                     reasoning_parts.append(token)
-                    if on_token:
-                        if not reasoning_started:
-                            on_token("> Thinking...\n> ")
-                            reasoning_started = True
-                        on_token(token.replace("\n", "\n> "))
 
                 if "content" in delta and delta["content"]:
                     token = delta["content"]
                     content_parts.append(token)
                     if on_token:
-                        if reasoning_started and not content_started:
-                            on_token("\n\n")
-                        content_started = True
                         on_token(token)
 
                 if "tool_calls" in delta:

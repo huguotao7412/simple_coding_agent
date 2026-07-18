@@ -30,3 +30,22 @@ async def test_parse_stream_preserves_provider_usage_chunk_without_choices():
         "completion_tokens": 2,
         "total_tokens": 13,
     }
+
+
+class FakeReasoningStreamingResponse:
+    async def aiter_lines(self):
+        yield 'data: {"choices":[{"delta":{"reasoning_content":"internal"}}]}'
+        yield 'data: {"choices":[{"delta":{"content":"visible"}}]}'
+        yield "data: [DONE]"
+
+
+@pytest.mark.asyncio
+async def test_parse_stream_does_not_emit_reasoning_tokens_to_callback():
+    client = LLMClient(api_key="test")
+    tokens: list[str] = []
+
+    result = await client._parse_stream(FakeReasoningStreamingResponse(), tokens.append)
+
+    assert result["reasoning_content"] == "internal"
+    assert result["content"] == "visible"
+    assert tokens == ["visible"]
