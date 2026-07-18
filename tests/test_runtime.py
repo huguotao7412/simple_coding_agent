@@ -9,6 +9,15 @@ import pytest
 from core.runtime.conversation import ContextManager
 from core.events import AgentEvent
 from core.actors.agent import ActorAgent
+from core.execution.models import (
+    ExecutionStrategy,
+    TaskAssessment,
+    TaskComplexity,
+    TaskIntent,
+    TaskRisk,
+    WorkspaceProfile,
+)
+from core.execution.policy import ExecutionPolicy
 from core.planner import Planner
 from core.runtime.engine import AgentRuntime, parse_tool_call
 from core.runs.context import RunContext
@@ -57,6 +66,20 @@ class CountingTool(EchoTool):
         return await super().execute(**kwargs)
 
 
+class OutlineTool(BaseTool):
+    name = "read_outline"
+    description = "Return an outline."
+    parameters = {
+        "file_path": {"type": "string"},
+        "offset": {"type": "integer"},
+        "limit": {"type": "integer"},
+    }
+    required_params = ["file_path"]
+
+    async def execute(self, **kwargs):
+        return ToolResult.ok("outline")
+
+
 class BlockingAfterToolLLM(FakeLLM):
     def __init__(self, tool_response):
         super().__init__([tool_response])
@@ -89,6 +112,36 @@ class FakeDelegateTool(BaseTool):
 
     async def execute(self, **kwargs):
         return ToolResult.ok("delegated")
+
+
+class FakeSearchTool(BaseTool):
+    name = "search_codebase"
+    description = "Fake search."
+    parameters = {"query": {"type": "string"}}
+    required_params = ["query"]
+
+    async def execute(self, **kwargs):
+        return ToolResult.ok("search results")
+
+
+class FakePatchTool(BaseTool):
+    name = "apply_patch"
+    description = "Fake patch."
+    parameters = {"task_id": {"type": "string"}}
+    required_params = ["task_id"]
+
+    async def execute(self, **kwargs):
+        return ToolResult.ok("Patch applied successfully.")
+
+
+class FakeEditTool(BaseTool):
+    name = "edit_file"
+    description = "Fake edit."
+    parameters = {"path": {"type": "string"}}
+    required_params = ["path"]
+
+    async def execute(self, **kwargs):
+        return ToolResult.ok("Edited file.")
 
 
 class FakeNestedEventTool(BaseTool):
@@ -127,6 +180,35 @@ def _named_tool_call(name: str, arguments: str, call_id: str = "call_1") -> dict
     tc["id"] = call_id
     tc["function"]["name"] = name
     return tc
+
+
+def _install_policy(
+    run_context: RunContext,
+    strategy: ExecutionStrategy = ExecutionStrategy.SINGLE_ACTOR,
+) -> None:
+    assessment = TaskAssessment(
+        intent=TaskIntent.CODE_CHANGE,
+        complexity=TaskComplexity.MEDIUM,
+        risk=TaskRisk.LOW,
+        strategy=strategy,
+        reasons=("test policy",),
+        explicit_paths=(),
+        workspace=WorkspaceProfile(
+            file_count=1,
+            source_file_count=1,
+            test_file_count=1,
+            top_level_dirs=(),
+            languages=("Python",),
+            has_git=True,
+            has_quality_gates=False,
+        ),
+        max_actors=1,
+        verifier_recommended=False,
+        requires_human_approval=False,
+    )
+    run_context.install_execution_policy(
+        ExecutionPolicy.from_assessment(assessment)
+    )
 
 
 @pytest.mark.asyncio
@@ -322,6 +404,174 @@ async def test_runtime_repeated_tool_call_triggers_circuit_breaker():
     assert result == "finished"
     tool_messages = [m for m in ctx.messages if m["role"] == "tool"]
     assert "Repeated tool call detected" in tool_messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_redirects_repeated_outline_reads_to_source_tool():
+    llm = FakeLLM([
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "read_outline",
+                '{"file_path":"large.py"}',
+                "outline_1",
+            )],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "read_outline",
+                '{"file_path":"large.py","offset":100,"limit":20}',
+                "outline_2",
+            )],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "read_outline",
+                '{"file_path":"large.py","offset":200,"limit":30}',
+                "outline_3",
+            )],
+        },
+        {"role": "assistant", "content": "finished"},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[OutlineTool()],
+        workspace_dir=".",
+        max_steps=5,
+    )
+
+    result = await runtime.run("inspect")
+
+    assert result == "finished"
+    tool_messages = [m for m in ctx.messages if m["role"] == "tool"]
+    assert "already been outlined twice" in tool_messages[-1]["content"]
+    assert "Call read" in tool_messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_single_actor_policy_allows_planner_scouting():
+    llm = FakeLLM([
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "search_codebase",
+                '{"query":"bug"}',
+                "search_1",
+            )],
+        },
+        {"role": "assistant", "content": "stopped"},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    run_context = RunContext.create(run_id="run_policy_scouting")
+    _install_policy(run_context)
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[FakeSearchTool(), FakeDelegateTool()],
+        workspace_dir=".",
+        run_context=run_context,
+        max_steps=4,
+    )
+
+    events = [event async for event in runtime.run_stream("fix bug")]
+
+    assert not [
+        event for event in events
+        if event.type == "policy_denied" and event.tool_name == "search_codebase"
+    ]
+    assert any(
+        event.type == "tool_result" and event.tool_name == "search_codebase"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_code_change_runtime_does_not_finish_before_mutation():
+    llm = FakeLLM([
+        {"role": "assistant", "content": "I found the issue."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "apply_patch",
+                '{"task_id":"task_1"}',
+                "patch_1",
+            )],
+        },
+        {"role": "assistant", "content": "patched"},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    run_context = RunContext.create(run_id="run_requires_patch")
+    _install_policy(run_context)
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[FakePatchTool()],
+        workspace_dir=".",
+        run_context=run_context,
+        max_steps=5,
+    )
+
+    result = await runtime.run("fix bug")
+
+    assert result == "patched"
+    assert any(
+        message["role"] == "system"
+        and "no successful edit/write/apply_patch action" in str(message["content"])
+        for message in ctx.messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_coder_runtime_redirects_long_exploration_to_editing():
+    calls = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "search_codebase",
+                f'{{"query":"bug {index}"}}',
+                f"search_{index}",
+            )],
+        }
+        for index in range(8)
+    ]
+    llm = FakeLLM([
+        *calls,
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "edit_file",
+                '{"path":"app.py"}',
+                "edit_1",
+            )],
+        },
+        {"role": "assistant", "content": "done"},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[FakeSearchTool(), FakeEditTool()],
+        workspace_dir=".",
+        actor_id="task_coder",
+        max_steps=12,
+    )
+
+    result = await runtime.run("fix bug")
+
+    assert result == "done"
+    tool_messages = [message["content"] for message in ctx.messages if message["role"] == "tool"]
+    assert any("spent enough calls exploring" in message for message in tool_messages)
 
 
 @pytest.mark.asyncio

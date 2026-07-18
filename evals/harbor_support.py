@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from core.model_names import normalize_model_name
+
 
 SUMMARY_FILENAME = "sca-run.json"
 TRACE_FILENAME = "run-trace.jsonl"
@@ -31,10 +33,9 @@ def normalize_harbor_model(model_name: str | None) -> str:
     """Translate Harbor's provider/model identifier to the SCA model name."""
     if not model_name or not model_name.strip():
         raise ValueError("Harbor must provide a non-empty model name")
-    normalized = model_name.strip()
-    if "/" in normalized:
-        _, normalized = normalized.split("/", 1)
-    if not normalized:
+    try:
+        normalized = normalize_model_name(model_name)
+    except ValueError:
         raise ValueError(f"invalid Harbor model name: {model_name!r}")
     return normalized
 

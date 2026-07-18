@@ -63,15 +63,15 @@ Actors own execution. Each Actor receives one concrete task plus scoped context,
 
 ## Execution Policy and Budget Boundary
 
-`ExecutionPolicy` defines Actor topology and roles, required quality gates, high-risk approval, and budgets for Planner/Actor steps, model calls, total tokens, failed tool calls, repairs, and active wall time. Tool calls cannot override this immutable task policy.
+`ExecutionPolicy` defines Actor topology and roles, required quality gates, high-risk approval, and budgets for Planner/Actor steps, model calls, total tokens, failed tool calls, Actor start attempts, repairs, and active wall time. Tool calls cannot override this immutable task policy.
 
-One lock-protected `RunBudgetLedger` is shared by Planner and all nested Actors. Model calls reserve capacity before dispatch and provider usage is charged after the response; a response that crosses the token limit is not allowed to drive tool execution. Delegation atomically reserves Actor capacity and distinguishes started roles from successfully completed roles, so a failed Scout cannot unlock a later Coder. `scout_then_coder` and `scout_then_dag` dependency shapes are enforced in `DelegateTool`, not left to prompt compliance.
+One lock-protected `RunBudgetLedger` is shared by Planner and all nested Actors. Model calls reserve capacity before dispatch and provider usage is charged after the response; a response that crosses the token limit is not allowed to drive tool execution. Delegation atomically reserves Actor capacity and distinguishes active Actor slots, start attempts, and successfully completed roles, so bootstrap failure can be retried without becoming an unlimited loop. `scout_then_coder` and `scout_then_dag` dependency shapes are enforced in `DelegateTool`, not left to prompt compliance.
 
 Policy and consumption snapshots are stored in `RunCheckpoint`. Resume continues with the original policy and cumulative consumption, while process downtime is excluded from active wall time. Legacy checkpoints without these fields remain loadable. Interactive REPL turns receive fresh task policy scopes; durable non-interactive Runs cannot be reclassified during resume, although an external CLI approval may satisfy a previously missing high-risk authorization.
 
 Policy and budget failures are fail-closed and emit `policy_denied` or `budget_exhausted`. This orchestration layer complements rather than replaces role tool allowlists, worktrees, sandboxing, path boundaries, and destructive-command guards. See the [execution policy plan](docs/plans/2026-07-15-enforced-execution-policy.md) for defaults and trade-offs.
 
-Merging into the main workspace is policy protected as well. `ApplyPatchTool` requires a completed Coder task and an exact match with the full diff held in task state; `coder_with_gates` additionally requires recorded passing verification evidence. A model cannot bypass the Actor/verification boundary by inventing a task ID or constructing its own diff.
+Merging into the main workspace is policy protected as well. `ApplyPatchTool` requires a completed Coder task and an exact match with the full non-empty diff held in task state; `coder_with_gates` additionally requires recorded passing verification evidence. A model cannot bypass the Actor/verification boundary by inventing a task ID, constructing its own diff, or applying an empty patch as a fake success.
 
 ## Delegation Execution Boundary
 
@@ -89,9 +89,9 @@ flowchart LR
     WORKTREE --> ARTIFACT["Patch artifact store"]
 ```
 
-`DelegateTool` owns validation, DAG readiness, concurrency, dependency blocking, task-state transitions, exception isolation, and result rendering. It communicates through immutable `ActorTaskSpec` and `ActorExecutionResult` values.
+`DelegateTool` owns validation, DAG readiness, concurrency, dependency blocking, task-state transitions, exception isolation, and result rendering. It communicates through immutable `ActorTaskSpec` and `ActorExecutionResult` values. If every delegated task fails or becomes blocked, the outer tool result is a failure; mixed results report structured done/failed/blocked counts.
 
-`WorktreeActorExecutor` owns context injection, one-time orphan cleanup, worktree setup, dependency baselines, MCP startup and shutdown, Actor construction, diff extraction, artifact persistence, and worktree cleanup. Context file paths are resolved against both the main workspace and Actor worktree before any pre-MCP read or copy, preventing absolute-path and `..` traversal from bypassing the tool policy.
+`WorktreeActorExecutor` owns context injection, one-time orphan cleanup, worktree setup, dependency baselines, optional MCP startup and shutdown, Actor construction, diff extraction, artifact persistence, and worktree cleanup. Context file paths are resolved against both the main workspace and Actor worktree before any pre-MCP read or copy, preventing absolute-path and `..` traversal from bypassing the tool policy. Actor failures include a category such as `environment/bootstrap failure`, `tool provider failure`, `model failure`, `policy denial`, `code/test failure`, or `verification failure`.
 
 ## A2A_lite Communication Contract
 
@@ -153,17 +153,22 @@ Full Actor patches are retained outside the target workspace under the per-user 
 
 ## MCP Tool Boundary
 
-Actor tools are served through MCP providers bound to the Actor worktree:
+Actor tools are served through a provider bound to the Actor worktree. The wheel contains a Python local baseline that does not require Node.js, npm, npx, or `node_modules`:
 
-- filesystem MCP server for file operations
-- bash MCP server for shell execution
-- local helper tools for code search, outlines, and directory listing
+- `list_dir`
+- `search_codebase`
+- `read`
+- `edit_file`
+- `write_file`
+- `run`
 
-The provider sets the MCP subprocess current working directory to the Actor worktree and performs defense-in-depth path validation for absolute filesystem paths. Actor roles receive different allowlists. The allowlist filters schemas for model guidance and is checked again inside `call_tool()` before local or MCP dispatch, so a directly constructed hidden tool call is denied.
+MCP filesystem and bash servers can add richer tools when their Node binaries are available, but they are optional enhancements. If an MCP server cannot start and the local baseline covers the required capability, the provider emits a warning and continues. If the baseline itself is missing, Actor startup fails before the first Actor model call.
 
-MCP server packages are pinned in `package.json`. At runtime the provider prefers local `node_modules/.bin` executables and falls back to `npx --no-install <package>@<version>`, avoiding unpinned runtime downloads.
+The provider sets any MCP subprocess current working directory to the Actor worktree and performs defense-in-depth path validation for absolute filesystem paths. Actor roles receive different allowlists. The allowlist filters schemas for model guidance and is checked again inside `call_tool()` before local or MCP dispatch, so a directly constructed hidden tool call is denied.
 
-Before routing commands to bash MCP, the provider rejects destructive shell patterns such as recursive delete, `git reset --hard`, and `git clean -fd`. These failures are returned as ordinary tool results so the Actor can report the blocked operation instead of mutating the workspace.
+MCP server packages are pinned in `package.json`. At runtime the provider prefers local `node_modules/.bin` executables and skips unavailable MCP commands instead of making baseline coding ability depend on runtime npm downloads.
+
+Before routing commands to local `run` or bash MCP, the provider rejects destructive shell patterns such as recursive delete, `git reset --hard`, and `git clean -fd`. Non-zero shell exits return failed `ToolResult` values with bounded output so reports match real command outcomes.
 
 ## Sandbox Execution Boundary
 
@@ -261,6 +266,10 @@ headless `sca-harbor-agent` entrypoint against the discovered task repository.
 Harbor owns task setup, outer isolation, hidden verification, concurrency, and
 result aggregation. The
 agent uses its local command backend inside that already-isolated environment.
+The adapter does not force a strategy, Actor topology, Planner tool order, or
+benchmark-specific repair recipe; those decisions stay in the same core
+TaskAssessor, Planner, ExecutionPolicy, Actor runtime, and tool system used by
+the CLI and Web entry points.
 
 The adapter writes SCA runtime state below `/logs/artifacts/sca`, a JSONL event
 trace to `/logs/agent/run-trace.jsonl`, and a portable summary to

@@ -12,7 +12,7 @@ Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重
 - 运行时安全控制：最大步数、重复动作熔断、上下文压缩。
 - Run 级任务状态和关联 ID，不再依赖进程级 Planner 全局状态。
 - Planner/Actor 编排，以及在执行入口强制校验的角色工具 allowlist。
-- MCP 文件和 shell 工具集成，并绑定到 Actor worktree。
+- Actor 具备不依赖 Node 的基础文件、搜索、编辑和运行工具，MCP 作为可选增强绑定到 Actor worktree。
 - 使用 git worktree 隔离委派给 Actor 的子任务。
 - 使用确定性项目质量门禁与有界自动修复验证 Coder 产出。
 - 依赖任务的 diff 会作为下游 Actor 的 baseline，Verifier 能验证真实 Coder 改动。
@@ -141,11 +141,11 @@ pipx upgrade simple-coding-agent
 pipx uninstall simple-coding-agent
 ```
 
-仍需安装 Node.js 18+。开发 checkout 优先使用仓库 `node_modules`；用户级安装首次启动 Actor 时，`npx` 会下载并缓存代码中固定版本的 MCP 文件/shell 服务。
+Node.js 18+ 只在需要增强型 MCP Actor 工具时才需要。wheel 自带 Python 基础工具：`list_dir`、`search_codebase`、`read`、`edit_file`、`write_file` 和 `run`，因此基本编码能力不依赖 `npm`、`npx` 或 `node_modules`。
 
 ## 开发安装
 
-需要 Python 3.12+。如果使用 MCP Actor 工具，还需要 Node.js 18+。
+需要 Python 3.12+。只有在开发时使用可选 MCP Actor 工具服务，才需要 Node.js 18+。
 
 ```powershell
 python -m venv .venv
@@ -331,9 +331,10 @@ sca-eval harbor --model deepseek/deepseek-v4-pro
 adapter 也统一使用 Python 3.12。
 
 `sca-eval harbor` 会把当前 checkout 构建成 wheel，在每个 Harbor 任务容器中
-安装同一个构建产物，自动发现任务仓库后以 headless 模式运行 SCA，并将 token
-统计、JSONL trace、final report 和 Actor artifacts 写入 Harbor job。数据集选择、
-参数透传和建议的 nightly/release 运行节奏见 `evals/README.md`。
+安装同一个构建产物，自动发现任务仓库后以 headless 模式运行与 CLI/Web 相同的
+SCA 核心，并将 token 统计、JSONL trace、final report 和 Actor artifacts 写入
+Harbor job。adapter 不强制 benchmark 专用策略或工具顺序。数据集选择、参数透传
+和建议的 nightly/release 运行节奏见 `evals/README.md`。
 
 ## CLI 事件透明性
 
@@ -361,6 +362,8 @@ eval runner 会把同一条事件流写成 JSONL trace，方便调试、复盘�
 - Actor 任务使用独立 Git worktree；非 Git 和 dirty Git 工作区会先快照到临时影子仓库。
 - 影子工作区合并会比较 patch 涉及文件的哈希，拒绝覆盖用户的并发修改。
 - 下游 Actor 会接收上游 diff baseline，避免 Verifier 验证空代码。
+- MCP 服务不可用时会降级到 Python 基础工具；基础工具缺失则在 Actor 首次模型调用前快速失败。
+- Actor shell 非零退出会作为失败 ToolResult 返回。
 - Actor 角色 allowlist 会在本地或 MCP 工具真正执行前再次强制校验。
 - E2B 模式让 Actor shell 与确定性 verification 共用同一个 fail-closed 远程后端。
 - 已落盘的 root tool-call 结果会在恢复时复用，避免 checkpoint 之后重复执行。
@@ -380,7 +383,7 @@ SQLite checkpoint 也不能与任意 shell、文件系统或网络副作用组�
 对可信运行时边界执行类型检查：
 
 ```powershell
-.\.venv\Scripts\python.exe -m mypy core/execution core/sandbox core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/verification core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py core/tools/sandbox_run.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy
 ```
 
 编译检查：

@@ -8,6 +8,8 @@ from typing import Any
 
 import httpx
 
+from .model_names import DEFAULT_MODEL, normalize_model_name
+
 try:
     from deepseek_tokenizer import ds_token
 except ImportError:  # pragma: no cover
@@ -23,12 +25,12 @@ class LLMClient:
         self,
         api_key: str,
         base_url: str = "https://api.deepseek.com",
-        model: str = "deepseek-v4-pro",
+        model: str = DEFAULT_MODEL,
         max_tokens: int = 128000,
     ):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
-        self.model = model
+        self.model = normalize_model_name(model)
         self.max_tokens = max_tokens
         self._tokenizer = ds_token
 

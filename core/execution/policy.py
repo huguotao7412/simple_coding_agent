@@ -29,6 +29,7 @@ class ExecutionBudget:
     max_wall_time_seconds: float
     max_failed_tool_calls: int
     max_repair_attempts: int
+    max_actor_start_attempts: int = 0
 
     def __post_init__(self) -> None:
         integer_values = (
@@ -38,6 +39,7 @@ class ExecutionBudget:
             self.max_total_tokens,
             self.max_failed_tool_calls,
             self.max_repair_attempts,
+            self.max_actor_start_attempts,
         )
         if any(value < 0 for value in integer_values):
             raise ValueError("execution budget values must not be negative")
@@ -57,15 +59,23 @@ class ExecutionBudget:
             max_wall_time_seconds=float(value["max_wall_time_seconds"]),
             max_failed_tool_calls=int(value["max_failed_tool_calls"]),
             max_repair_attempts=int(value["max_repair_attempts"]),
+            max_actor_start_attempts=int(value.get("max_actor_start_attempts", 0)),
         )
 
 
 _BUDGETS: dict[ExecutionStrategy, ExecutionBudget] = {
-    ExecutionStrategy.PLANNER_DIRECT: ExecutionBudget(20, 0, 20, 80_000, 300, 5, 0),
-    ExecutionStrategy.SINGLE_ACTOR: ExecutionBudget(40, 30, 50, 160_000, 900, 10, 2),
-    ExecutionStrategy.CODER_WITH_GATES: ExecutionBudget(40, 30, 50, 160_000, 900, 10, 2),
-    ExecutionStrategy.SCOUT_THEN_CODER: ExecutionBudget(50, 40, 90, 280_000, 1500, 16, 2),
-    ExecutionStrategy.SCOUT_THEN_DAG: ExecutionBudget(60, 60, 180, 600_000, 2700, 30, 3),
+    ExecutionStrategy.PLANNER_DIRECT: ExecutionBudget(20, 0, 20, 80_000, 300, 5, 0, 0),
+    # A 30-step coding loop commonly needs 12-18 model turns. Because the ledger
+    # counts provider-billed prompt tokens on every turn, 160k could terminate a
+    # healthy run around turn 10 even with only a ~16k live context.
+    ExecutionStrategy.SINGLE_ACTOR: ExecutionBudget(
+        40, 30, 50, 240_000, 900, 10, 2, 2
+    ),
+    ExecutionStrategy.CODER_WITH_GATES: ExecutionBudget(
+        40, 30, 50, 240_000, 900, 10, 2, 2
+    ),
+    ExecutionStrategy.SCOUT_THEN_CODER: ExecutionBudget(50, 40, 90, 280_000, 1500, 16, 2, 4),
+    ExecutionStrategy.SCOUT_THEN_DAG: ExecutionBudget(60, 60, 180, 600_000, 2700, 30, 3, 8),
 }
 
 
@@ -179,6 +189,7 @@ class BudgetSnapshot:
     total_tokens: int = 0
     failed_tool_calls: int = 0
     actors_started: int = 0
+    actor_start_attempts: int = 0
     actor_roles: tuple[str, ...] = ()
     completed_actor_roles: tuple[str, ...] = ()
     repair_attempts: int = 0
@@ -190,6 +201,7 @@ class BudgetSnapshot:
             self.total_tokens,
             self.failed_tool_calls,
             self.actors_started,
+            self.actor_start_attempts,
             self.repair_attempts,
         )
         if any(value < 0 for value in values) or self.active_wall_seconds < 0:
@@ -214,6 +226,7 @@ class BudgetSnapshot:
             total_tokens=int(value.get("total_tokens", 0)),
             failed_tool_calls=int(value.get("failed_tool_calls", 0)),
             actors_started=int(value.get("actors_started", 0)),
+            actor_start_attempts=int(value.get("actor_start_attempts", 0)),
             actor_roles=tuple(str(role) for role in raw_roles),
             completed_actor_roles=tuple(
                 str(role) for role in raw_completed_roles
@@ -300,6 +313,16 @@ class RunBudgetLedger:
     async def reserve_actors(self, roles: tuple[str, ...]) -> None:
         async with self._lock:
             self._check_wall_time()
+            attempts = self._snapshot.actor_start_attempts + len(roles)
+            attempt_limit = (
+                self.policy.budget.max_actor_start_attempts
+                or max(1, self.policy.max_actors)
+            )
+            if attempts > attempt_limit:
+                raise BudgetExceeded(
+                    "Run Actor start-attempt budget exhausted: "
+                    f"{attempts}/{attempt_limit}"
+                )
             total = self._snapshot.actors_started + len(roles)
             if total > self.policy.max_actors:
                 raise BudgetExceeded(
@@ -308,7 +331,21 @@ class RunBudgetLedger:
             self._snapshot = replace(
                 self._snapshot,
                 actors_started=total,
+                actor_start_attempts=attempts,
                 actor_roles=self._snapshot.actor_roles + roles,
+            )
+
+    async def release_actor_reservation(self, role: str) -> None:
+        async with self._lock:
+            roles = list(self._snapshot.actor_roles)
+            try:
+                roles.remove(role)
+            except ValueError:
+                return
+            self._snapshot = replace(
+                self._snapshot,
+                actors_started=max(0, self._snapshot.actors_started - 1),
+                actor_roles=tuple(roles),
             )
 
     async def claim_repair_attempt(self) -> None:

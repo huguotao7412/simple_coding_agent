@@ -1,9 +1,8 @@
 """MCP Tool Provider: manages MCP Server lifecycles for Actor agents.
 
-Each Actor gets its own MCPToolProvider bound to its worktree.
-In local mode two MCP Servers are spawned per Actor:
-  - @modelcontextprotocol/server-filesystem: file read/write/edit/search/list
-  - bash-mcp: shell command execution
+Each Actor gets its own MCPToolProvider bound to its worktree. The provider
+always exposes Python local baseline tools for read/search/list/edit/write/run.
+MCP servers are optional enhancements when their Node binaries are available.
 """
 
 from __future__ import annotations
@@ -12,6 +11,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -20,12 +20,20 @@ from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from ..tools import ListDirTool, ReadOutlineTool, SearchCodebaseTool
+from ..tools import (
+    EditFileTool,
+    ListDirTool,
+    ReadOutlineTool,
+    ReadTool,
+    SearchCodebaseTool,
+    WriteFileTool,
+)
 from ..tools.base import BaseTool, ToolResult
 from ..policy import ToolPolicy
 from ..events import AgentEvent
 from ..runs.context import RunContext
 from ..sandbox.contracts import SandboxBackend
+from ..sandbox.factory import create_sandbox_backend
 from ..tools.sandbox_run import SandboxRunTool
 
 logger = logging.getLogger(__name__)
@@ -59,9 +67,8 @@ DESTRUCTIVE_COMMAND_PATTERNS = [
 class MCPToolProvider:
     """Manage MCP server lifecycles and route tool calls.
 
-    Each Actor instance gets its own provider. The provider launches MCP
-    subprocesses with their current working directory bound to the Actor
-    worktree, fetches tool schemas, routes calls, and shuts everything down.
+    Each Actor instance gets its own provider. Local baseline tools are always
+    available; MCP subprocesses are launched only when their commands exist.
     """
 
     def __init__(
@@ -77,8 +84,11 @@ class MCPToolProvider:
         self._tool_schemas: list[dict[str, Any]] = []
         local_tools: list[BaseTool] = [
             SearchCodebaseTool(),
+            ReadTool(),
             ReadOutlineTool(),
             ListDirTool(),
+            EditFileTool(),
+            WriteFileTool(),
         ]
         self._local_tools = {tool.name: tool for tool in local_tools}
         self._failure_count: int = 0
@@ -87,12 +97,21 @@ class MCPToolProvider:
         self._policy = ToolPolicy.for_role("legacy", None)
         self._run_context = run_context
         self._actor_id = actor_id
-        self._sandbox_backend = sandbox_backend
+        self._sandbox_backend = sandbox_backend or create_sandbox_backend()
+        self._install_run_tool()
 
     def configure_sandbox(self, backend: SandboxBackend) -> None:
         if self._sessions:
             raise RuntimeError("sandbox backend must be configured before MCP startup")
         self._sandbox_backend = backend
+        self._install_run_tool()
+
+    def _install_run_tool(self) -> None:
+        self._local_tools["run"] = SandboxRunTool(
+            self._sandbox_backend,
+            run_context=self._run_context,
+            actor_id=self._actor_id,
+        )
 
     def set_policy(self, policy: ToolPolicy) -> None:
         """Set the execution policy used for both schemas and dispatch."""
@@ -110,14 +129,7 @@ class MCPToolProvider:
             tool_policy or ToolPolicy.for_role("actor", tool_allowlist)
         )
 
-        if self._sandbox_backend is not None and self._sandbox_backend.isolated:
-            await self._sandbox_backend.ensure_available()
-            run_tool = SandboxRunTool(
-                self._sandbox_backend,
-                run_context=self._run_context,
-                actor_id=self._actor_id,
-            )
-            self._local_tools[run_tool.name] = run_tool
+        await self._sandbox_backend.ensure_available()
 
         servers: list[tuple[str, list[str]]] = [
             (
@@ -138,6 +150,12 @@ class MCPToolProvider:
             ))
 
         for server_name, cmd_and_args in servers:
+            if not _command_available(cmd_and_args[0]):
+                await self._record_provider_warning(
+                    server_name,
+                    f"command not found: {cmd_and_args[0]}",
+                )
+                continue
             server_params = StdioServerParameters(
                 command=cmd_and_args[0],
                 args=cmd_and_args[1:],
@@ -145,23 +163,27 @@ class MCPToolProvider:
                 cwd=self._worktree_path,
             )
 
-            stdio_ctx = stdio_client(server_params)
-            read_stream, write_stream = await stdio_ctx.__aenter__()
-            self._stdio_ctxs.append(stdio_ctx)
+            try:
+                stdio_ctx = stdio_client(server_params)
+                read_stream, write_stream = await stdio_ctx.__aenter__()
+                self._stdio_ctxs.append(stdio_ctx)
 
-            session = await self._exit_stack.enter_async_context(
-                ClientSession(read_stream, write_stream)
-            )
-            await session.initialize()
+                session = await self._exit_stack.enter_async_context(
+                    ClientSession(read_stream, write_stream)
+                )
+                await session.initialize()
 
-            self._sessions[server_name] = session
-            logger.info(
-                "MCP server '%s' started for worktree %s",
-                server_name,
-                self._worktree_path,
-            )
+                self._sessions[server_name] = session
+                logger.info(
+                    "MCP server '%s' started for worktree %s",
+                    server_name,
+                    self._worktree_path,
+                )
+            except Exception as error:
+                await self._record_provider_warning(server_name, str(error))
 
         await self._build_routing_table()
+        self._assert_baseline_tools_available()
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """Return cached tool schemas in OpenAI function-calling format."""
@@ -323,6 +345,37 @@ class MCPToolProvider:
         if self._failure_count >= MAX_CONSECUTIVE_FAILURES:
             self._circuit_open = True
 
+    async def _record_provider_warning(self, server_name: str, error: str) -> None:
+        message = (
+            f"Optional MCP server '{server_name}' unavailable; continuing with "
+            f"local baseline tools. Cause: {error}"
+        )
+        logger.warning(message)
+        if self._run_context is not None:
+            await self._run_context.emit(AgentEvent(
+                type="tool_provider_warning",
+                content=message,
+                actor_id=self._actor_id,
+                task_id=self._actor_id,
+            ))
+
+    def _assert_baseline_tools_available(self) -> None:
+        required = {
+            "list_dir",
+            "search_codebase",
+            "read",
+            "edit_file",
+            "write_file",
+            "run",
+        }
+        available = {schema["function"]["name"] for schema in self._tool_schemas}
+        missing = sorted(required - available)
+        if missing:
+            raise RuntimeError(
+                "Critical local tool provider failure; missing baseline tools: "
+                + ", ".join(missing)
+            )
+
     def _translate_error(self, error_msg: str) -> str:
         for eng_key, readable_msg in MCP_ERROR_MAP.items():
             if eng_key.lower() in error_msg.lower():
@@ -350,6 +403,12 @@ def _node_bin_command(binary_name: str, package_spec: str) -> list[str]:
     # The package spec is pinned above, so npx can fetch/cache that exact tool
     # version on first use while development checkouts keep using local bins.
     return ["npx", "--yes", package_spec]
+
+
+def _command_available(command: str) -> bool:
+    if os.path.isabs(command) or os.sep in command or (os.altsep and os.altsep in command):
+        return os.path.exists(command)
+    return shutil.which(command) is not None
 
 
 def _extract_shell_command(args: dict[str, Any]) -> str:

@@ -196,6 +196,21 @@ def _verification_failure_message(report: VerificationReport) -> str:
     return "verification failed: " + ", ".join(failures)
 
 
+def _failure_category_for_phase(phase: str, error: Exception | str) -> str:
+    text = f"{phase}: {error}".lower()
+    if "worktree" in text or "baseline" in text or "sandbox startup" in text:
+        return "environment/bootstrap failure"
+    if "mcp" in text or "tool provider" in text or "baseline tools" in text:
+        return "tool provider failure"
+    if "policy" in text or "requires a non-empty" in text:
+        return "policy denial"
+    if "verification" in text:
+        return "verification failure"
+    if "model" in text or "llm" in text:
+        return "model failure"
+    return "code/test failure"
+
+
 class WorktreeActorExecutor:
     """Execute one Actor task inside a disposable Git worktree."""
 
@@ -536,6 +551,12 @@ class WorktreeActorExecutor:
                 task_id=spec.task_id,
                 status=status,
                 error=verification_error,
+                failure_category=(
+                    "verification failure"
+                    if status == "failed" and verification_error
+                    else ""
+                ),
+                startup_duration_ms=duration_ms,
                 files_modified=files_modified,
                 bugs_found=tuple(summary.bugs_found),
                 key_findings=summary.key_findings or "",
@@ -548,16 +569,20 @@ class WorktreeActorExecutor:
             )
         except Exception as error:
             duration_ms = int((time.monotonic() - start_time) * 1000)
+            failure_category = _failure_category_for_phase(phase, error)
             logger.error(
-                "actor_end task_id=%s duration_ms=%d outcome=failed error=%s",
+                "actor_end task_id=%s duration_ms=%d outcome=failed category=%s error=%s",
                 spec.task_id,
                 duration_ms,
+                failure_category,
                 str(error),
             )
             return ActorExecutionResult(
                 task_id=spec.task_id,
                 status="failed",
                 error=f"{phase}: {error}",
+                failure_category=failure_category,
+                startup_duration_ms=duration_ms,
                 key_findings=f"ERROR: {phase}: {error}",
             )
         finally:

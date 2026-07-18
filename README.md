@@ -14,7 +14,7 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - Planner/Actor orchestration with execution-time role tool authorization.
 - Versioned A2A_lite messages with automatic structured dependency handoffs.
 - Typed artifact references with integrity digests for Actor patches.
-- MCP-backed file and shell tools for isolated Actor execution.
+- Node-free baseline file/search/edit/run tools for Actor execution, with MCP as an optional enhancement.
 - Git worktree isolation for delegated Actor tasks.
 - Deterministic project quality gates with bounded automatic repair.
 - Full Actor patch artifacts in the per-user SCA state directory, outside the target workspace.
@@ -132,11 +132,11 @@ pipx upgrade simple-coding-agent
 pipx uninstall simple-coding-agent
 ```
 
-Node.js 18+ is still required. Development checkouts prefer repository-local `node_modules`; user-level installs let `npx` fetch and cache the code-pinned MCP filesystem/shell server versions on first Actor startup.
+Node.js 18+ is optional for enhanced MCP Actor tools. The wheel includes baseline Python tools for `list_dir`, `search_codebase`, `read`, `edit_file`, `write_file`, and `run`, so basic coding capability does not depend on `npm`, `npx`, or `node_modules`.
 
 ## Development Installation
 
-Requires Python 3.12+ and Node.js 18+ if you want MCP Actor tools.
+Requires Python 3.12+. Install Node.js 18+ only if you want optional MCP Actor tool servers during development.
 
 ```bash
 python -m venv .venv
@@ -311,8 +311,9 @@ The current safety model is pragmatic rather than magical:
 - shadow-workspace merges compare touched-file hashes and refuse to overwrite concurrent user changes
 - dependent Actor tasks receive upstream diffs as a committed worktree baseline
 - full Actor diffs are persisted as patch artifacts, while Planner context receives a compact preview
-- MCP server packages are pinned and launched from local `node_modules/.bin` when installed
-- destructive Actor shell commands such as recursive delete and hard reset are blocked before reaching bash MCP
+- MCP server packages are pinned and launched from local `node_modules/.bin` when installed; unavailable MCP servers degrade to the Python baseline tools
+- destructive Actor shell commands such as recursive delete and hard reset are blocked before local run or bash MCP
+- non-zero Actor shell exits are reported as failed tool results
 - E2B mode routes Actor shell and deterministic verification through one fail-closed remote backend
 - Actor role allowlists are enforced again immediately before local or MCP tool dispatch
 - committed root tool-call results are reused during recovery instead of being executed again
@@ -332,7 +333,7 @@ Run all tests:
 Type-check the trusted runtime boundary:
 
 ```bash
-.\.venv\Scripts\python.exe -m mypy core/execution core/sandbox core/actors/contracts.py core/policy.py core/events.py core/runs/models.py core/runs/store.py core/runs/sqlite_store.py core/runs/context.py core/runtime/engine.py core/actors/worktree.py core/verification core/planner.py core/actors/agent.py core/mcp/client.py core/tools/update_state.py core/tools/delegate.py core/tools/sandbox_run.py cli/report.py cli/runs.py cli/main.py evals/run_evals.py
+.\.venv\Scripts\python.exe -m mypy
 ```
 
 Compile-check Python modules:
@@ -402,11 +403,12 @@ Run these commands from a Python 3.12 environment; this is also the version used
 by the project CI and by the adapter inside Harbor task containers.
 
 `sca-eval harbor` builds the current checkout into a wheel, installs that exact
-artifact in each Harbor task container, discovers its task repository, runs SCA
-headlessly there, and exports
-token metadata, JSONL traces, final reports, and Actor artifacts to the Harbor
-job. See [evals/README.md](evals/README.md) for dataset selection, forwarded
-Harbor options, and the recommended nightly/release cadence.
+artifact in each Harbor task container, discovers its task repository, runs the
+same SCA core used by CLI/Web headlessly there, and exports token metadata,
+JSONL traces, final reports, and Actor artifacts to the Harbor job. The adapter
+does not force a benchmark-specific strategy or tool order. See
+[evals/README.md](evals/README.md) for dataset selection, forwarded Harbor
+options, and the recommended nightly/release cadence.
 
 ## Roadmap
 

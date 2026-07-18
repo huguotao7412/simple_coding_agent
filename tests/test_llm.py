@@ -5,6 +5,12 @@ import pytest
 from core.llm import LLMClient
 
 
+def test_llm_client_upgrades_deepseek_legacy_aliases_to_pro():
+    assert LLMClient(api_key="test", model="deepseek-chat").model == "deepseek-v4-pro"
+    assert LLMClient(api_key="test", model="deepseek/deepseek-reasoner").model == "deepseek-v4-pro"
+    assert LLMClient(api_key="test", model="deepseek-v4-flash").model == "deepseek-v4-flash"
+
+
 class FakeStreamingResponse:
     async def aiter_lines(self):
         yield 'data: {"choices":[{"delta":{"content":"ok"}}]}'

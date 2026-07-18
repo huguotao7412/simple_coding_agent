@@ -7,6 +7,8 @@ import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from core.model_names import normalize_model_name
+
 if TYPE_CHECKING:
     from core.runtime.conversation import ContextManager
     from core.execution.assessment import TaskAssessor
@@ -17,7 +19,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 def _resolved_model(model: str | None) -> str:
-    return model or os.getenv("SCA_MODEL") or "deepseek-v4-pro"
+    return normalize_model_name(model or os.getenv("SCA_MODEL"))
 
 
 def build_planner(

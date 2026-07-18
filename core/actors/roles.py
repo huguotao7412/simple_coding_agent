@@ -44,8 +44,8 @@ def _build_role_config() -> dict[ActorRole, RoleConfig]:
         ActorRole.SCOUT: RoleConfig(
             system_prompt=SCOUT_SYSTEM_PROMPT,
             tool_allowlist={
-                "list_dir", "read_outline", "search_codebase",
-                "read_file", "read_multiple_files", "list_directory",
+                "list_dir", "read", "read_outline", "search_codebase",
+                "read_file", "read_text_file", "read_multiple_files", "list_directory",
                 "directory_tree", "search_files", "get_file_info",
                 "list_allowed_directories",
             },
@@ -60,7 +60,8 @@ def _build_role_config() -> dict[ActorRole, RoleConfig]:
             system_prompt=VERIFIER_SYSTEM_PROMPT,
             tool_allowlist={
                 "list_dir",
-                "read_file", "read_multiple_files", "write_file", "edit_file",
+                "read", "read_file", "read_text_file", "read_multiple_files",
+                "write_file", "edit_file",
                 "create_directory", "list_directory", "directory_tree",
                 "get_file_info", "list_allowed_directories",
                 "run",

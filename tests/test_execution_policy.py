@@ -25,6 +25,7 @@ from core.runs.models import RunRecord
 from core.runs.sqlite_store import SQLiteRunStore
 from core.runtime.conversation import ContextManager
 from core.tools.delegate import DelegateTool
+from core.tools.update_state import UpdateStateTool
 from core.tools.base import BaseTool, ToolResult
 from core.tools.apply_patch import ApplyPatchTool
 from core.verification.models import VerificationConfig
@@ -100,6 +101,26 @@ class RecordingExecutor:
             task_id=spec.task_id,
             status="done",
             key_findings="done",
+        )
+
+
+class FailingExecutor:
+    def __init__(self, *, category: str = "code/test failure") -> None:
+        self.category = category
+        self.specs: list[ActorTaskSpec] = []
+
+    async def execute(
+        self,
+        spec: ActorTaskSpec,
+        run_context: RunContext,
+    ) -> ActorExecutionResult:
+        self.specs.append(spec)
+        return ActorExecutionResult(
+            task_id=spec.task_id,
+            status="failed",
+            error="boom",
+            failure_category=self.category,
+            key_findings="ERROR: boom",
         )
 
 
@@ -274,6 +295,8 @@ async def test_token_budget_crossing_discards_model_response(tmp_path: Path) -> 
     events = [event async for event in planner.run_stream("", resume=True)]
 
     assert any(event.type == "budget_exhausted" for event in events)
+    token_stats = next(event for event in events if event.type == "token_stats")
+    assert token_stats.prompt_tokens == 11
     assert not any(event.type == "done" for event in events)
     assert llm.calls == 1
 
@@ -387,6 +410,112 @@ async def test_planner_direct_policy_denies_delegate(tmp_path: Path) -> None:
     assert result.success is False
     assert "does not permit" in (result.error or "")
     assert executor.specs == []
+
+
+@pytest.mark.asyncio
+async def test_delegate_all_failed_returns_failed_result() -> None:
+    context = RunContext.create()
+    context.install_execution_policy(
+        _policy(
+            ExecutionStrategy.SINGLE_ACTOR,
+            max_actors=1,
+            roles=("coder",),
+        )
+    )
+    task_id = await context.state.add_task("implement")
+    tool = DelegateTool(
+        state=context.state,
+        run_context=context,
+        actor_executor=FailingExecutor(),
+    )
+
+    result = await tool.execute(subtasks=[{
+        "task_id": task_id,
+        "description": "implement",
+        "role": "coder",
+    }])
+
+    assert result.success is False
+    assert "0 done, 1 failed" in result.content
+
+
+@pytest.mark.asyncio
+async def test_failed_actor_task_cannot_be_changed_to_done_by_planner() -> None:
+    context = RunContext.create()
+    task_id = await context.state.add_task("implement")
+    await context.state.update_task(
+        task_id,
+        status="running",
+        assigned_actor=task_id,
+        actor_role="coder",
+    )
+    await context.state.update_task(task_id, status="failed")
+    tool = UpdateStateTool(context.state)
+
+    result = await tool.execute(
+        action="update_task",
+        task_id=task_id,
+        status="done",
+    )
+
+    assert result.success is False
+    assert "terminal status" in (result.error or "") or "failed -> done" in (
+        result.error or ""
+    )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_failure_releases_actor_slot_but_counts_attempt() -> None:
+    context = RunContext.create()
+    context.install_execution_policy(ExecutionPolicy(
+        strategy=ExecutionStrategy.SINGLE_ACTOR,
+        budget=ExecutionBudget(
+            max_planner_steps=10,
+            max_actor_steps=10,
+            max_model_calls=10,
+            max_total_tokens=100,
+            max_wall_time_seconds=60,
+            max_failed_tool_calls=2,
+            max_repair_attempts=1,
+            max_actor_start_attempts=2,
+        ),
+        max_actors=1,
+        allowed_actor_roles=("coder",),
+        require_quality_gates=False,
+        requires_human_approval=False,
+    ))
+    first_id = await context.state.add_task("first")
+    second_id = await context.state.add_task("second")
+    third_id = await context.state.add_task("third")
+    tool = DelegateTool(
+        state=context.state,
+        run_context=context,
+        actor_executor=FailingExecutor(category="tool provider failure"),
+    )
+
+    first = await tool.execute(subtasks=[{
+        "task_id": first_id,
+        "description": "first",
+        "role": "coder",
+    }])
+    second = await tool.execute(subtasks=[{
+        "task_id": second_id,
+        "description": "second",
+        "role": "coder",
+    }])
+    third = await tool.execute(subtasks=[{
+        "task_id": third_id,
+        "description": "third",
+        "role": "coder",
+    }])
+    consumed = await context.budget_ledger.snapshot()
+
+    assert first.success is False
+    assert second.success is False
+    assert third.success is False
+    assert "start-attempt budget exhausted" in (third.error or "")
+    assert consumed.actor_start_attempts == 2
+    assert consumed.actors_started == 0
 
 
 @pytest.mark.asyncio
@@ -519,14 +648,15 @@ async def test_apply_patch_requires_matching_verified_coder_provenance() -> None
         diff="",
         verification_passed=True,
     )
-    verified = await tool.execute(task_id=task_id)
+    verified_empty = await tool.execute(task_id=task_id)
 
     assert unverified.success is False
     assert unverified.policy_denied is True
     assert "quality gates" in (unverified.error or "")
     assert forged.success is False
     assert "does not match" in (forged.error or "")
-    assert verified.success is True
+    assert verified_empty.success is False
+    assert "empty" in (verified_empty.error or "")
 
 
 @pytest.mark.asyncio

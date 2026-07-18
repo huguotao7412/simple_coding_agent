@@ -5,20 +5,13 @@ import asyncio
 import json
 import os
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from cli.main import build_planner
 from cli.report import RunReport
 from core.execution.assessment import TaskAssessor
-from core.execution.models import (
-    ExecutionStrategy,
-    TaskAssessment,
-    TaskComplexity,
-    TaskIntent,
-    TaskRisk,
-)
+from core.model_names import normalize_model_name
 from evals.harbor_support import SUMMARY_FILENAME, TRACE_FILENAME
 from evals.run_evals import _event_to_trace_record
 
@@ -26,29 +19,6 @@ from evals.run_evals import _event_to_trace_record
 DEFAULT_WORKSPACE = Path("/app")
 DEFAULT_AGENT_LOG_DIR = Path("/logs/agent")
 DEFAULT_ARTIFACT_DIR = Path("/logs/artifacts/sca")
-
-
-class HarborTaskAssessor(TaskAssessor):
-    """Use a single Coder Actor for isolated benchmark repository tasks."""
-
-    def assess(self, prompt: str) -> TaskAssessment:
-        assessment = super().assess(prompt)
-        return replace(
-            assessment,
-            intent=TaskIntent.CODE_CHANGE,
-            complexity=TaskComplexity.MEDIUM,
-            risk=TaskRisk.LOW,
-            strategy=ExecutionStrategy.SINGLE_ACTOR,
-            reasons=(
-                "Harbor benchmark tasks run in disposable isolated repositories",
-                "benchmark issues should be solved by one focused Coder Actor",
-                "selected single_actor for Harbor adapter",
-            ),
-            explicit_paths=(),
-            max_actors=1,
-            verifier_recommended=False,
-            requires_human_approval=False,
-        )
 
 
 def build_harbor_task_prompt(instruction: str) -> str:
@@ -61,9 +31,6 @@ def build_harbor_task_prompt(instruction: str) -> str:
         "files, preserve unrelated behavior, and run the most relevant tests or "
         "checks you can before finishing. Leave a concise final summary of the "
         "files changed and the verification result.\n\n"
-        "Planner instruction: immediately create exactly one focused Coder subtask "
-        "and delegate it. Do not perform extended Planner-side scouting for this "
-        "benchmark issue.\n\n"
         "Benchmark issue:\n"
         f"{stripped}\n"
     )
@@ -92,7 +59,7 @@ async def run_harbor_agent(
             planner = build_planner(
                 str(workspace),
                 model=model,
-                task_assessor=HarborTaskAssessor(workspace),
+                task_assessor=TaskAssessor(workspace),
             )
             task_prompt = build_harbor_task_prompt(instruction)
             async for event in planner.run_stream(task_prompt):
@@ -121,7 +88,7 @@ async def run_harbor_agent(
     )
     summary: dict[str, Any] = {
         "schema_version": 1,
-        "model": model or os.getenv("SCA_MODEL"),
+        "model": normalize_model_name(model or os.getenv("SCA_MODEL")),
         "duration_ms": duration_ms,
         "tool_calls": len(report.tool_calls),
         "failed_tool_calls": report.failed_tool_count,

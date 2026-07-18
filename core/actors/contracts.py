@@ -53,6 +53,8 @@ class ActorExecutionResult:
     task_id: str
     status: ActorExecutionStatus
     error: str = ""
+    failure_category: str = ""
+    startup_duration_ms: int = 0
     files_modified: tuple[str, ...] = ()
     bugs_found: tuple[str, ...] = ()
     key_findings: str = ""

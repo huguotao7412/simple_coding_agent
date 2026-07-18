@@ -97,6 +97,11 @@ class SandboxRunTool(BaseTool):
             ))
         if result.timed_out:
             return ToolResult.fail("Sandbox command timed out", content=content)
+        if not result.succeeded:
+            return ToolResult.fail(
+                f"Sandbox command failed with exit code {result.exit_code}",
+                content=content,
+            )
         return ToolResult.ok(content)
 
 

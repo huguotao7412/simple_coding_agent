@@ -131,7 +131,8 @@ async def test_delegate_blocks_dependents_after_executor_failure() -> None:
         subtasks=[_subtask(first), _subtask(second)]
     )
 
-    assert result.success
+    assert result.success is False
+    assert result.error == "All delegated subtasks failed or were blocked."
     assert executor.calls == [first]
     assert context.state.task_tree[first].status == "failed"
     assert context.state.task_tree[second].status == "blocked"

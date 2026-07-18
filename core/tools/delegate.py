@@ -113,6 +113,8 @@ class DelegateTool(BaseTool):
             "task_id": result.task_id,
             "status": result.status,
             "error": result.error,
+            "failure_category": result.failure_category,
+            "startup_duration_ms": result.startup_duration_ms,
             "files_modified": list(result.files_modified),
             "bugs_found": list(result.bugs_found),
             "key_findings": result.key_findings[:2000],
@@ -205,7 +207,12 @@ class DelegateTool(BaseTool):
                 else None
             ),
         )
-        await state.update_task(result.task_id, status=result.status)
+        await state.update_task(
+            result.task_id,
+            status=result.status,
+            failure_category=result.failure_category or None,
+            startup_duration_ms=result.startup_duration_ms,
+        )
         await run_context.emit(AgentEvent(
             type="a2a_lite_message",
             content=message.to_json(),
@@ -222,6 +229,8 @@ class DelegateTool(BaseTool):
         if not isinstance(raw_subtasks, list):
             return ToolResult.fail("'subtasks' must be a list")
         subtasks = cast(list[dict[str, Any]], raw_subtasks)
+        if not subtasks:
+            return ToolResult.fail("'subtasks' must contain at least one task")
         workspace_dir = str(kwargs.get("workspace_dir", self._workspace_dir))
         executor = self._resolve_executor(workspace_dir)
         if executor is None:
@@ -444,6 +453,17 @@ class DelegateTool(BaseTool):
                             specs[result.task_id].role
                         )
                 else:
+                    if (
+                        ledger is not None
+                        and result.failure_category
+                        in {
+                            "environment/bootstrap failure",
+                            "tool provider failure",
+                        }
+                    ):
+                        await ledger.release_actor_reservation(
+                            specs[result.task_id].role
+                        )
                     failed.add(result.task_id)
                 remaining.pop(result.task_id, None)
 
@@ -485,4 +505,10 @@ class DelegateTool(BaseTool):
             lines.append("\n<a2a_lite_messages>")
             lines.extend(message_observations)
             lines.append("</a2a_lite_messages>")
-        return ToolResult.ok("\n".join(lines))
+        content = "\n".join(lines)
+        if all_results and done_count == 0:
+            return ToolResult.fail(
+                "All delegated subtasks failed or were blocked.",
+                content=content,
+            )
+        return ToolResult.ok(content)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -220,7 +221,8 @@ async def test_mcp_provider_allows_authorized_tool(tmp_path):
     result = await provider.call_tool("run", {"command": "git status"})
 
     assert result.success
-    assert result.content == "called:run"
+    assert '"backend": "local"' in result.content
+    assert '"exit_code": 0' in result.content
 
 
 @pytest.mark.asyncio
@@ -235,3 +237,51 @@ async def test_mcp_provider_uses_policy_to_filter_schemas():
     schemas = await provider.list_tools()
 
     assert [schema["function"]["name"] for schema in schemas] == ["read_file"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_provider_always_exposes_line_range_read_tool():
+    provider = MCPToolProvider()
+
+    schemas = await provider.list_tools()
+
+    read_schema = next(
+        schema for schema in schemas if schema["function"]["name"] == "read"
+    )
+    properties = read_schema["function"]["parameters"]["properties"]
+    assert {"file_path", "offset", "limit"} <= set(properties)
+
+
+@pytest.mark.asyncio
+async def test_node_free_provider_exposes_baseline_coder_tools(monkeypatch, tmp_path):
+    monkeypatch.setattr("core.mcp.client.shutil.which", lambda command: None)
+    provider = MCPToolProvider()
+
+    await provider.start(str(tmp_path))
+    schemas = await provider.list_tools()
+    await provider.shutdown()
+
+    names = {schema["function"]["name"] for schema in schemas}
+    assert {
+        "list_dir",
+        "search_codebase",
+        "read",
+        "edit_file",
+        "write_file",
+        "run",
+    } <= names
+
+
+@pytest.mark.asyncio
+async def test_local_run_nonzero_exit_returns_failed_tool_result(tmp_path):
+    provider = MCPToolProvider()
+    provider._worktree_path = str(tmp_path)
+    provider.set_policy(ToolPolicy.for_role("coder", {"run"}))
+
+    result = await provider.call_tool(
+        "run",
+        {"command": f'"{sys.executable}" -c "import sys; sys.exit(7)"'},
+    )
+
+    assert result.success is False
+    assert "exit code 7" in (result.error or "")

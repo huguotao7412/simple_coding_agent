@@ -7,6 +7,15 @@ from typing import Any, Literal, ClassVar, cast
 
 from ..a2a_lite.models import AgentMessage
 
+VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    "pending": {"pending", "running", "done", "failed", "blocked"},
+    "running": {"running", "verifying", "done", "failed", "blocked"},
+    "verifying": {"verifying", "done", "failed", "blocked"},
+    "done": {"done"},
+    "failed": {"failed", "blocked"},
+    "blocked": {"blocked"},
+}
+
 
 @dataclass
 class TaskNode:
@@ -22,6 +31,8 @@ class TaskNode:
     diff_artifact: str | None = None
     handoff_message: AgentMessage | None = None
     verification_passed: bool | None = None
+    failure_category: str | None = None
+    startup_duration_ms: int = 0
 
 
 @dataclass
@@ -80,6 +91,13 @@ class GlobalState:
         import time
         async with self._lock:
             node = self.task_tree[task_id]
+            if "status" in kwargs:
+                new_status = str(kwargs["status"])
+                allowed = VALID_STATUS_TRANSITIONS.get(node.status, {node.status})
+                if new_status not in allowed:
+                    raise ValueError(
+                        f"invalid task status transition: {node.status} -> {new_status}"
+                    )
             for key, value in kwargs.items():
                 if hasattr(node, key):
                     setattr(node, key, value)
@@ -196,6 +214,12 @@ class GlobalState:
                     if verification_passed is not None
                     else None
                 ),
+                failure_category=(
+                    str(raw_node["failure_category"])
+                    if raw_node.get("failure_category") is not None
+                    else None
+                ),
+                startup_duration_ms=int(raw_node.get("startup_duration_ms", 0) or 0),
             )
         state._change_offset = int(snapshot.get("change_count", 0) or 0)
         return state
@@ -223,6 +247,8 @@ class GlobalState:
                             t.handoff_message.to_dict() if t.handoff_message else None
                         ),
                         "verification_passed": t.verification_passed,
+                        "failure_category": t.failure_category,
+                        "startup_duration_ms": t.startup_duration_ms,
                     }
                     for tid, t in self.task_tree.items()
                 },

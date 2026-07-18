@@ -19,3 +19,4 @@ tmp/
 state.db
 /.sca/*
 !/.sca/quality-gates.toml
+/.codex/

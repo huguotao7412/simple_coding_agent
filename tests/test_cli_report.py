@@ -53,6 +53,47 @@ def test_run_report_prefers_structured_token_stats():
     assert report.total_tokens == 22
 
 
+def test_run_report_falls_back_to_accumulated_model_usage():
+    report = RunReport()
+
+    report.observe(AgentEvent(
+        type="model_usage",
+        prompt_tokens=10,
+        completion_tokens=2,
+    ))
+    report.observe(AgentEvent(
+        type="model_usage",
+        content=json.dumps({
+            "prompt_tokens": 20,
+            "completion_tokens": 3,
+            "estimated": True,
+        }),
+    ))
+
+    assert report.prompt_tokens == 30
+    assert report.completion_tokens == 5
+    assert report.total_tokens == 35
+    assert report.usage_estimated is True
+
+
+def test_terminal_token_stats_replace_model_usage_fallback():
+    report = RunReport()
+    report.observe(AgentEvent(
+        type="model_usage",
+        prompt_tokens=10,
+        completion_tokens=2,
+    ))
+
+    report.observe(AgentEvent(
+        type="token_stats",
+        prompt_tokens=15,
+        completion_tokens=4,
+    ))
+
+    assert report.prompt_tokens == 15
+    assert report.completion_tokens == 4
+
+
 def test_run_report_tracks_failed_tools_and_actor_statuses():
     report = RunReport()
 

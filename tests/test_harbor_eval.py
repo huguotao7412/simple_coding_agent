@@ -10,7 +10,6 @@ import pytest
 from evals.harbor_runner import build_harbor_command
 from evals.cli import main as eval_cli_main
 from evals.harbor_entrypoint import (
-    HarborTaskAssessor,
     build_harbor_task_prompt,
     run_harbor_agent,
 )
@@ -22,12 +21,18 @@ from evals.harbor_support import (
     normalize_harbor_model,
 )
 from core.execution.assessment import TaskAssessor
-from core.execution.models import ExecutionStrategy, TaskComplexity, TaskIntent, TaskRisk
+from core.execution.models import TaskIntent
 
 
 def test_normalize_harbor_model_strips_provider_prefix():
     assert normalize_harbor_model("deepseek/deepseek-v4-pro") == "deepseek-v4-pro"
     assert normalize_harbor_model("custom-model") == "custom-model"
+
+
+def test_normalize_harbor_model_upgrades_legacy_deepseek_aliases_to_pro():
+    assert normalize_harbor_model("deepseek/deepseek-chat") == "deepseek-v4-pro"
+    assert normalize_harbor_model("deepseek/deepseek-reasoner") == "deepseek-v4-pro"
+    assert normalize_harbor_model("deepseek/deepseek-v4-flash") == "deepseek-v4-flash"
 
 
 @pytest.mark.parametrize("value", [None, "", "provider/"])
@@ -113,6 +118,24 @@ def test_build_harbor_command_uses_import_path_agent():
     assert command[-2:] == ["--include-task-name", "demo"]
 
 
+def test_run_harbor_prints_effective_sca_model(monkeypatch, tmp_path: Path, capsys):
+    wheel = tmp_path / "simple_coding_agent-0.1.0-py3-none-any.whl"
+    wheel.write_text("wheel", encoding="utf-8")
+    monkeypatch.setattr("evals.harbor_runner.resolve_harbor_executable", lambda: "harbor")
+    monkeypatch.setattr("evals.harbor_runner.subprocess.run", lambda *args, **kwargs: SimpleNamespace(returncode=0))
+
+    from evals.harbor_runner import run_harbor
+
+    assert run_harbor(
+        dataset="swe-rebench/swe-rebench-leaderboard",
+        model="deepseek/deepseek-chat",
+        concurrency=1,
+        wheel=wheel,
+    ) == 0
+
+    assert "SCA model inside Harbor: deepseek-v4-pro" in capsys.readouterr().out
+
+
 def test_harbor_prompt_frames_issue_as_code_change(tmp_path: Path):
     prompt = build_harbor_task_prompt(
         "[Bug]: Connection failed\n\nCan anyone tell me why this happens?"
@@ -120,23 +143,21 @@ def test_harbor_prompt_frames_issue_as_code_change(tmp_path: Path):
 
     assert "Implement the necessary code changes" in prompt
     assert "Can anyone tell me why this happens?" in prompt
+    assert "your first phase must be exactly" not in prompt
+    assert "call `apply_patch`" not in prompt
     assert TaskAssessor(tmp_path).assess(prompt).intent is TaskIntent.CODE_CHANGE
 
 
-def test_harbor_task_assessor_uses_single_coder_for_benchmark_issue(tmp_path: Path):
+def test_default_harbor_assessment_does_not_force_single_actor(tmp_path: Path):
     prompt = build_harbor_task_prompt(
         "[Bug]: broken\n"
         "Traceback in litellm/llms/vertex_ai/gemini/foo.py and tests/a/b.py"
     )
 
-    assessment = HarborTaskAssessor(tmp_path).assess(prompt)
+    assessment = TaskAssessor(tmp_path).assess(prompt)
 
     assert assessment.intent is TaskIntent.CODE_CHANGE
-    assert assessment.strategy is ExecutionStrategy.SINGLE_ACTOR
-    assert assessment.complexity is TaskComplexity.MEDIUM
-    assert assessment.risk is TaskRisk.LOW
-    assert assessment.max_actors == 1
-    assert assessment.requires_human_approval is False
+    assert "selected single_actor for Harbor adapter" not in assessment.reasons
 
 
 def test_harbor_cli_loads_runtime_environment(monkeypatch, tmp_path: Path):
@@ -148,7 +169,7 @@ def test_harbor_cli_loads_runtime_environment(monkeypatch, tmp_path: Path):
     )
     monkeypatch.setattr("evals.harbor_runner.run_harbor", lambda **kwargs: 0)
 
-    assert eval_cli_main(["harbor", "--model", "deepseek/demo"]) == 0
+    assert eval_cli_main(["harbor", "--model", "deepseek/deepseek-chat"]) == 0
     assert loaded == [tmp_path]
 
 
@@ -160,7 +181,7 @@ def test_harbor_entrypoint_writes_trace_summary_and_report(monkeypatch, tmp_path
             self.task_assessor = task_assessor
 
         async def run_stream(self, instruction: str):
-            assert isinstance(self.task_assessor, HarborTaskAssessor)
+            assert type(self.task_assessor) is TaskAssessor
             assert "Implement the necessary code changes" in instruction
             assert "Benchmark issue:\nFix the repository" in instruction
             yield AgentEvent(type="tool_call", tool_name="read", tool_args={"path": "app.py"})
@@ -186,12 +207,13 @@ def test_harbor_entrypoint_writes_trace_summary_and_report(monkeypatch, tmp_path
         workspace=workspace,
         agent_log_dir=logs,
         artifact_dir=artifacts,
-        model="demo-model",
+        model="deepseek-chat",
     ))
 
     assert exit_code == 0
     assert summary["prompt_tokens"] == 11
     assert summary["completion_tokens"] == 7
+    assert summary["model"] == "deepseek-v4-pro"
     assert summary["final_output"] == "completed"
     assert (logs / "run-trace.jsonl").is_file()
     assert (logs / "sca-run.json").is_file()

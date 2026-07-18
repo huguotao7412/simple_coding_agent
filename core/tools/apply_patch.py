@@ -153,7 +153,11 @@ class ApplyPatchTool(BaseTool):
         if denial:
             return ToolResult.deny(denial)
         if not diff or not diff.strip():
-            return ToolResult.ok(f"No changes to apply for task {task_id} (empty diff).")
+            return ToolResult.fail(
+                f"Patch for task {task_id} is empty; refusing to report a code "
+                "change as applied. Mark the task as an explicit no-op instead "
+                "of calling apply_patch."
+            )
 
         base_dir = workspace_dir or os.getcwd()
         shadow_baseline = has_shadow_baseline(base_dir)

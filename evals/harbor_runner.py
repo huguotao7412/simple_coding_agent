@@ -9,6 +9,7 @@ from pathlib import Path
 from evals.harbor_support import (
     DEFAULT_HARBOR_DATASET,
     HARBOR_AGENT_IMPORT,
+    normalize_harbor_model,
 )
 
 
@@ -119,6 +120,7 @@ def run_harbor(
     env["SCA_HARBOR_WHEEL"] = str(resolved_wheel)
     print(f"Using SCA wheel: {resolved_wheel}")
     print(f"Running Harbor dataset: {dataset}")
+    print(f"SCA model inside Harbor: {normalize_harbor_model(model)}")
     return subprocess.run(command, cwd=REPO_ROOT, env=env).returncode
 
 

@@ -27,6 +27,8 @@ class RunReport:
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
     files_referenced: set[str] = field(default_factory=set)
     actor_status_counts: dict[str, int] = field(default_factory=dict)
+    actor_failure_categories: dict[str, int] = field(default_factory=dict)
+    tool_provider_warnings: list[str] = field(default_factory=list)
     compactions: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -37,6 +39,8 @@ class RunReport:
     execution_policy: dict[str, Any] | None = None
     sandbox_backends: set[str] = field(default_factory=set)
     isolated_execution_observed: bool = False
+    first_edit_tool_call_index: int | None = None
+    _has_token_stats: bool = field(default=False, init=False, repr=False)
 
     def observe(self, event: AgentEvent) -> None:
         if event.type == "task_assessment":
@@ -51,6 +55,11 @@ class RunReport:
         elif event.type == "tool_call":
             args = dict(event.tool_args or {})
             self.tool_calls.append(ToolCallRecord(name=event.tool_name or "tool", args=args))
+            if (
+                self.first_edit_tool_call_index is None
+                and event.tool_name in {"edit_file", "write_file", "apply_patch"}
+            ):
+                self.first_edit_tool_call_index = len(self.tool_calls)
             self._record_file_args(args)
 
         elif event.type == "tool_result":
@@ -70,12 +79,20 @@ class RunReport:
         elif event.type == "compaction":
             self.compactions += 1
 
+        elif event.type == "model_usage" and not self._has_token_stats:
+            self._record_model_usage(event)
+
         elif event.type == "token_stats":
             self._record_token_stats(event)
+            self._has_token_stats = True
 
         elif event.type == "error":
             if event.content:
                 self.errors.append(event.content)
+
+        elif event.type == "tool_provider_warning":
+            if event.content:
+                self.tool_provider_warnings.append(event.content)
 
         elif event.type == "done":
             self.final_output = event.content or ""
@@ -185,6 +202,34 @@ class RunReport:
         else:
             lines.append("- No test command was observed in this run.")
 
+        lines.extend(["", "## Diagnostics", ""])
+        counts = self._tool_name_counts()
+        lines.extend([
+            f"- Search/read calls: {counts['search_read']}",
+            f"- Edit/write/patch calls: {counts['mutation']}",
+            f"- Run calls: {counts['run']}",
+            "- First edit before tool call: "
+            + (
+                str(self.first_edit_tool_call_index)
+                if self.first_edit_tool_call_index is not None
+                else "none"
+            ),
+        ])
+        if self.actor_status_counts:
+            status_text = ", ".join(
+                f"{status}={count}"
+                for status, count in sorted(self.actor_status_counts.items())
+            )
+            lines.append(f"- Actor statuses: {status_text}")
+        if self.actor_failure_categories:
+            category_text = ", ".join(
+                f"{category}={count}"
+                for category, count in sorted(self.actor_failure_categories.items())
+            )
+            lines.append(f"- Actor failure categories: {category_text}")
+        if self.tool_provider_warnings:
+            lines.append(f"- Tool provider warnings: {len(self.tool_provider_warnings)}")
+
         lines.extend(["", "## Risk", ""])
         assessed_risk = (
             str(self.task_assessment.get("risk", ""))
@@ -260,10 +305,34 @@ class RunReport:
         except json.JSONDecodeError:
             return
         counts: dict[str, int] = {}
+        categories: dict[str, int] = {}
         for task in snapshot.get("task_tree", {}).values():
             status = task.get("status", "unknown")
             counts[status] = counts.get(status, 0) + 1
+            category = task.get("failure_category")
+            if isinstance(category, str) and category:
+                categories[category] = categories.get(category, 0) + 1
         self.actor_status_counts = counts
+        self.actor_failure_categories = categories
+
+    def _tool_name_counts(self) -> dict[str, int]:
+        search_read = {
+            "list_dir",
+            "list_directory",
+            "read",
+            "read_file",
+            "read_text_file",
+            "read_outline",
+            "search_codebase",
+            "search_files",
+        }
+        mutation = {"edit_file", "write_file", "apply_patch"}
+        run = {"run", "bash", "run_background"}
+        return {
+            "search_read": sum(1 for call in self.tool_calls if call.name in search_read),
+            "mutation": sum(1 for call in self.tool_calls if call.name in mutation),
+            "run": sum(1 for call in self.tool_calls if call.name in run),
+        }
 
     def _record_task_assessment(self, content: str) -> None:
         try:
@@ -312,3 +381,22 @@ class RunReport:
         self.prompt_tokens = int(stats.get("prompt_tokens", 0) or 0)
         self.completion_tokens = int(stats.get("completion_tokens", 0) or 0)
         self.usage_estimated = bool(stats.get("estimated", False))
+
+    def _record_model_usage(self, event: AgentEvent) -> None:
+        """Accumulate per-call usage when a terminal token_stats event is absent."""
+        if event.prompt_tokens or event.completion_tokens:
+            self.prompt_tokens += event.prompt_tokens
+            self.completion_tokens += event.completion_tokens
+            self.usage_estimated = self.usage_estimated or event.usage_estimated
+            return
+        try:
+            usage = json.loads(event.content or "{}")
+        except (json.JSONDecodeError, TypeError):
+            return
+        if not isinstance(usage, dict):
+            return
+        self.prompt_tokens += int(usage.get("prompt_tokens", 0) or 0)
+        self.completion_tokens += int(usage.get("completion_tokens", 0) or 0)
+        self.usage_estimated = self.usage_estimated or bool(
+            usage.get("estimated", False)
+        )

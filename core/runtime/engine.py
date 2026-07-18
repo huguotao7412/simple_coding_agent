@@ -19,6 +19,16 @@ from ..runs.models import RunStatus
 from ..tools.base import BaseTool, ToolResult
 
 
+EXPLORATION_TOOLS = {"list_dir", "read", "read_outline", "search_codebase"}
+MUTATION_TOOLS = {
+    "apply_patch",
+    "edit",
+    "edit_file",
+    "write",
+    "write_file",
+}
+
+
 WORKSPACE_AWARE_TOOLS = {
     "apply_patch",
     "bash",
@@ -98,13 +108,26 @@ class AgentRuntime:
         self.run_context = run_context or RunContext.create()
         self.tools_by_name = {t.name: t for t in tools} if tools else {}
         self._recent_actions: deque[int] = deque(maxlen=10)
+        self._outline_reads_by_file: dict[str, int] = {}
+        self._available_tool_names: set[str] = set()
+        self._exploration_calls_without_mutation = 0
+        self._successful_mutations = 0
+        self._blocked_final_without_mutation = 0
         self.last_result_success = True
         self._terminal_budget_error = ""
 
     async def _list_tool_schemas(self) -> list[dict[str, Any]]:
         if self.tool_provider is not None:
-            return cast(list[dict[str, Any]], await self.tool_provider.list_tools())
-        return [t.schema for t in self.tools_by_name.values()]
+            schemas = cast(list[dict[str, Any]], await self.tool_provider.list_tools())
+        else:
+            schemas = [t.schema for t in self.tools_by_name.values()]
+        self._available_tool_names = {
+            str(schema.get("function", {}).get("name") or schema.get("name") or "")
+            for schema in schemas
+            if isinstance(schema, dict)
+        }
+        self._available_tool_names.discard("")
+        return schemas
 
     def _payload_messages(self) -> list[dict[str, Any]]:
         if self.dynamic_context_builder is None:
@@ -135,8 +158,20 @@ class AgentRuntime:
             self.ctx.add_tool_result(tc["id"], f"Error: {parsed.error}")
             return tool_name, args, result, False
 
+        exploration_intervention = self._exploration_loop_intervention(tool_name)
+        if exploration_intervention:
+            result = ToolResult.ok(exploration_intervention)
+            self.ctx.add_tool_result(tool_call_id, exploration_intervention)
+            return tool_name, args, result, True
+
         if tool_name in WORKSPACE_AWARE_TOOLS and self.workspace_dir:
             args["workspace_dir"] = self.workspace_dir
+
+        outline_intervention = self._outline_loop_intervention(tool_name, args)
+        if outline_intervention:
+            result = ToolResult.ok(outline_intervention)
+            self.ctx.add_tool_result(tool_call_id, outline_intervention)
+            return tool_name, args, result, True
 
         action_hash = hash(tool_name + json.dumps(args, sort_keys=True))
         if self._recent_actions.count(action_hash) >= 2:
@@ -154,6 +189,7 @@ class AgentRuntime:
                 observation = f"ERROR: {result.error}"
                 if result.content:
                     observation += f"\nPartial output: {result.content}"
+            self._record_successful_mutation(tool_name, result)
             self.ctx.add_tool_result(tc["id"], observation)
             return tool_name, args, result, False
 
@@ -176,8 +212,83 @@ class AgentRuntime:
             if result.content:
                 observation += f"\nPartial output: {result.content}"
 
+        self._record_successful_mutation(tool_name, result)
         self.ctx.add_tool_result(tc["id"], observation)
         return tool_name, args, result, False
+
+    def _record_successful_mutation(self, tool_name: str, result: ToolResult) -> None:
+        if not result.success or tool_name not in MUTATION_TOOLS:
+            return
+        if tool_name == "apply_patch" and "No changes to apply" in result.content:
+            return
+        self._successful_mutations += 1
+        self._exploration_calls_without_mutation = 0
+
+    def _has_mutation_capability(self) -> bool:
+        return bool(self._available_tool_names & MUTATION_TOOLS)
+
+    def _is_code_change_runtime(self) -> bool:
+        policy = self.run_context.execution_policy
+        if policy is None:
+            return self.actor_id != "" and self._has_mutation_capability()
+        return policy.strategy is not ExecutionStrategy.PLANNER_DIRECT
+
+    def _exploration_loop_intervention(self, tool_name: str) -> str:
+        if (
+            self._successful_mutations
+            or tool_name not in EXPLORATION_TOOLS
+            or not self._is_code_change_runtime()
+            or not self._has_mutation_capability()
+        ):
+            return ""
+        self._exploration_calls_without_mutation += 1
+        if self._exploration_calls_without_mutation < 8:
+            return ""
+        return (
+            "System Alert: You have spent enough calls exploring this code-change "
+            "task without making an edit. Stop broad scouting now. If one exact "
+            "source range is still missing, call read once for that range; otherwise "
+            "make the smallest complete change with edit_file/write_file/apply_patch, "
+            "then run a focused check."
+        )
+
+    def _outline_loop_intervention(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+    ) -> str:
+        """Redirect repeated outline reads toward actual source inspection."""
+        raw_path = args.get("file_path") or args.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            return ""
+        path_key = raw_path.replace("\\", "/").lower()
+        source_tools = {
+            "read",
+            "read_file",
+            "read_text_file",
+            "edit",
+            "edit_file",
+            "write",
+            "write_file",
+        }
+        if tool_name in source_tools:
+            self._outline_reads_by_file.pop(path_key, None)
+            return ""
+        if tool_name != "read_outline":
+            return ""
+
+        previous_reads = self._outline_reads_by_file.get(path_key, 0)
+        if previous_reads >= 2:
+            offset = args.get("offset") or 1
+            limit = args.get("limit") or 200
+            return (
+                "System Alert: read_outline only returns symbol signatures and this "
+                f"file has already been outlined twice. Call read with file_path="
+                f"'{raw_path}', offset={offset}, limit={limit} to inspect the actual "
+                "source. Do not call read_outline again for implementation details."
+            )
+        self._outline_reads_by_file[path_key] = previous_reads + 1
+        return ""
 
     @staticmethod
     def _decode_cached_tool_result(cached: str) -> tuple[ToolResult, str]:
@@ -568,6 +679,8 @@ class AgentRuntime:
             tool_calls = response.get("tool_calls")
             if not tool_calls:
                 content = response.get("content") or ""
+                if self._must_continue_for_missing_mutation(content):
+                    continue
                 self.ctx.add_assistant_message(
                     content=content,
                     reasoning_content=response.get("reasoning_content"),
@@ -594,6 +707,25 @@ class AgentRuntime:
             if self._terminal_budget_error:
                 return
 
+    def _must_continue_for_missing_mutation(self, content: str) -> bool:
+        if (
+            self._successful_mutations
+            or not self._is_code_change_runtime()
+            or not self._has_mutation_capability()
+            or self._blocked_final_without_mutation >= 2
+        ):
+            return False
+        self._blocked_final_without_mutation += 1
+        self.ctx.add_system_message(
+            "System Alert: This is a code-change execution path, but no successful "
+            "edit/write/apply_patch action has occurred yet. Do not finish with a "
+            "summary. Continue by producing the minimal required repository change, "
+            "or, only if impossible, name the precise blocker after one final source "
+            "inspection. Previous attempted final response was:\n"
+            + content[:1200]
+        )
+        return True
+
     async def _stop_for_policy_error(
         self,
         error: BudgetExceeded | PolicyViolation,
@@ -611,6 +743,11 @@ class AgentRuntime:
             status=RunStatus.FAILED,
             error=error_msg,
         )
+        if isinstance(error, BudgetExceeded):
+            # record_usage updates the shared totals before the hard budget check
+            # raises. Emit those totals so failed benchmark runs do not report
+            # zero usage or omit the final over-budget model call.
+            yield await self._token_stats_event()
         yield await self._emit(AgentEvent(
             type=event_type,
             content=error_msg,

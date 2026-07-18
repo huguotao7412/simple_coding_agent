@@ -78,6 +78,14 @@ environment, discovers the task repository (`/testbed`, `/app`, `/workspace`, or
 `/repo`), and invokes the headless `sca-harbor-agent` entrypoint there.
 Use `--wheel path/to/file.whl` to evaluate a previously built release artifact.
 
+The Harbor adapter is intentionally thin: it installs the real wheel, forwards
+the task instruction, configures model/environment variables, and collects SCA
+trace, token, report, diff, and artifact metadata. It does not force
+`single_actor`, require a first `update_state` call, ban Planner search/read
+tools, or prescribe `delegate`/`apply_patch` order. Any experimental strategy
+must live in the shared SCA core as an explicit non-default option, not as a
+Harbor-only shortcut.
+
 If Docker Hub is only reachable through a local proxy, configure Docker
 Desktop's Docker Desktop proxy and set its Containers proxy to `Same as host
 proxy`. Container setup also needs outbound access to package repositories. Set
@@ -99,6 +107,11 @@ Harbor owns the outer sandbox, so the adapter forces
 artifacts are written below `/logs/artifacts/sca`; Harbor collects that directory
 after each trial. `run-trace.jsonl` and `sca-run.json` are written to Harbor's
 agent log directory, and the latter populates Harbor token and metadata fields.
+Actor execution still has node-free baseline tools inside the wheel:
+`list_dir`, `search_codebase`, `read`, `edit_file`, `write_file`, and `run`.
+Optional MCP servers can add richer tools when Node is present; missing MCP
+startup is reported as a tool-provider warning rather than a fatal loss of
+basic coding capability.
 
 ## Recommended cadence
 

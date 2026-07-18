@@ -11,9 +11,10 @@ class ReadOutlineTool(BaseTool):
     name = "read_outline"
     description = (
         "Read a file's skeleton: returns only class/function signatures with "
-        "line numbers (AST-based). Use this FIRST on large files to understand "
-        "the structure, then use 'read' with specific offset/limit to view "
-        "implementation details. Dramatically reduces token usage on large files."
+        "line numbers (AST-based). This NEVER returns implementation source. "
+        "Use it once to locate symbols in a large file, then call 'read' with "
+        "the desired source offset/limit. Do not repeatedly call read_outline "
+        "when you need function bodies."
     )
     parameters = {
         "file_path": {
@@ -22,7 +23,7 @@ class ReadOutlineTool(BaseTool):
         },
         "offset": {
             "type": "integer",
-            "description": "Optional 1-based line number to center the outline around.",
+            "description": "Optional source line around which to filter symbol signatures; does not read source.",
         },
         "limit": {
             "type": "integer",
