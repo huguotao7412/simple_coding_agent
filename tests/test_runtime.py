@@ -595,11 +595,11 @@ async def test_coder_runtime_redirects_long_exploration_to_editing():
     assert result == "done"
     tool_messages = [message["content"] for message in ctx.messages if message["role"] == "tool"]
     assert any("source-exploration allowance" in message for message in tool_messages)
-    assert "search_codebase" not in llm.tool_names_by_call[-2]
+    assert llm.tool_names_by_call[-2] == {"edit_file"}
 
 
 @pytest.mark.asyncio
-async def test_coder_runtime_blocks_shell_source_reading_after_exploration_limit():
+async def test_coder_runtime_allows_only_mutation_after_exploration_limit():
     search_calls = [
         {
             "role": "assistant",
@@ -641,6 +641,15 @@ async def test_coder_runtime_blocks_shell_source_reading_after_exploration_limit
                 "edit_1",
             )],
         },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "run",
+                '{"command":"pytest -q tests/test_app.py"}',
+                "run_test_2",
+            )],
+        },
         {"role": "assistant", "content": "done"},
     ])
     ctx = ContextManager(system_prompt="system")
@@ -650,15 +659,16 @@ async def test_coder_runtime_blocks_shell_source_reading_after_exploration_limit
         tools=[FakeSearchTool(), FakeRunTool(), FakeEditTool()],
         workspace_dir=".",
         actor_id="task_coder",
-        max_steps=13,
+        max_steps=14,
     )
 
     result = await runtime.run("fix bug")
 
     assert result == "done"
     tool_messages = [message["content"] for message in ctx.messages if message["role"] == "tool"]
-    assert any("source-exploration allowance" in message for message in tool_messages)
-    assert "command output" in tool_messages
+    assert sum("source-exploration allowance" in message for message in tool_messages) == 1
+    assert "[Same result as previous call, omitted]" in tool_messages
+    assert tool_messages.count("command output") == 1
 
 
 @pytest.mark.asyncio
@@ -673,9 +683,9 @@ async def test_planner_runtime_redirects_exploration_to_delegation():
                 f"search_{index}",
             )],
         }
-        for index in range(5)
+        for index in range(6)
     ]
-    llm = FakeLLM([
+    llm = ToolRecordingLLM([
         *calls,
         {
             "role": "assistant",
@@ -709,7 +719,8 @@ async def test_planner_runtime_redirects_exploration_to_delegation():
 
     assert result == "done"
     tool_messages = [message["content"] for message in ctx.messages if message["role"] == "tool"]
-    assert any("Register one focused Coder task" in message for message in tool_messages)
+    assert any("Only orchestration tools" in message for message in tool_messages)
+    assert llm.tool_names_by_call[5] == {"delegate"}
 
 
 @pytest.mark.asyncio

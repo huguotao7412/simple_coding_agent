@@ -21,6 +21,8 @@ from ..tools.base import BaseTool, ToolResult
 
 EXPLORATION_TOOLS = {"list_dir", "read", "read_outline", "search_codebase"}
 ACTOR_EXPLORATION_LIMIT = 8
+PLANNER_EXPLORATION_LIMIT = 5
+PLANNER_ORCHESTRATION_TOOLS = {"delegate", "update_state"}
 MUTATION_TOOLS = {
     "apply_patch",
     "edit",
@@ -114,6 +116,7 @@ class AgentRuntime:
         self._exploration_calls_without_mutation = 0
         self._actor_exploration_locked = False
         self._planner_exploration_calls = 0
+        self._planner_exploration_locked = False
         self._delegation_calls = 0
         self._successful_mutations = 0
         self._blocked_final_without_mutation = 0
@@ -230,6 +233,7 @@ class AgentRuntime:
         if result.success and tool_name == "delegate":
             self._delegation_calls += 1
             self._planner_exploration_calls = 0
+            self._planner_exploration_locked = False
             self._exploration_calls_without_mutation = 0
         if not result.success or tool_name not in MUTATION_TOOLS:
             return
@@ -261,6 +265,9 @@ class AgentRuntime:
         ):
             return ""
 
+        if self._actor_exploration_locked and tool_name not in MUTATION_TOOLS:
+            return self._actor_mutation_required_message()
+
         is_exploration = tool_name in EXPLORATION_TOOLS
         if tool_name in {"bash", "run"}:
             is_exploration = self._is_source_reading_command(args.get("command"))
@@ -273,13 +280,16 @@ class AgentRuntime:
                 if self._exploration_calls_without_mutation == ACTOR_EXPLORATION_LIMIT:
                     self._actor_exploration_locked = True
                 return ""
+        return self._actor_mutation_required_message()
+
+    @staticmethod
+    def _actor_mutation_required_message() -> str:
         return (
             "System Alert: The source-exploration allowance for this code-change "
-            "task is exhausted. Search/read tools and shell commands used only to "
-            "inspect files are temporarily unavailable. Use the context already "
-            "collected to make the smallest complete change with "
+            "task is exhausted. Non-mutation tools are temporarily unavailable. "
+            "Use the context already collected to make the smallest complete change with "
             "edit_file/write_file/apply_patch. After a successful edit, source "
-            "inspection is available again; focused tests and diagnostics may run now."
+            "inspection, tests, and diagnostics are available again."
         )
 
     @staticmethod
@@ -299,20 +309,37 @@ class AgentRuntime:
         self,
         tool_schemas: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        allowed_names: set[str] | None = None
         if (
-            not self.actor_id
-            or not self._actor_exploration_locked
-            or self._successful_mutations
+            self.actor_id
+            and self._actor_exploration_locked
+            and not self._successful_mutations
         ):
+            allowed_names = MUTATION_TOOLS
+        elif (
+            not self.actor_id
+            and self._planner_exploration_locked
+            and not self._delegation_calls
+        ):
+            allowed_names = PLANNER_ORCHESTRATION_TOOLS
+        if allowed_names is None:
             return tool_schemas
         return [
             schema
             for schema in tool_schemas
             if str(schema.get("function", {}).get("name") or schema.get("name") or "")
-            not in EXPLORATION_TOOLS
+            in allowed_names
         ]
 
     def _planner_exploration_intervention(self, tool_name: str) -> str:
+        if (
+            not self.actor_id
+            and self._planner_exploration_locked
+            and not self._delegation_calls
+            and tool_name not in PLANNER_ORCHESTRATION_TOOLS
+        ):
+            return self._planner_delegation_required_message()
+
         if (
             self.actor_id
             or self._delegation_calls
@@ -321,15 +348,21 @@ class AgentRuntime:
             or "delegate" not in self._available_tool_names
         ):
             return ""
+
         self._planner_exploration_calls += 1
-        if self._planner_exploration_calls < 5:
+        if self._planner_exploration_calls <= PLANNER_EXPLORATION_LIMIT:
+            if self._planner_exploration_calls == PLANNER_EXPLORATION_LIMIT:
+                self._planner_exploration_locked = True
             return ""
+        return self._planner_delegation_required_message()
+
+    @staticmethod
+    def _planner_delegation_required_message() -> str:
         return (
             "System Alert: Planner has enough repository context for this code-change "
-            "task. Stop reading/searching in Planner now. Register one focused Coder "
-            "task with update_state, then delegate it with the essential target files "
-            "and concise findings. The Coder should inspect exact ranges, edit, and "
-            "run focused checks."
+            "task. Only orchestration tools are temporarily available. Register one "
+            "focused Coder task with update_state, then delegate it with the essential "
+            "target files and concise findings."
         )
 
     def _outline_loop_intervention(
