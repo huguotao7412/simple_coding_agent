@@ -28,14 +28,14 @@ class ReadTool(BaseTool):
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 500,
-            "description": "Maximum source lines to return (default 200, max 500).",
+            "maximum": 160,
+            "description": "Maximum source lines to return (default 120, max 160).",
         },
     }
     required_params = ["file_path"]
-    DEFAULT_LIMIT = 200
-    MAX_LIMIT = 500
-    MAX_OUTPUT_CHARS = 40_000
+    DEFAULT_LIMIT = 120
+    MAX_LIMIT = 160
+    MAX_OUTPUT_CHARS = 14_000
 
     async def execute(  # type: ignore[override]
         self,
@@ -64,6 +64,7 @@ class ReadTool(BaseTool):
             return ToolResult.fail("offset must be at least 1")
         if requested_limit < 1:
             return ToolResult.fail("limit must be at least 1")
+        original_limit = requested_limit
         requested_limit = min(requested_limit, self.MAX_LIMIT)
 
         try:
@@ -101,6 +102,10 @@ class ReadTool(BaseTool):
         actual_end = start + len(rendered) - 1
         header = f"{rel_path} (lines {start}-{actual_end} of {total_lines})"
         output = [header, *rendered]
+        if original_limit > self.MAX_LIMIT:
+            output.append(
+                f"... [requested limit {original_limit} capped at {self.MAX_LIMIT} lines] ..."
+            )
         if truncated_for_size:
             output.append(
                 f"... [output size limit reached; continue with offset={actual_end + 1}] ..."

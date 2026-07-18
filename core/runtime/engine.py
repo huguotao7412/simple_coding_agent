@@ -111,6 +111,8 @@ class AgentRuntime:
         self._outline_reads_by_file: dict[str, int] = {}
         self._available_tool_names: set[str] = set()
         self._exploration_calls_without_mutation = 0
+        self._planner_exploration_calls = 0
+        self._delegation_calls = 0
         self._successful_mutations = 0
         self._blocked_final_without_mutation = 0
         self.last_result_success = True
@@ -157,6 +159,12 @@ class AgentRuntime:
             result = ToolResult.fail(parsed.error)
             self.ctx.add_tool_result(tc["id"], f"Error: {parsed.error}")
             return tool_name, args, result, False
+
+        planner_intervention = self._planner_exploration_intervention(tool_name)
+        if planner_intervention:
+            result = ToolResult.ok(planner_intervention)
+            self.ctx.add_tool_result(tool_call_id, planner_intervention)
+            return tool_name, args, result, True
 
         exploration_intervention = self._exploration_loop_intervention(tool_name)
         if exploration_intervention:
@@ -217,6 +225,10 @@ class AgentRuntime:
         return tool_name, args, result, False
 
     def _record_successful_mutation(self, tool_name: str, result: ToolResult) -> None:
+        if result.success and tool_name == "delegate":
+            self._delegation_calls += 1
+            self._planner_exploration_calls = 0
+            self._exploration_calls_without_mutation = 0
         if not result.success or tool_name not in MUTATION_TOOLS:
             return
         if tool_name == "apply_patch" and "No changes to apply" in result.content:
@@ -235,14 +247,15 @@ class AgentRuntime:
 
     def _exploration_loop_intervention(self, tool_name: str) -> str:
         if (
-            self._successful_mutations
+            not self.actor_id
+            or self._successful_mutations
             or tool_name not in EXPLORATION_TOOLS
             or not self._is_code_change_runtime()
             or not self._has_mutation_capability()
         ):
             return ""
         self._exploration_calls_without_mutation += 1
-        if self._exploration_calls_without_mutation < 8:
+        if self._exploration_calls_without_mutation < 6:
             return ""
         return (
             "System Alert: You have spent enough calls exploring this code-change "
@@ -250,6 +263,26 @@ class AgentRuntime:
             "source range is still missing, call read once for that range; otherwise "
             "make the smallest complete change with edit_file/write_file/apply_patch, "
             "then run a focused check."
+        )
+
+    def _planner_exploration_intervention(self, tool_name: str) -> str:
+        if (
+            self.actor_id
+            or self._delegation_calls
+            or tool_name not in EXPLORATION_TOOLS
+            or not self._is_code_change_runtime()
+            or "delegate" not in self._available_tool_names
+        ):
+            return ""
+        self._planner_exploration_calls += 1
+        if self._planner_exploration_calls < 5:
+            return ""
+        return (
+            "System Alert: Planner has enough repository context for this code-change "
+            "task. Stop reading/searching in Planner now. Register one focused Coder "
+            "task with update_state, then delegate it with the essential target files "
+            "and concise findings. The Coder should inspect exact ranges, edit, and "
+            "run focused checks."
         )
 
     def _outline_loop_intervention(

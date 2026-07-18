@@ -49,3 +49,26 @@ def test_read_rejects_invalid_range_and_workspace_escape(tmp_path: Path) -> None
     assert "offset must be at least 1" in (bad_offset.error or "")
     assert escaped.success is False
     assert "escapes workspace" in (escaped.error or "")
+
+
+def test_read_caps_large_requested_ranges(tmp_path: Path) -> None:
+    source = tmp_path / "large.py"
+    source.write_text(
+        "\n".join(f"line {index}" for index in range(1, 260)) + "\n",
+        encoding="utf-8",
+    )
+
+    result = asyncio.run(
+        ReadTool().execute(
+            file_path="large.py",
+            workspace_dir=str(tmp_path),
+            offset=1,
+            limit=500,
+        )
+    )
+
+    assert result.success is True
+    assert "large.py (lines 1-160 of 259)" in result.content
+    assert "requested limit 500 capped at 160 lines" in result.content
+    assert "continue with offset=161" in result.content
+    assert "L161:" not in result.content

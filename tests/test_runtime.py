@@ -575,6 +575,57 @@ async def test_coder_runtime_redirects_long_exploration_to_editing():
 
 
 @pytest.mark.asyncio
+async def test_planner_runtime_redirects_exploration_to_delegation():
+    calls = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "search_codebase",
+                f'{{"query":"bug {index}","mode":"text"}}',
+                f"search_{index}",
+            )],
+        }
+        for index in range(5)
+    ]
+    llm = FakeLLM([
+        *calls,
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call("delegate", "{}", "delegate_1")],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call(
+                "apply_patch",
+                '{"task_id":"task_1"}',
+                "patch_1",
+            )],
+        },
+        {"role": "assistant", "content": "done"},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    run_context = RunContext.create(run_id="planner_redirects_to_delegate")
+    _install_policy(run_context)
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[FakeSearchTool(), FakeDelegateTool(), FakePatchTool()],
+        workspace_dir=".",
+        run_context=run_context,
+        max_steps=10,
+    )
+
+    result = await runtime.run("fix bug")
+
+    assert result == "done"
+    tool_messages = [message["content"] for message in ctx.messages if message["role"] == "tool"]
+    assert any("Register one focused Coder task" in message for message in tool_messages)
+
+
+@pytest.mark.asyncio
 async def test_runtime_stops_at_max_steps():
     llm = FakeLLM([
         {"role": "assistant", "content": None, "tool_calls": [_tool_call('{"value": "abc"}')]},

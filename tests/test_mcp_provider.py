@@ -199,7 +199,10 @@ async def test_mcp_provider_denies_tool_not_in_allowlist(tmp_path):
     provider._sessions["bash"] = FakeSession(None, None)
     provider.set_policy(ToolPolicy.for_role("scout", {"read_file"}))
 
-    result = await provider.call_tool("run", {"command": "git status"})
+    result = await provider.call_tool(
+        "run",
+        {"command": "python -c \"print('ok')\""},
+    )
 
     assert not result.success
     assert "not permitted for role 'scout'" in (result.error or "")
@@ -218,7 +221,10 @@ async def test_mcp_provider_allows_authorized_tool(tmp_path):
     provider._sessions["bash"] = FakeSession(None, None)
     provider.set_policy(ToolPolicy.for_role("coder", {"run"}))
 
-    result = await provider.call_tool("run", {"command": "git status"})
+    result = await provider.call_tool(
+        "run",
+        {"command": "python -c \"print('ok')\""},
+    )
 
     assert result.success
     assert '"backend": "local"' in result.content
