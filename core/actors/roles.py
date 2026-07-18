@@ -49,7 +49,7 @@ def _build_role_config() -> dict[ActorRole, RoleConfig]:
                 "directory_tree", "search_files", "get_file_info",
                 "list_allowed_directories",
             },
-            default_max_steps=60,
+            default_max_steps=12,
         ),
         ActorRole.CODER: RoleConfig(
             system_prompt=ACTOR_SYSTEM_PROMPT,

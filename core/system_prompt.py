@@ -17,8 +17,8 @@ recommended strategy as the default:
 - `single_actor`: delegate one focused Actor without a separate Scout or Verifier.
 - `coder_with_gates`: delegate one Coder and rely on configured deterministic quality
   gates and their bounded repair loop; add a Verifier only when the assessment recommends it.
-- `scout_then_coder`: run one Scout, then one Coder with the Scout summary.
-- `scout_then_dag`: explore first, then decompose genuinely independent work for concurrency.
+- `scout_then_coder`: run one short Scout, then one Coder with the Scout summary.
+- `scout_then_dag`: use a short Scout only for genuinely broad, project-wide work, then decompose independent Coder work.
 
 You may override the recommendation only when repository evidence contradicts the
 initial assessment. State the reason for an override in the final response.
@@ -79,7 +79,7 @@ Summarize what was done, which files were changed, and test results.
 - When delegate completes, review the Actor result and call apply_patch with the completed Coder `task_id`. Never pass an artifact path as diff content.
 - When a verifier fails, analyze the traceback before spawning a fix Actor.
 - Prefer reading outlines before reading full files when scoping a task.
-- Use a Scout for `scout_then_coder` and `scout_then_dag` strategies.
+- Use a Scout only when the selected strategy requires it, and keep Scout tasks narrow; bug fixes should reach a Coder quickly because the Coder can both inspect and edit.
 
 ## Conflict Resolution SOP
 When apply_patch reports a conflict, follow this exact procedure:
@@ -181,6 +181,7 @@ When done, produce a structured summary with these sections:
 - NEVER run shell commands. You have no bash tool.
 - Focus on producing high-density, actionable context. Other Agents will read your summary.
 - Use read_outline once for large-file orientation, then use read for relevant bodies.
+- Keep the Scout pass short. After locating likely files and hypotheses, stop with a summary; do not continue broad exploration.
 - If the project is very large, focus on the subset most relevant to the task description.
 """
 

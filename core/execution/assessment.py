@@ -177,13 +177,47 @@ class TaskAssessor:
             scan_truncated=scan_truncated,
         )
 
-    @staticmethod
-    def _explicit_paths(prompt: str) -> tuple[str, ...]:
+    def _explicit_paths(self, prompt: str) -> tuple[str, ...]:
         paths = {
             match.group(0).strip("`'\".,:;()[]{}")
             for match in PATH_PATTERN.finditer(prompt)
         }
-        return tuple(sorted(path for path in paths if path))
+        return tuple(sorted(
+            path for path in paths
+            if path and self._looks_like_workspace_path(path)
+        ))
+
+    def _looks_like_workspace_path(self, raw_path: str) -> bool:
+        path = raw_path.replace("\\", "/").lstrip("./")
+        lowered = path.lower()
+        if (
+            "://" in lowered
+            or lowered.startswith(("github.com/", "www.", "usr/", "lib/"))
+            or "/site-packages/" in lowered
+            or "/python3." in lowered
+        ):
+            return False
+        if re.match(r"^[a-z]:/", lowered):
+            return False
+        candidate = (self.workspace_dir / path).resolve()
+        try:
+            if candidate.exists() and candidate.is_relative_to(self.workspace_dir):
+                return True
+        except OSError:
+            return False
+        first_part = path.split("/", 1)[0]
+        try:
+            top_level = {
+                entry.name for entry in self.workspace_dir.iterdir()
+                if entry.is_dir() and entry.name not in IGNORED_DIRECTORIES
+            }
+            root_files = {
+                entry.name for entry in self.workspace_dir.iterdir()
+                if entry.is_file()
+            }
+        except OSError:
+            return "/" not in path
+        return first_part in top_level or path in root_files
 
     @staticmethod
     def _classify_intent(text: str) -> TaskIntent:
@@ -282,8 +316,6 @@ class TaskAssessor:
             return ExecutionStrategy.PLANNER_DIRECT
         if risk is TaskRisk.HIGH or complexity is TaskComplexity.LARGE:
             return ExecutionStrategy.SCOUT_THEN_DAG
-        if complexity is TaskComplexity.MEDIUM and not has_explicit_paths:
-            return ExecutionStrategy.SCOUT_THEN_CODER
         if has_quality_gates:
             return ExecutionStrategy.CODER_WITH_GATES
         return ExecutionStrategy.SINGLE_ACTOR

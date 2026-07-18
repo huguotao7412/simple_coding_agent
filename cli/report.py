@@ -65,7 +65,7 @@ class RunReport:
         elif event.type == "tool_result":
             if not self.tool_calls:
                 self.tool_calls.append(ToolCallRecord(name=event.tool_name or "tool"))
-            record = self.tool_calls[-1]
+            record = self._matching_tool_call(event.tool_name or "")
             record.name = event.tool_name or record.name
             if event.tool_result is None:
                 record.success = False
@@ -298,6 +298,14 @@ class RunReport:
                 for item in value:
                     if isinstance(item, str) and item:
                         self.files_referenced.add(item)
+
+    def _matching_tool_call(self, tool_name: str) -> ToolCallRecord:
+        if not tool_name:
+            return self.tool_calls[-1]
+        for record in reversed(self.tool_calls):
+            if record.name == tool_name and record.success is None:
+                return record
+        return self.tool_calls[-1]
 
     def _record_actor_update(self, content: str) -> None:
         try:

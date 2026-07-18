@@ -521,13 +521,23 @@ async def test_bootstrap_failure_releases_actor_slot_but_counts_attempt() -> Non
 @pytest.mark.asyncio
 async def test_scout_then_coder_requires_dependency_and_runs_in_order() -> None:
     context = RunContext.create()
-    context.install_execution_policy(
-        _policy(
-            ExecutionStrategy.SCOUT_THEN_CODER,
-            max_actors=2,
-            roles=("scout", "coder"),
-        )
-    )
+    context.install_execution_policy(ExecutionPolicy(
+        strategy=ExecutionStrategy.SCOUT_THEN_CODER,
+        budget=ExecutionBudget(
+            max_planner_steps=10,
+            max_actor_steps=60,
+            max_model_calls=10,
+            max_total_tokens=100,
+            max_wall_time_seconds=60,
+            max_failed_tool_calls=2,
+            max_repair_attempts=1,
+            max_actor_start_attempts=2,
+        ),
+        max_actors=2,
+        allowed_actor_roles=("scout", "coder"),
+        require_quality_gates=False,
+        requires_human_approval=False,
+    ))
     scout_id = await context.state.add_task("inspect")
     coder_id = await context.state.add_task("implement", dependencies=[scout_id])
     executor = RecordingExecutor()
@@ -595,6 +605,9 @@ async def test_gated_policy_fails_before_actor_when_gates_are_missing(
     def setup(workspace: str, task_id: str) -> str:
         worktree.mkdir()
         return str(worktree)
+
+    async def empty_diff(path: str) -> str:
+        return ""
 
     executor = WorktreeActorExecutor(
         llm_client=CountingLLM(),
@@ -716,6 +729,76 @@ async def test_actor_requested_steps_are_capped_by_policy(tmp_path: Path) -> Non
 
     assert result.status == "done"
     assert captured["max_steps"] == 10
+
+
+@pytest.mark.asyncio
+async def test_scout_requested_steps_are_capped_by_role_default(tmp_path: Path) -> None:
+    context = RunContext.create()
+    context.install_execution_policy(ExecutionPolicy(
+        strategy=ExecutionStrategy.SCOUT_THEN_CODER,
+        budget=ExecutionBudget(
+            max_planner_steps=10,
+            max_actor_steps=60,
+            max_model_calls=10,
+            max_total_tokens=100,
+            max_wall_time_seconds=60,
+            max_failed_tool_calls=2,
+            max_repair_attempts=1,
+            max_actor_start_attempts=2,
+        ),
+        max_actors=2,
+        allowed_actor_roles=("scout", "coder"),
+        require_quality_gates=False,
+        requires_human_approval=False,
+    ))
+    worktree = tmp_path / "worktree"
+    captured: dict[str, int] = {}
+
+    def actor_factory(**kwargs):
+        captured["max_steps"] = kwargs["max_steps"]
+
+        class Actor:
+            async def run(self, prompt: str):
+                return SimpleNamespace(
+                    status="done",
+                    files_modified=[],
+                    bugs_found=[],
+                    key_findings="done",
+                    suggested_next_steps="",
+                )
+
+        return Actor()
+
+    def setup(workspace: str, task_id: str) -> str:
+        worktree.mkdir()
+        return str(worktree)
+
+    async def empty_diff(path: str) -> str:
+        return ""
+
+    executor = WorktreeActorExecutor(
+        llm_client=CountingLLM(),
+        workspace_dir=str(tmp_path),
+        worktree_factory=setup,
+        worktree_cleanup=lambda path: None,
+        diff_extractor=empty_diff,
+        tool_provider_factory=lambda run_context, actor_id: MinimalProvider(),
+        actor_factory=actor_factory,
+        verification_config_loader=lambda workspace: VerificationConfig(),
+    )
+
+    result = await executor.execute(
+        ActorTaskSpec(
+            task_id="task_scout",
+            description="inspect",
+            role="scout",
+            max_steps=999,
+        ),
+        context,
+    )
+
+    assert result.status == "done"
+    assert captured["max_steps"] == 12
 
 
 def test_budget_snapshot_rejects_negative_consumption() -> None:

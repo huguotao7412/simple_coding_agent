@@ -198,6 +198,8 @@ def _verification_failure_message(report: VerificationReport) -> str:
 
 def _failure_category_for_phase(phase: str, error: Exception | str) -> str:
     text = f"{phase}: {error}".lower()
+    if "token budget" in text or "model-call budget" in text:
+        return "model failure"
     if "worktree" in text or "baseline" in text or "sandbox startup" in text:
         return "environment/bootstrap failure"
     if "mcp" in text or "tool provider" in text or "baseline tools" in text:
@@ -385,7 +387,10 @@ class WorktreeActorExecutor:
                     except Exception:
                         pass
 
-            max_steps = spec.max_steps or role_config.default_max_steps
+            max_steps = min(
+                spec.max_steps or role_config.default_max_steps,
+                role_config.default_max_steps,
+            )
             if execution_policy is not None:
                 max_steps = min(
                     max_steps,
@@ -414,6 +419,14 @@ class WorktreeActorExecutor:
             status: ActorExecutionStatus = (
                 "done" if summary.status == "done" else "failed"
             )
+            execution_error = ""
+            execution_failure_category = ""
+            if status == "failed":
+                execution_error = summary.key_findings or "actor execution failed"
+                execution_failure_category = _failure_category_for_phase(
+                    "actor execution",
+                    execution_error,
+                )
             verification_reports: list[VerificationReport] = []
             verification_error = ""
             if status == "done" and role is ActorRole.CODER:
@@ -550,11 +563,11 @@ class WorktreeActorExecutor:
             return ActorExecutionResult(
                 task_id=spec.task_id,
                 status=status,
-                error=verification_error,
+                error=verification_error or execution_error,
                 failure_category=(
                     "verification failure"
                     if status == "failed" and verification_error
-                    else ""
+                    else execution_failure_category
                 ),
                 startup_duration_ms=duration_ms,
                 files_modified=files_modified,

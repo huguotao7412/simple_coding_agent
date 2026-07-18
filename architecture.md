@@ -56,10 +56,13 @@ read-only workspace scan and classifies intent, complexity, and risk. It publish
 versioned `task_assessment` event and injects the same JSON as durable system context.
 The assessment is deterministically compiled into an enforced `ExecutionPolicy`
 rather than remaining only a prompt recommendation.
+Traceback paths, package-manager install paths, and URLs are not treated as
+repository paths when estimating scope; otherwise bug reports with stack traces
+would be incorrectly classified as broad project changes.
 
 The Planner owns orchestration. Each Planner receives a `RunContext` with an independent task ledger, run ID, event queue, and usage accumulator. It decomposes work, delegates isolated subtasks, receives Actor summaries and diffs, applies selected patches, and synthesizes the final response.
 
-Actors own execution. Each Actor receives one concrete task plus scoped context, runs in its own git worktree, and reports a structured A2A_lite handoff plus an extracted diff. The full extracted diff is persisted as a patch artifact, while the handoff carries typed artifact references instead of copying large payloads into prompts.
+Actors own execution. Each Actor receives one concrete task plus scoped context, runs in its own git worktree, and reports a structured A2A_lite handoff plus an extracted diff. The full extracted diff is persisted as a patch artifact, while the handoff carries typed artifact references instead of copying large payloads into prompts. For low-risk code changes, the default path favors a Coder directly because the Coder can inspect, edit, and test in one loop; Scout remains a short, read-only phase for genuinely broad work.
 
 ## Execution Policy and Budget Boundary
 

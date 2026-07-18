@@ -64,6 +64,11 @@ The codebase keeps the Planner/Actor split:
 - `ExecutionPolicy` compiles assessment output into topology and resource limits that tool calls cannot override; one `RunBudgetLedger` is shared by Planner and all Actors.
 - `GlobalState` records task state and Actor updates.
 
+Low-risk bug fixes generally go straight to a Coder, which can search, read,
+edit, and test in one loop. Scout remains available for genuinely broad work,
+but it is intentionally short and read-only so evaluation traces do not spend
+the whole budget on analysis without mutation.
+
 ## Project Layout
 
 ```text

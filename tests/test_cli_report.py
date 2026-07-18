@@ -120,6 +120,34 @@ def test_run_report_tracks_failed_tools_and_actor_statuses():
     assert report.compactions == 1
 
 
+def test_run_report_matches_nested_tool_result_to_parent_call():
+    report = RunReport()
+
+    report.observe(AgentEvent(type="tool_call", tool_name="delegate"))
+    report.observe(AgentEvent(
+        type="tool_call",
+        tool_name="read",
+        actor_id="task_child",
+        tool_args={"file_path": "app.py"},
+    ))
+    report.observe(AgentEvent(
+        type="tool_result",
+        tool_name="read",
+        actor_id="task_child",
+        tool_result=ToolResult.ok("source"),
+    ))
+    report.observe(AgentEvent(
+        type="tool_result",
+        tool_name="delegate",
+        tool_result=ToolResult.fail("All delegated subtasks failed"),
+    ))
+
+    assert [(call.name, call.success) for call in report.tool_calls] == [
+        ("delegate", False),
+        ("read", True),
+    ]
+
+
 def test_run_report_renders_and_writes_eval_friendly_markdown(
     tmp_path,
     monkeypatch,

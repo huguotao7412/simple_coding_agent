@@ -91,6 +91,31 @@ def test_broad_architecture_change_uses_scout_led_dag(tmp_path: Path):
     assert assessment.max_actors == 4
 
 
+def test_bug_report_traceback_paths_do_not_force_large_scout_dag(tmp_path: Path):
+    (tmp_path / "litellm" / "llms" / "vertex_ai" / "gemini").mkdir(parents=True)
+    (tmp_path / "tests" / "llm_translation").mkdir(parents=True)
+    (tmp_path / "litellm" / "llms" / "vertex_ai" / "gemini" / "vertex_and_google_ai_studio_gemini.py").write_text(
+        "def completion(): pass\n",
+        encoding="utf-8",
+    )
+    prompt = """
+    Implement the necessary code changes in the current repository.
+
+    [Bug]: Connection to gemini-2.5-flash-image-preview failed
+    <img src="https://github.com/user-attachments/assets/e62b98e7-604c" />
+    File "/usr/lib/python3.13/site-packages/litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py", line 1697
+    File "/usr/lib/python3.13/site-packages/httpx/_models.py", line 829
+    Why does this happen?
+    """
+
+    assessment = TaskAssessor(tmp_path).assess(prompt)
+
+    assert assessment.intent is TaskIntent.CODE_CHANGE
+    assert assessment.complexity is not TaskComplexity.LARGE
+    assert assessment.strategy is ExecutionStrategy.SINGLE_ACTOR
+    assert assessment.explicit_paths == ()
+
+
 def test_high_impact_operations_require_human_approval(tmp_path: Path):
     assessment = TaskAssessor(tmp_path).assess(
         "Deploy the database migration to production"
