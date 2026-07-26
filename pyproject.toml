@@ -24,6 +24,8 @@ dependencies = [
     "rich>=13",
     "python-dotenv>=1.0",
     "e2b>=2.11,<3",
+    "langgraph>=1.0,<2",
+    "langgraph-checkpoint-sqlite>=3.0,<4",
 ]
 
 [project.scripts]
@@ -65,6 +67,7 @@ exclude = [".venv", ".worktrees", "__pycache__"]
 ignore_missing_imports = true
 files = [
     "core/a2a_lite",
+    "core/orchestration",
     "core/execution",
     "core/config.py",
     "core/model_names.py",
@@ -99,6 +102,7 @@ files = [
     "evals/harbor_entrypoint.py",
     "evals/harbor_runner.py",
     "evals/harbor_support.py",
+    "evals/durability.py",
 ]
 
 [[tool.mypy.overrides]]

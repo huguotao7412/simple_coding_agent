@@ -32,6 +32,19 @@ The local runner writes `eval_results.json`, per-task reports, JSONL traces, and
 Actor patches. These artifacts remain useful for debugging project-specific
 failures even after Harbor becomes the primary capability benchmark.
 
+Durability/safety regression tests use deterministic fake LLMs and injected
+checkpointer failures:
+
+```bash
+python -m pytest -q tests/test_langgraph_orchestration.py \
+  tests/test_runtime.py tests/test_verification_repair.py
+```
+
+They cover pre-model approval interruption, same-thread durable resume,
+rejection without execution, checkpoint write failure, tool-result reuse,
+bounded repair, state serialization, and artifact boundary validation. These
+are regression scenarios, not real-model benchmark results.
+
 ## Standard benchmarks with Harbor
 
 Install the optional benchmark dependencies:

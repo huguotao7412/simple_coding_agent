@@ -13,6 +13,7 @@
 - `core/sandbox/`：命令执行端口、本地/E2B 适配器与受控工作区传输。
 - `core/events.py`：runtime、runs、MCP、CLI 和 eval 共用的跨域事件契约。
 - `core/planner.py`：应用编排入口。
+- `core/orchestration/`：框架无关编排端口，以及 legacy / LangGraph 控制平面适配器。
 
 ```mermaid
 flowchart TD
@@ -47,6 +48,17 @@ flowchart TD
 ```
 
 `AgentRuntime` 是共享的 ReAct 执行循环。Planner 和 Actor 都复用它，因此最大步数、工具调用解析、畸形 JSON 恢复、重复动作熔断、上下文压缩、token 统计和事件输出都集中在一处。
+
+CLI、Web Live Agent、eval 和 Harbor 默认使用 LangGraph，在它上方增加粗粒度生命周期：
+`assess_task -> compile_policy -> 审批路由/interrupt ->
+plan_and_execute_actors -> verification/repair 路由 -> finalize`。Planner、Actor
+DAG 和有界 verification repair 继续调用现有组件，不拆成 token/tool 级图节点。
+图使用异步 API；本地使用 workspace state 中的 `AsyncSqliteSaver`，测试可使用
+`InMemorySaver`。
+
+交互入口通过 `InteractiveOrchestrationSession` 运行。每个用户请求创建新的
+durable RunContext/thread，只有有界的用户/助手历史进入下一任务。CLI 在同一
+thread 内即时审批恢复，Web Live Agent 提供等价的批准/拒绝控件。
 
 Planner 负责 orchestration：每个 Planner 拥有独立的 `RunContext`，其中包含任务账本、run ID、事件队列和 usage 累计器。Planner 拆解任务、委派隔离子任务、接收 Actor summary 和 diff、应用选中的 patch，并生成最终回复。
 
@@ -224,6 +236,11 @@ flowchart LR
 ```
 
 已经提交的 tool-result checkpoint 可以阻止相同 root tool-call ID 被重复执行，但这不是全局 exactly-once：外部副作用可能在成功后、SQLite 落盘前遭遇进程崩溃。完整边界见 [ADR-0002](docs/adr/0002-durable-run-store.md)。
+
+默认 LangGraph 路径中，它的 checkpoint 只负责流程位置、interrupt、pending graph
+write 和紧凑 Graph State；`RunStore` 继续负责领域状态、policy/budget、task、
+conversation、已完成工具调用、报告、artifact 和审计事件。两者通过相同
+run/thread ID 关联。图 checkpoint 和 finalize 未成功前不会向调用方交付成功。
 
 ## Eval 设计
 

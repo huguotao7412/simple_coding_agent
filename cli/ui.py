@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
@@ -208,6 +210,25 @@ class UI:
     def render_user_prompt(self) -> str:
         """Display the prompt and read user input."""
         return input("\n> ")
+
+    def render_approval_prompt(self, payload: dict) -> bool:
+        """Render a structured LangGraph interrupt and request a decision."""
+        risk = payload.get("risk_level", "high")
+        reasons = payload.get("risk_reasons", [])
+        capabilities = payload.get("requested_capabilities", [])
+        scope = payload.get("target_scope", [])
+        self.console.print(Panel(
+            "\n".join((
+                f"Risk: {risk}",
+                f"Reasons: {json.dumps(reasons, ensure_ascii=False)}",
+                f"Capabilities: {json.dumps(capabilities, ensure_ascii=False)}",
+                f"Scope: {json.dumps(scope, ensure_ascii=False)}",
+            )),
+            title="Human approval required",
+            border_style="yellow",
+        ))
+        answer = input("Approve this run? [y/N] ").strip().lower()
+        return answer in {"y", "yes"}
 
     def render_welcome(self) -> None:
         self.console.print()

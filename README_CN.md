@@ -24,6 +24,7 @@ Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重
 - 高风险任务在首次模型调用前 fail-closed，需要 CLI 显式批准；策略和消费账本随 checkpoint 恢复。
 - Actor shell 与 verification 共享可替换的本地/E2B 沙箱协议。
 - 单元测试覆盖 runtime、隔离、报告和 eval 行为。
+- 可选的 LangGraph 1.x 持久控制平面，使用异步 SQLite checkpoint 和可恢复人工审批，同时复用原安全执行内核。
 
 当前目标不是宣称它已经是完全自治的生产级 coding system，而是打磨一个可靠、可审计、可持续评测的本地 agent 核心。
 
@@ -181,6 +182,34 @@ SCA_SANDBOX_MAX_TRANSFER=50000000
 配置优先级为：进程环境变量 > 当前工作区 `.env` > 用户级配置。SCA 只读取当前工作区的 `.env`，不会向父目录搜索，避免从启动终端的位置意外继承配置。
 
 客户端使用 OpenAI-compatible chat completions API。
+
+### 持久化编排
+
+交互 CLI、非交互 CLI、Web Live Agent、local eval 和 Harbor 默认使用
+LangGraph，无需选择参数：
+
+```powershell
+sca
+sca --prompt "解释这个仓库"
+sca --prompt "修复已审查的问题"
+```
+
+LangGraph 在 workspace 对应的用户级 state 目录保存紧凑流程状态，并保持
+`run_id == thread_id`。高风险任务以结构化 interrupt 暂停，继续复用
+`--approve-high-risk` 恢复。LangGraph 提供 durable orchestration，不提供安全
+sandbox；checkpoint 重放也不等于 shell、文件系统或网络副作用 exactly-once。
+完整边界见 [ADR-0006](docs/adr/0006-langgraph-control-plane.md)。
+
+交互 CLI 中，每次用户输入都会建立独立的 durable Run 和 LangGraph thread。
+下一轮只继承精简的用户/助手对话历史；execution policy、工具结果和 task DAG
+保持 Run 级隔离。高风险 interrupt 会显示审批提示，并在同一 thread 上恢复。
+
+最小 legacy 适配器只用于恢复没有 LangGraph checkpoint 的升级前旧 Run，以及
+显式应急回滚：
+
+```powershell
+sca --orchestrator legacy --prompt "通过兼容路径运行"
+```
 
 ### 命令沙箱
 

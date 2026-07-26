@@ -15,6 +15,8 @@ The modular monolith groups cohesive implementation details without hiding depen
 - `core/sandbox/`: command-execution port, local/E2B adapters, and guarded workspace transport.
 - `core/events.py`: the cross-domain event contract shared by runtime, runs, MCP, CLI, and evals.
 - `core/planner.py`: the application orchestration entry point.
+- `core/orchestration/`: framework-neutral orchestration port plus legacy and
+  LangGraph control-plane adapters.
 
 ```mermaid
 flowchart TD
@@ -50,6 +52,20 @@ User prompt
 ```
 
 `AgentRuntime` is the shared ReAct loop. Planner and Actor agents both use it, so step limits, tool-call parsing, malformed JSON recovery, repeated-action circuit breaking, context compression, token reporting, and event emission live in one place.
+
+The default LangGraph path for CLI, Web Live Agent, eval, and Harbor adds a
+coarser lifecycle above this loop:
+`assess_task -> compile_policy -> approval router/interrupt ->
+plan_and_execute_actors -> verify/repair router -> finalize`. Planning, Actor DAG
+scheduling, and bounded verification repair are intentionally invoked through
+their existing components rather than decomposed into token/tool graph nodes.
+The graph uses async APIs and a workspace-state `AsyncSqliteSaver`; tests may use
+`InMemorySaver`.
+
+Interactive surfaces use `InteractiveOrchestrationSession`. Each user request
+creates a new durable RunContext/thread, while only bounded user/assistant history
+crosses into the next request. CLI approval resumes immediately on the same thread;
+the Web Live Agent exposes equivalent approve/reject controls.
 
 Before a new Planner turn enters that loop, `TaskAssessor` performs a bounded,
 read-only workspace scan and classifies intent, complexity, and risk. It publishes a
@@ -254,6 +270,12 @@ flowchart LR
 ```
 
 Committed tool-result checkpoints prevent replay of the same root tool-call ID. This is not global exactly-once execution: an external side effect can succeed immediately before a process crash and before SQLite records its result. See [ADR-0002](docs/adr/0002-durable-run-store.md).
+
+On the default LangGraph path, its checkpoint owns only workflow position, interrupts,
+pending graph writes, and compact graph state. `RunStore` continues to own domain
+status, policy/budget, task state, conversations, completed tool calls, reports,
+artifacts, and audit events. Both use the same run/thread ID. Terminal success is
+withheld from callers until graph checkpoint/finalization succeeds.
 
 ## Eval Design
 

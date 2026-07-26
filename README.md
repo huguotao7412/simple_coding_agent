@@ -27,6 +27,8 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - Replaceable local/E2B sandbox protocol shared by Actor shell and verification.
 - Safety eval fixtures for path escape, dirty workspace, and destructive command behavior.
 - Deterministic unit tests for runtime, isolation, reports, and eval behavior.
+- A default LangGraph 1.x durable control plane with async SQLite checkpoints,
+  persistent human approval, and the existing secure runtime as its data plane.
 
 This is not positioned as a fully autonomous production coding system yet. The current goal is a reliable, auditable local agent core that can be improved and measured over time.
 
@@ -177,6 +179,36 @@ SCA_SANDBOX_MAX_TRANSFER=50000000
 Precedence is process environment > current workspace `.env` > user config. SCA reads only the exact workspace `.env` and does not search parent directories, avoiding accidental configuration inheritance from the terminal launch location.
 
 The client uses an OpenAI-compatible chat completions API.
+
+### Durable orchestration
+
+LangGraph is the default control plane for interactive CLI, non-interactive CLI,
+the Web Live Agent, local eval, and Harbor runs. No selector is required:
+
+```powershell
+sca
+sca --prompt "Explain this repository"
+sca --prompt "Fix the reviewed issue"
+```
+
+LangGraph checkpoints compact workflow state in the workspace-keyed user state
+directory and use `run_id` as `thread_id`. High-risk runs pause with a structured
+interrupt and resume with the existing `--approve-high-risk` flag. LangGraph
+provides durable orchestration, not a security sandbox, and checkpoint replay is
+not exactly-once execution for shell, filesystem, or network side effects. See
+[ADR-0006](docs/adr/0006-langgraph-control-plane.md).
+
+In the interactive CLI, every user request receives a separate durable Run and
+LangGraph thread. A compact user/assistant history is carried into the next task,
+while execution policy, tool results, and task DAG state remain run-scoped.
+High-risk interrupts are rendered as an approval prompt and resume the same thread.
+
+The minimal legacy adapter is retained only for runs created before LangGraph
+checkpoints existed and for explicit emergency rollback:
+
+```powershell
+sca --orchestrator legacy --prompt "Run through the compatibility path"
+```
 
 ### Command sandbox
 
