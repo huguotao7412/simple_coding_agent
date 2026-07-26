@@ -14,11 +14,11 @@ class OrchestrationRequest:
     approval: bool | None = None
 
 
-class Orchestrator(Protocol):
+class ApplicationService(Protocol):
     def run_stream(
         self,
         request: OrchestrationRequest,
     ) -> AsyncIterator[AgentEvent]: ...
 
 
-__all__ = ["OrchestrationRequest", "Orchestrator"]
+__all__ = ["ApplicationService", "OrchestrationRequest"]

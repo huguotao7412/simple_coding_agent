@@ -24,7 +24,7 @@ Simple Coding Agent 是一个 **CLI 优先的本地 coding agent runtime**，重
 - 高风险任务在首次模型调用前 fail-closed，需要 CLI 显式批准；策略和消费账本随 checkpoint 恢复。
 - Actor shell 与 verification 共享可替换的本地/E2B 沙箱协议。
 - 单元测试覆盖 runtime、隔离、报告和 eval 行为。
-- 可选的 LangGraph 1.x 持久控制平面，使用异步 SQLite checkpoint 和可恢复人工审批，同时复用原安全执行内核。
+- 唯一的 LangGraph 1.x 持久控制平面，使用异步 SQLite checkpoint、结构化 Actor DAG fan-out 和可恢复人工审批，同时复用原安全执行内核。
 
 当前目标不是宣称它已经是完全自治的生产级 coding system，而是打磨一个可靠、可审计、可持续评测的本地 agent 核心。
 
@@ -185,8 +185,8 @@ SCA_SANDBOX_MAX_TRANSFER=50000000
 
 ### 持久化编排
 
-交互 CLI、非交互 CLI、Web Live Agent、local eval 和 Harbor 默认使用
-LangGraph，无需选择参数：
+交互 CLI、非交互 CLI、Web Live Agent、local eval 和 Harbor 只使用
+LangGraph，不再存在控制平面选择参数：
 
 ```powershell
 sca
@@ -204,12 +204,9 @@ sandbox；checkpoint 重放也不等于 shell、文件系统或网络副作用 e
 下一轮只继承精简的用户/助手对话历史；execution policy、工具结果和 task DAG
 保持 Run 级隔离。高风险 interrupt 会显示审批提示，并在同一 thread 上恢复。
 
-最小 legacy 适配器只用于恢复没有 LangGraph checkpoint 的升级前旧 Run，以及
-显式应急回滚：
-
-```powershell
-sca --orchestrator legacy --prompt "通过兼容路径运行"
-```
+升级前没有 LangGraph checkpoint 的旧 Run 仍可通过 `runs` 和 `inspect`
+查看，但 `resume` 会给出明确迁移原因并拒绝恢复；系统不会猜测 graph program
+counter。需要继续工作时应创建新 Run。
 
 ### 命令沙箱
 
@@ -400,6 +397,11 @@ eval runner 会把同一条事件流写成 JSONL trace，方便调试、复盘�
 Git worktree 和影子仓库提供版本控制及默认工作目录隔离，不是操作系统沙箱。Actor 子进程仍拥有当前用户的系统权限。这些机制能降低风险，但不能替代进程级沙箱；请只在你愿意让 agent 修改的项目和环境中运行。
 
 SQLite checkpoint 也不能与任意 shell、文件系统或网络副作用组成同一个原子事务。如果进程恰好在副作用成功后、tool result 落盘前崩溃，该操作仍可能在恢复时重试。完整取舍见 [ADR-0002](docs/adr/0002-durable-run-store.md)。
+
+成功提交顺序是：校验 required artifact 及 digest；在领域 Run 仍非终态时持久化
+verification；让 LangGraph 成功写入最终 checkpoint；最后才把 RunStore 标为
+completed。任意持久化错误都会显式返回。本地 `AsyncSqliteSaver` 适合单进程
+CLI，不是多进程生产 checkpointer。
 
 ## 开发
 

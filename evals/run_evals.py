@@ -223,7 +223,7 @@ async def run_eval_task(
     """Run one eval task through the real Planner and persist its trace."""
     from cli.report import RunReport
     from cli.main import build_planner
-    from core.orchestration.factory import create_orchestrator
+    from core.orchestration.factory import create_application_service
     from core.orchestration.protocol import OrchestrationRequest
 
     task_id = task["id"]
@@ -244,7 +244,7 @@ async def run_eval_task(
         with trace_file:
             try:
                 planner = build_planner(str(candidate_dir), model=model)
-                orchestrator = create_orchestrator(planner)
+                orchestrator = create_application_service(planner)
                 async for event in orchestrator.run_stream(OrchestrationRequest(
                     user_request=task["prompt"],
                 )):

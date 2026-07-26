@@ -8,8 +8,8 @@ from ..events import AgentEvent
 from ..planner import Planner
 from ..runs.context import RunContext
 from ..runtime.conversation import ContextManager
-from .factory import create_orchestrator
-from .protocol import OrchestrationRequest, Orchestrator
+from .factory import create_application_service
+from .protocol import ApplicationService, OrchestrationRequest
 
 
 ContextFactory = Callable[[list[dict[str, Any]]], Awaitable[RunContext]]
@@ -20,7 +20,7 @@ PlannerFactory = Callable[[ContextManager, RunContext], Planner]
 class InteractiveRun:
     user_request: str
     planner: Planner
-    orchestrator: Orchestrator
+    orchestrator: ApplicationService
     preapproved: bool = False
     final_output: str = ""
     interrupted: bool = False
@@ -48,14 +48,12 @@ class InteractiveOrchestrationSession:
         system_prompt: str,
         context_factory: ContextFactory,
         planner_factory: PlannerFactory,
-        orchestrator_name: str | None = None,
         preapprove_high_risk: bool = False,
         max_history_messages: int = 20,
     ) -> None:
         self._system_prompt = system_prompt
         self._context_factory = context_factory
         self._planner_factory = planner_factory
-        self._orchestrator_name = orchestrator_name
         self._preapprove_high_risk = preapprove_high_risk
         self._max_history_messages = max_history_messages
         self._history: list[dict[str, str]] = []
@@ -72,10 +70,7 @@ class InteractiveOrchestrationSession:
         return InteractiveRun(
             user_request=user_request,
             planner=planner,
-            orchestrator=create_orchestrator(
-                planner,
-                name=self._orchestrator_name,
-            ),
+            orchestrator=create_application_service(planner),
             preapproved=self._preapprove_high_risk,
         )
 

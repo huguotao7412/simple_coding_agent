@@ -33,6 +33,7 @@ class TaskNode:
     verification_passed: bool | None = None
     failure_category: str | None = None
     startup_duration_ms: int = 0
+    patch_applied: bool = False
 
 
 @dataclass
@@ -84,6 +85,45 @@ class GlobalState:
             self.change_log.append(ChangeRecord(
                 type="task_added", task_id=task_id,
                 timestamp=time.time(), payload={"description": description},
+            ))
+        return task_id
+
+    async def register_task(
+        self,
+        task_id: str,
+        description: str,
+        dependencies: list[str] | None = None,
+    ) -> str:
+        """Idempotently install a graph-planned task with a stable Actor ID."""
+        import time
+
+        if not task_id:
+            raise ValueError("task_id must not be empty")
+        normalized_dependencies = list(dependencies or [])
+        async with self._lock:
+            existing = self.task_tree.get(task_id)
+            if existing is not None:
+                if (
+                    existing.description != description
+                    or existing.dependencies != normalized_dependencies
+                ):
+                    raise ValueError(
+                        f"task_id {task_id} is already registered differently"
+                    )
+                return task_id
+            self.task_tree[task_id] = TaskNode(
+                task_id=task_id,
+                description=description,
+                dependencies=normalized_dependencies,
+            )
+            self.change_log.append(ChangeRecord(
+                type="task_added",
+                task_id=task_id,
+                timestamp=time.time(),
+                payload={
+                    "description": description,
+                    "dependencies": normalized_dependencies,
+                },
             ))
         return task_id
 
@@ -220,6 +260,7 @@ class GlobalState:
                     else None
                 ),
                 startup_duration_ms=int(raw_node.get("startup_duration_ms", 0) or 0),
+                patch_applied=bool(raw_node.get("patch_applied", False)),
             )
         state._change_offset = int(snapshot.get("change_count", 0) or 0)
         return state
@@ -249,6 +290,7 @@ class GlobalState:
                         "verification_passed": t.verification_passed,
                         "failure_category": t.failure_category,
                         "startup_duration_ms": t.startup_duration_ms,
+                        "patch_applied": t.patch_applied,
                     }
                     for tid, t in self.task_tree.items()
                 },

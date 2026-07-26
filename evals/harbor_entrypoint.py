@@ -12,7 +12,7 @@ from cli.main import build_planner
 from cli.report import RunReport
 from core.execution.assessment import TaskAssessor
 from core.model_names import normalize_model_name
-from core.orchestration.factory import create_orchestrator
+from core.orchestration.factory import create_application_service
 from core.orchestration.protocol import OrchestrationRequest
 from evals.harbor_support import SUMMARY_FILENAME, TRACE_FILENAME
 from evals.run_evals import _event_to_trace_record
@@ -64,7 +64,7 @@ async def run_harbor_agent(
                 task_assessor=TaskAssessor(workspace),
             )
             task_prompt = build_harbor_task_prompt(instruction)
-            orchestrator = create_orchestrator(planner)
+            orchestrator = create_application_service(planner)
             async for event in orchestrator.run_stream(OrchestrationRequest(
                 user_request=task_prompt,
             )):

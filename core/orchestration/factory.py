@@ -1,36 +1,18 @@
 from __future__ import annotations
 
-import os
 import sqlite3
 from pathlib import Path
-from typing import Literal, cast
 
 from ..planner import Planner
 from .langgraph import LangGraphOrchestrator
-from .legacy import LegacyOrchestrator
-from .protocol import Orchestrator
+from .protocol import ApplicationService
 from ..paths import workspace_state_dir
 
 
-OrchestratorName = Literal["legacy", "langgraph"]
-
-
-def resolve_orchestrator_name(value: str | None = None) -> OrchestratorName:
-    name = (value or os.getenv("SCA_ORCHESTRATOR") or "langgraph").strip().lower()
-    if name not in {"legacy", "langgraph"}:
-        raise ValueError("SCA_ORCHESTRATOR must be 'legacy' or 'langgraph'")
-    return cast(OrchestratorName, name)
-
-
-def create_orchestrator(
+def create_application_service(
     planner: Planner,
-    *,
-    name: str | None = None,
-) -> Orchestrator:
-    resolved = resolve_orchestrator_name(name)
-    if resolved == "langgraph":
-        return LangGraphOrchestrator(planner)
-    return LegacyOrchestrator(planner)
+) -> ApplicationService:
+    return LangGraphOrchestrator(planner)
 
 
 def langgraph_checkpoint_path(workspace_dir: str | Path) -> Path:
@@ -56,9 +38,7 @@ def has_langgraph_checkpoint(
 
 
 __all__ = [
-    "OrchestratorName",
-    "create_orchestrator",
+    "create_application_service",
     "has_langgraph_checkpoint",
     "langgraph_checkpoint_path",
-    "resolve_orchestrator_name",
 ]

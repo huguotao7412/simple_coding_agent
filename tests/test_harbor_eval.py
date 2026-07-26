@@ -206,7 +206,7 @@ def test_harbor_entrypoint_writes_trace_summary_and_report(monkeypatch, tmp_path
         lambda workspace, model=None, task_assessor=None: FakePlanner(task_assessor),
     )
     monkeypatch.setattr(
-        "evals.harbor_entrypoint.create_orchestrator",
+        "evals.harbor_entrypoint.create_application_service",
         lambda planner: FakeOrchestrator(planner),
     )
     workspace = tmp_path / "workspace"

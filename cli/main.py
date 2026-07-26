@@ -79,7 +79,6 @@ async def run_once(
     model: str | None = None,
     *,
     high_risk_approved: bool = False,
-    orchestrator_name: str | None = None,
 ) -> str:
     from core.config import load_runtime_environment
     from cli.report import RunReport
@@ -101,10 +100,10 @@ async def run_once(
         context_manager=context_manager,
         high_risk_approved=high_risk_approved,
     )
-    from core.orchestration.factory import create_orchestrator
+    from core.orchestration.factory import create_application_service
     from core.orchestration.protocol import OrchestrationRequest
 
-    orchestrator = create_orchestrator(planner, name=orchestrator_name)
+    orchestrator = create_application_service(planner)
     report = RunReport()
     final_output = ""
     async for event in orchestrator.run_stream(OrchestrationRequest(
@@ -126,7 +125,6 @@ async def resume_once(
     model: str | None = None,
     *,
     high_risk_approved: bool = False,
-    orchestrator_name: str | None = None,
 ) -> str:
     from cli.report import RunReport
     from cli.runs import load_resumable_run, open_run_store
@@ -147,29 +145,24 @@ async def resume_once(
         store=store,
     )
     from core.orchestration.factory import (
-        create_orchestrator,
+        create_application_service,
         has_langgraph_checkpoint,
-        resolve_orchestrator_name,
     )
     from core.orchestration.protocol import OrchestrationRequest
 
-    inferred_name = orchestrator_name
-    if inferred_name is None and not os.getenv("SCA_ORCHESTRATOR"):
-        inferred_name = (
-            "langgraph"
-            if has_langgraph_checkpoint(workspace_dir, run_id)
-            else "legacy"
+    if not has_langgraph_checkpoint(workspace_dir, run_id):
+        raise RuntimeError(
+            f"durable run {run_id} predates the LangGraph checkpoint format "
+            "and remains inspectable, but cannot be resumed safely. SCA will "
+            "not invent a graph program counter; start a new Run instead."
         )
-    resolved_orchestrator = resolve_orchestrator_name(inferred_name)
-    if high_risk_approved and resolved_orchestrator == "legacy":
-        await run_context.grant_human_approval()
     planner = build_planner(
         workspace_dir=workspace_dir,
         model=model or stored.record.model,
         run_context=run_context,
         context_manager=context_manager,
     )
-    orchestrator = create_orchestrator(planner, name=resolved_orchestrator)
+    orchestrator = create_application_service(planner)
     report = RunReport()
     final_output = ""
     async for event in orchestrator.run_stream(OrchestrationRequest(
@@ -191,15 +184,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default=None, help="Model name (overrides .env)")
     parser.add_argument("--dir", default=None, help="Workspace directory (default: cwd)")
     parser.add_argument("--workspace", default=None, help="Alias for --dir")
-    parser.add_argument(
-        "--orchestrator",
-        choices=("legacy", "langgraph"),
-        default=None,
-        help=(
-            "Top-level control plane (default: SCA_ORCHESTRATOR or langgraph). "
-            "Legacy is retained only for compatibility and emergency rollback."
-        ),
-    )
     parser.add_argument(
         "--prompt",
         default=None,
@@ -441,7 +425,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     workspace_dir,
                     args.model,
                     high_risk_approved=args.approve_high_risk,
-                    orchestrator_name=args.orchestrator,
                 )
             )
         except Exception as e:
@@ -457,7 +440,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 workspace_dir,
                 args.model,
                 high_risk_approved=args.approve_high_risk,
-                orchestrator_name=args.orchestrator,
             ))
         except Exception as e:
             print(f"Error: {e}", file=sys.stderr)
@@ -510,7 +492,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         system_prompt=PLANNER_SYSTEM_PROMPT,
         context_factory=interactive_context_factory,
         planner_factory=interactive_planner_factory,
-        orchestrator_name=args.orchestrator,
         preapprove_high_risk=bool(args.approve_high_risk),
     )
     ui = UI()  # type: ignore[no-untyped-call]

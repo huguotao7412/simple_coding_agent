@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from ..paths import workspace_state_dir
@@ -10,6 +11,7 @@ def validate_artifact_uri(
     *,
     workspace_dir: str | Path,
     require_exists: bool = True,
+    expected_digest: str = "",
 ) -> Path:
     """Resolve an untrusted artifact reference inside an approved state boundary."""
     if not uri:
@@ -26,6 +28,10 @@ def validate_artifact_uri(
         raise ValueError("artifact reference escapes workspace/state root")
     if require_exists and not resolved.is_file():
         raise ValueError(f"artifact reference is missing: {resolved}")
+    if expected_digest and resolved.is_file():
+        digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        if digest != expected_digest.removeprefix("sha256:"):
+            raise ValueError(f"artifact digest mismatch: {resolved}")
     return resolved
 
 

@@ -1,6 +1,10 @@
 # ADR-0006: LangGraph as the durable control plane
 
-Status: accepted (LangGraph is the default)
+Status: superseded by [ADR-0007](0007-structured-langgraph-lifecycle.md)
+
+This record preserves the original additive/default-control-plane decision.
+ADR-0007 closes the legacy compatibility path and replaces the coarse execution
+node; the historical rationale below is intentionally unchanged.
 
 ## Context and decision
 

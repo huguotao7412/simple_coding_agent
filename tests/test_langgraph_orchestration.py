@@ -6,18 +6,22 @@ from pathlib import Path
 import pytest
 
 from core.execution.assessment import TaskAssessor
-from core.execution.models import TaskRisk
+from core.execution.models import ExecutionStrategy, TaskRisk
+from core.execution.policy import ExecutionPolicy
 from core.orchestration.langgraph import LangGraphOrchestrator
-from core.orchestration.factory import (
-    create_orchestrator,
-    resolve_orchestrator_name,
+from core.orchestration.factory import create_application_service
+from core.orchestration.plan import (
+    PlannedActor,
+    TaskPlan,
+    validate_task_plan,
 )
-from core.orchestration.legacy import LegacyOrchestrator
 from core.orchestration.protocol import OrchestrationRequest
 from core.orchestration.security import validate_artifact_uri
 from core.orchestration.state import (
     GRAPH_STATE_SCHEMA_VERSION,
     GraphState,
+    MAX_GRAPH_STATE_BYTES,
+    migrate_graph_state,
     validate_graph_state,
 )
 from core.planner import Planner
@@ -25,6 +29,7 @@ from core.runs.context import RunContext
 from core.runs.models import RunRecord
 from core.runs.sqlite_store import SQLiteRunStore
 from core.runtime.conversation import ContextManager
+from core.tools.base import BaseTool, ToolResult
 from langgraph.checkpoint.memory import InMemorySaver
 
 
@@ -61,6 +66,42 @@ class ApprovalAssessor(TaskAssessor):
         )
 
 
+class ActorAssessor(TaskAssessor):
+    def assess(self, prompt: str):
+        return replace(
+            super().assess("Fix app.py"),
+            strategy=ExecutionStrategy.SINGLE_ACTOR,
+            max_actors=1,
+        )
+
+
+class RecordingDelegate(BaseTool):
+    name = "delegate"
+    description = "test structured Actor adapter"
+    parameters = {}
+    required_params = []
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+        self._run_context = None
+
+    async def execute(self, **kwargs):
+        subtask = kwargs["subtasks"][0]
+        actor_id = str(subtask["task_id"])
+        self.calls.append(actor_id)
+        state = self._run_context.state
+        await state.update_task(
+            actor_id,
+            status="running",
+            actor_role=str(subtask["role"]),
+            assigned_actor=actor_id,
+        )
+        await state.add_summary(actor_id, "structured Actor completed")
+        await state.update_task(actor_id, status="done")
+        return ToolResult.ok("done")
+
+
 def _planner(
     tmp_path: Path,
     llm: CountingLLM,
@@ -77,19 +118,32 @@ def _planner(
     )
 
 
-def test_langgraph_is_default_and_legacy_is_explicit_compatibility(
+def test_langgraph_is_the_only_application_service(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SCA_ORCHESTRATOR", raising=False)
     planner = _planner(tmp_path, CountingLLM())
 
-    assert resolve_orchestrator_name() == "langgraph"
-    assert isinstance(create_orchestrator(planner), LangGraphOrchestrator)
-    assert isinstance(
-        create_orchestrator(planner, name="legacy"),
-        LegacyOrchestrator,
+    assert isinstance(create_application_service(planner), LangGraphOrchestrator)
+
+
+def test_validated_plan_rejects_cycles_and_unapproved_roles(
+    tmp_path: Path,
+) -> None:
+    assessment = TaskAssessor(tmp_path).assess("Fix app.py")
+    policy = replace(
+        ExecutionPolicy.from_assessment(assessment),
+        max_actors=2,
     )
+    cyclic = TaskPlan(
+        actors=(
+            PlannedActor("one", "coder", "one", ("two",)),
+            PlannedActor("two", "coder", "two", ("one",)),
+        ),
+        direct_planner=False,
+        repair_limit=0,
+    )
+    with pytest.raises(ValueError, match="cycle"):
+        validate_task_plan(cyclic, policy, workspace_dir=tmp_path)
 
 
 async def _events(orchestrator, request):
@@ -113,6 +167,42 @@ async def test_low_risk_graph_routes_through_finalize(tmp_path: Path) -> None:
         for event in events
     )
     assert events[-1].type == "done"
+
+
+@pytest.mark.asyncio
+async def test_structured_actor_lifecycle_does_not_wrap_planner_loop(
+    tmp_path: Path,
+) -> None:
+    llm = CountingLLM()
+    delegate = RecordingDelegate()
+    planner = Planner(
+        llm_client=llm,
+        context_manager=ContextManager(system_prompt="test"),
+        tools=[delegate],
+        workspace_dir=str(tmp_path),
+        run_context=RunContext.create("run_structured_actor"),
+        task_assessor=ActorAssessor(tmp_path),
+    )
+
+    events = await _events(
+        LangGraphOrchestrator.in_memory(planner),
+        OrchestrationRequest(user_request="Fix app.py"),
+    )
+
+    assert delegate.calls == ["actor_1"]
+    assert llm.calls == 0
+    assert events[-1].type == "done"
+    assert "structured Actor completed" in events[-1].content
+    node_names = {event.node_name for event in events}
+    assert {
+        "plan",
+        "validate_plan",
+        "schedule_ready_actors",
+        "execute_actor",
+        "collect_actor_results",
+        "verify",
+        "finalize_success",
+    } <= node_names
 
 
 @pytest.mark.asyncio
@@ -182,6 +272,38 @@ def test_graph_state_is_bounded_json_and_has_stable_thread_id() -> None:
     with pytest.raises(ValueError, match="mismatch"):
         validate_graph_state(state)
 
+    oversized = GraphState(
+        schema_version=GRAPH_STATE_SCHEMA_VERSION,
+        run_id="run_2",
+        thread_id="run_2",
+        user_request="x" * (MAX_GRAPH_STATE_BYTES + 1),
+    )
+    with pytest.raises(ValueError, match="bounded serialization"):
+        validate_graph_state(oversized)
+
+
+def test_state_migration_is_explicit_and_plan_cannot_expand_policy(
+    tmp_path: Path,
+) -> None:
+    migrated = migrate_graph_state({
+        "schema_version": 1,
+        "run_id": "run_old",
+        "thread_id": "run_old",
+        "plan_summary": {"task_count": 0},
+    })
+    validate_graph_state(migrated)
+    assert migrated["schema_version"] == GRAPH_STATE_SCHEMA_VERSION
+
+    assessment = TaskAssessor(tmp_path).assess("Fix app.py")
+    policy = ExecutionPolicy.from_assessment(assessment)
+    malicious = TaskPlan(
+        actors=(PlannedActor("root", "admin", "run arbitrary command"),),
+        direct_planner=False,
+        repair_limit=0,
+    )
+    with pytest.raises(ValueError, match="role is not allowed"):
+        validate_task_plan(malicious, policy, workspace_dir=tmp_path)
+
 
 def test_artifact_reference_cannot_escape_boundaries(
     tmp_path: Path,
@@ -198,6 +320,12 @@ def test_artifact_reference_cannot_escape_boundaries(
         str(artifact),
         workspace_dir=workspace,
     ) == artifact.resolve()
+    with pytest.raises(ValueError, match="digest mismatch"):
+        validate_artifact_uri(
+            str(artifact),
+            workspace_dir=workspace,
+            expected_digest="0" * 64,
+        )
     with pytest.raises(ValueError, match="escapes"):
         validate_artifact_uri(
             str(tmp_path / "outside.patch"),

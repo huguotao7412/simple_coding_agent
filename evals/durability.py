@@ -7,15 +7,25 @@ from typing import Any
 
 DURABILITY_SCENARIOS = (
     "crash_after_assess",
-    "crash_before_approval",
+    "crash_after_compile_policy",
+    "approval_interrupt_write_crash",
     "crash_after_approval",
+    "crash_after_plan_persisted",
     "crash_after_actor_before_commit",
-    "verification_interrupted",
     "parallel_actor_failure",
+    "verification_interrupted",
+    "repair_interrupted_or_exhausted",
     "checkpoint_write_failure",
+    "run_store_write_failure",
+    "artifact_write_or_digest_failure",
     "missing_artifact_on_resume",
     "incompatible_policy_on_resume",
     "malicious_state_privilege_escalation",
+    "duplicate_resume",
+    "legacy_run_resume_rejected",
+    "completed_actor_not_replayed",
+    "oversized_or_nonserializable_state",
+    "unified_application_entrypoints",
 )
 
 

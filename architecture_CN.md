@@ -12,8 +12,9 @@
 - `core/verification/`：确定性质量门禁配置、子进程执行、证据与修复提示。
 - `core/sandbox/`：命令执行端口、本地/E2B 适配器与受控工作区传输。
 - `core/events.py`：runtime、runs、MCP、CLI 和 eval 共用的跨域事件契约。
-- `core/planner.py`：应用编排入口。
-- `core/orchestration/`：框架无关编排端口，以及 legacy / LangGraph 控制平面适配器。
+- `core/planner.py`：Planner 与 ReAct 数据平面的接入边界。
+- `core/orchestration/`：框架无关 `ApplicationService` 端口，以及唯一的
+  LangGraph 控制平面适配器。
 
 ```mermaid
 flowchart TD
@@ -49,12 +50,13 @@ flowchart TD
 
 `AgentRuntime` 是共享的 ReAct 执行循环。Planner 和 Actor 都复用它，因此最大步数、工具调用解析、畸形 JSON 恢复、重复动作熔断、上下文压缩、token 统计和事件输出都集中在一处。
 
-CLI、Web Live Agent、eval 和 Harbor 默认使用 LangGraph，在它上方增加粗粒度生命周期：
-`assess_task -> compile_policy -> 审批路由/interrupt ->
-plan_and_execute_actors -> verification/repair 路由 -> finalize`。Planner、Actor
-DAG 和有界 verification repair 继续调用现有组件，不拆成 token/tool 级图节点。
-图使用异步 API；本地使用 workspace state 中的 `AsyncSqliteSaver`，测试可使用
-`InMemorySaver`。
+CLI、Web Live Agent、eval 和 Harbor 使用同一条 LangGraph 生命周期：
+`assess_task -> compile_policy -> 审批路由/interrupt -> plan ->
+validate_plan -> schedule_ready_actors -> execute_actor ->
+collect_actor_results -> verify -> repair_router -> bounded_repair ->
+finalize`。每批 ready Actor 通过 `Send` 动态 fan-out；一个 Actor 节点通过现有
+`ActorExecutor` 运行完整 `AgentRuntime` ReAct 循环，token 和单次 tool call
+不会成为图节点。只读 planner-direct 请求也走同一生命周期的直接执行分支。
 
 交互入口通过 `InteractiveOrchestrationSession` 运行。每个用户请求创建新的
 durable RunContext/thread，只有有界的用户/助手历史进入下一任务。CLI 在同一
@@ -70,7 +72,11 @@ Actor 负责 execution：每个 Actor 只接收一个明确子任务，在自己
 
 `RunBudgetLedger` 是 Planner 与所有嵌套 Actor 共享的异步原子账本。模型调用在请求前占用额度，token 在 provider 返回 usage 后记账；若单次响应导致越界，该响应不会再驱动工具执行。委派会在 Actor 启动前原子预留配额，并区分“已启动角色”和“成功完成角色”，避免失败 Scout 放行后续 Coder。`scout_then_coder` 和 `scout_then_dag` 的依赖关系在 `DelegateTool` 内强制校验，而不是依赖模型自觉遵循 prompt。
 
-策略与消费快照会随 `RunCheckpoint` 写入 SQLite。恢复时继续使用原策略和累计消费，进程中断期间的离线时间不计入活跃时长。旧 checkpoint 缺少字段时按 legacy 无新增限制方式加载。交互式 REPL 每轮请求建立新的任务策略范围；持久化非交互 Run 不允许在恢复时重新分类或替换策略，仅允许通过外部 CLI 显式补充高风险批准。
+策略与消费快照会随 `RunCheckpoint` 写入 SQLite。恢复时继续使用原策略和累计消费，
+进程中断期间的离线时间不计入活跃时长。升级前缺少 LangGraph checkpoint 的 Run
+仍可 inspect，但不能 resume；缺失 policy 或 graph position 绝不会变成无限制兼容
+策略。交互式 REPL 每轮建立新的任务策略范围；持久化 Run 不允许在恢复时重新分类，
+显式审批只能满足原 policy 的高风险谓词。
 
 预算越界和策略拒绝采用 fail-closed 语义，分别发出 `budget_exhausted` 和 `policy_denied` 事件。它们不替代角色工具 allowlist、worktree、sandbox、路径边界和破坏性命令检测，而是位于这些防线之上的编排控制层。完整取舍和默认预算见 [执行策略计划](docs/plans/2026-07-15-enforced-execution-policy.md)。
 
@@ -241,6 +247,16 @@ flowchart LR
 write 和紧凑 Graph State；`RunStore` 继续负责领域状态、policy/budget、task、
 conversation、已完成工具调用、报告、artifact 和审计事件。两者通过相同
 run/thread ID 关联。图 checkpoint 和 finalize 未成功前不会向调用方交付成功。
+
+Graph State schema 2 只保存 validated compact DAG、ready/active/completed/
+failed/blocked Actor ID、attempt、handoff/artifact 引用、verification/usage
+摘要、repair 计数和终态引用；硬上限为 256 KiB，并提供显式版本迁移入口。
+它不保存完整 diff/log/conversation，也不保存 provider、锁、连接或 event-loop
+对象。恢复时会重新校验 artifact 边界与 SHA-256 digest。
+
+成功提交顺序为 artifact 校验、以非终态 RunStore 持久化 verification、最终
+LangGraph checkpoint、最后 RunStore terminal transition。该顺序不代表外部
+副作用 exactly-once；`AsyncSqliteSaver` 仅适合本地单进程。
 
 ## Eval 设计
 

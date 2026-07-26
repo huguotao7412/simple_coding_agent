@@ -40,10 +40,18 @@ python -m pytest -q tests/test_langgraph_orchestration.py \
   tests/test_runtime.py tests/test_verification_repair.py
 ```
 
-They cover pre-model approval interruption, same-thread durable resume,
-rejection without execution, checkpoint write failure, tool-result reuse,
-bounded repair, state serialization, and artifact boundary validation. These
-are regression scenarios, not real-model benchmark results.
+The durability catalog contains 20 named fault points spanning node-boundary
+crashes, approval persistence, plan/Actor/verification interruption, sibling
+Actor failure, repair exhaustion, checkpointer/RunStore/artifact errors,
+incompatible or malicious state, duplicate resume, legacy-run rejection,
+completed-Actor replay, bounded serialization, and all four application
+entrypoints. Tests use deterministic fake LLMs and injected failures; scenarios
+without an executed harness result are not assigned benchmark numbers.
+
+`summarize_durability_results` calculates task success rate, safety violation
+rate, false refusal rate, recovery success rate, duplicate-side-effect count,
+average duration, model/tool calls, token usage, and failure categories from
+the supplied execution observations. It never fabricates real-model results.
 
 ## Standard benchmarks with Harbor
 

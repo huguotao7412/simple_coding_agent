@@ -14,9 +14,9 @@ The modular monolith groups cohesive implementation details without hiding depen
 - `core/execution/`: versioned task assessment contracts and deterministic strategy selection.
 - `core/sandbox/`: command-execution port, local/E2B adapters, and guarded workspace transport.
 - `core/events.py`: the cross-domain event contract shared by runtime, runs, MCP, CLI, and evals.
-- `core/planner.py`: the application orchestration entry point.
-- `core/orchestration/`: framework-neutral orchestration port plus legacy and
-  LangGraph control-plane adapters.
+- `core/planner.py`: Planner integration with the ReAct data plane.
+- `core/orchestration/`: the framework-neutral `ApplicationService` port and
+  the sole LangGraph control-plane adapter.
 
 ```mermaid
 flowchart TD
@@ -53,14 +53,14 @@ User prompt
 
 `AgentRuntime` is the shared ReAct loop. Planner and Actor agents both use it, so step limits, tool-call parsing, malformed JSON recovery, repeated-action circuit breaking, context compression, token reporting, and event emission live in one place.
 
-The default LangGraph path for CLI, Web Live Agent, eval, and Harbor adds a
-coarser lifecycle above this loop:
-`assess_task -> compile_policy -> approval router/interrupt ->
-plan_and_execute_actors -> verify/repair router -> finalize`. Planning, Actor DAG
-scheduling, and bounded verification repair are intentionally invoked through
-their existing components rather than decomposed into token/tool graph nodes.
-The graph uses async APIs and a workspace-state `AsyncSqliteSaver`; tests may use
-`InMemorySaver`.
+CLI, Web Live Agent, eval, and Harbor use one LangGraph lifecycle:
+`assess_task -> compile_policy -> approval router/interrupt -> plan ->
+validate_plan -> schedule_ready_actors -> execute_actor -> collect_actor_results
+-> verify -> repair_router -> bounded_repair -> finalize`. `Send` performs
+dynamic fan-out for each ready Actor batch. An Actor node runs one complete
+`AgentRuntime` ReAct loop through the existing `ActorExecutor`; tokens and
+individual tool calls are deliberately not graph nodes. Planner-direct,
+read-only work uses the same lifecycle with a direct execution branch.
 
 Interactive surfaces use `InteractiveOrchestrationSession`. Each user request
 creates a new durable RunContext/thread, while only bounded user/assistant history
@@ -86,7 +86,13 @@ Actors own execution. Each Actor receives one concrete task plus scoped context,
 
 One lock-protected `RunBudgetLedger` is shared by Planner and all nested Actors. Model calls reserve capacity before dispatch and provider usage is charged after the response; a response that crosses the token limit is not allowed to drive tool execution. Delegation atomically reserves Actor capacity and distinguishes active Actor slots, start attempts, and successfully completed roles, so bootstrap failure can be retried without becoming an unlimited loop. `scout_then_coder` and `scout_then_dag` dependency shapes are enforced in `DelegateTool`, not left to prompt compliance.
 
-Policy and consumption snapshots are stored in `RunCheckpoint`. Resume continues with the original policy and cumulative consumption, while process downtime is excluded from active wall time. Legacy checkpoints without these fields remain loadable. Interactive REPL turns receive fresh task policy scopes; durable non-interactive Runs cannot be reclassified during resume, although an external CLI approval may satisfy a previously missing high-risk authorization.
+Policy and consumption snapshots are stored in `RunCheckpoint`. Resume continues
+with the original policy and cumulative consumption, while process downtime is
+excluded from active wall time. Pre-LangGraph checkpoints remain inspectable but
+are not resumable; missing policy or graph position never becomes an unbounded
+compatibility policy. Interactive REPL turns receive fresh task policy scopes;
+durable Runs cannot be reclassified during resume, although explicit approval
+may satisfy the existing policy's high-risk predicate.
 
 Policy and budget failures are fail-closed and emit `policy_denied` or `budget_exhausted`. This orchestration layer complements rather than replaces role tool allowlists, worktrees, sandboxing, path boundaries, and destructive-command guards. See the [execution policy plan](docs/plans/2026-07-15-enforced-execution-policy.md) for defaults and trade-offs.
 
@@ -276,6 +282,18 @@ pending graph writes, and compact graph state. `RunStore` continues to own domai
 status, policy/budget, task state, conversations, completed tool calls, reports,
 artifacts, and audit events. Both use the same run/thread ID. Terminal success is
 withheld from callers until graph checkpoint/finalization succeeds.
+
+Graph State schema 2 stores the validated compact DAG, ready/active/completed/
+failed/blocked Actor IDs, attempts, handoff and artifact references, verification
+and usage summaries, repair counters, and terminal references. It has a 256 KiB
+hard limit and a versioned migration entry point. It never carries tool/provider
+instances, event-loop objects, full diffs, full logs, or conversations. Restored
+artifact references are boundary-checked and SHA-256 verified.
+
+Successful finalization is ordered as artifact validation, verification
+persistence with a non-terminal RunStore status, final LangGraph checkpoint, and
+then the RunStore terminal transition. This does not make external side effects
+exactly-once. `AsyncSqliteSaver` is limited to local single-process use.
 
 ## Eval Design
 
