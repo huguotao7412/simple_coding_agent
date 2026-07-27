@@ -53,7 +53,14 @@ def _build_role_config() -> dict[ActorRole, RoleConfig]:
         ),
         ActorRole.CODER: RoleConfig(
             system_prompt=ACTOR_SYSTEM_PROMPT,
-            tool_allowlist=None,  # Full tool access
+            tool_allowlist={
+                "list_dir", "read", "read_outline", "search_codebase",
+                "read_file", "read_text_file", "read_multiple_files",
+                "list_directory", "directory_tree", "search_files",
+                "get_file_info", "list_allowed_directories",
+                "edit", "edit_file", "write", "write_file", "create_directory",
+                "run",
+            },
             default_max_steps=30,
         ),
         ActorRole.VERIFIER: RoleConfig(

@@ -107,6 +107,66 @@ tests/
 
 See [architecture.md](architecture.md) and [architecture_CN.md](architecture_CN.md) for the Planner/Actor lifecycle, worktree isolation, MCP boundary, and eval design.
 
+## Hybrid security
+
+SCA separates three boundaries:
+
+1. OpenAI Guardrails Python is an optional probabilistic content-risk signal.
+2. `core.security.SecurityMiddleware` is the deterministic PDP/PEP for
+   capabilities, final-argument authorization, workspace boundaries, approval,
+   destructive-command denial, redaction, and audit.
+3. `SandboxBackend`, the OS, proxy, firewall, or E2B owns real process/network
+   isolation. A worktree or URL text detector is not a sandbox.
+
+External `ALLOW` never overrides local `DENY`. Unknown tools/capabilities are
+denied, and every tool is reauthorized with its final name and arguments directly
+before dispatch. Input approval never approves later tools.
+
+Install the preview integration only when needed:
+
+```bash
+pip install -e ".[guardrails]"
+```
+
+The Python 3.12 compatibility range is
+`openai-guardrails>=0.2.1,<0.3`. Third-party types stay behind
+`core.security.guards`; SCA retains its existing streaming LLM client and calls
+the official runtime directly with `check_plain_text(...,
+suppress_tripwire=True, raise_guardrail_errors=True)`.
+
+| Mode | Local content guard | External guard | External unavailable |
+|---|---:|---:|---|
+| `local` | on | off | unaffected |
+| `hybrid` | on | configured only | structured warning/review; local limits remain |
+| `strict` | on | required | fail closed |
+| `off` | off | off | tool policy, approval, audit, sandbox, workspace and destructive-action controls stay on |
+
+Use a dedicated key and trusted absolute configuration path:
+
+```dotenv
+SCA_SECURITY_MODE=hybrid
+SCA_GUARDRAILS_CONFIG=C:\Users\me\.config\sca\guardrails-coding.json
+SCA_GUARDRAILS_API_KEY=your-dedicated-key
+SCA_GUARDRAILS_BASE_URL=https://api.openai.com/v1
+SCA_GUARDRAILS_TIMEOUT=10
+SCA_GUARDRAILS_MAX_CONCURRENCY=4
+```
+
+`SCA_API_KEY` and `E2B_API_KEY` are never reused. Recognized credentials are
+removed from MCP, Actor, sandbox, and verification subprocess environments.
+Copy [`examples/openai-guardrails-coding.json`](examples/openai-guardrails-coding.json)
+to a user-controlled location; repository Guardrails config is not trusted or
+loaded automatically.
+
+External egress is allowlisted by stage, classification, host, and payload size
+after local redaction. Source code, binary data, secrets, credentials, and raw
+tool output are denied by default. URL detection, tool network authorization,
+and real network blocking are three separate controls.
+
+Guardrail calls, prompt/completion tokens, failures, tripwires, and latency are
+tracked separately from agent usage. Timeout, concurrency, per-run call/token
+budgets, and a consecutive-failure circuit breaker bound cost and latency.
+
 ## User Installation
 
 Use `pipx` for a user-level CLI. It gives SCA an isolated Python environment and exposes `sca` on the user `PATH`, so neither the source checkout nor a target project's `.venv` needs to be activated.
@@ -247,7 +307,7 @@ timeout_seconds = 120
 
 [[gates]]
 name = "types"
-command = ["{python}", "-m", "mypy", "core"]
+command = ["{python}", "-m", "mypy"]
 required = false
 ```
 

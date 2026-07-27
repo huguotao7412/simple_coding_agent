@@ -40,6 +40,9 @@ Repository = "https://github.com/huguotao7412/simple_coding_agent"
 Issues = "https://github.com/huguotao7412/simple_coding_agent/issues"
 
 [project.optional-dependencies]
+guardrails = [
+    "openai-guardrails>=0.2.1,<0.3",
+]
 dev = [
     "mypy>=1.10",
     "pytest>=8",
@@ -72,6 +75,7 @@ files = [
     "core/config.py",
     "core/model_names.py",
     "core/sandbox",
+    "core/security",
     "core/actors/contracts.py",
     "core/policy.py",
     "core/paths.py",
@@ -83,6 +87,8 @@ files = [
     "core/runs/context.py",
     "core/runs/task_state.py",
     "core/runtime/engine.py",
+    "core/runtime/loop_control.py",
+    "core/runtime/tool_calls.py",
     "core/planner.py",
     "core/actors/agent.py",
     "core/actors/worktree.py",

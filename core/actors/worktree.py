@@ -412,6 +412,7 @@ class WorktreeActorExecutor:
                 max_steps=max_steps,
                 run_context=run_context,
             )
+            setattr(actor, "security_role", role.value)
             summary = await actor.run(
                 "Use the provided context and objective to execute your assigned subtask."
             )

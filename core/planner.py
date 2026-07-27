@@ -13,6 +13,10 @@ from .events import AgentEvent
 from .runtime.engine import AgentRuntime
 from .runs.context import RunContext
 from .tools.base import BaseTool, ToolResult
+from .security.factory import build_security_manager
+from .security.manager import SecurityManager
+from .security.models import ContentGuardAssessment, GuardOutcome, GuardStage
+from .security.redaction import redact_text
 
 
 class Planner:
@@ -29,6 +33,7 @@ class Planner:
         task_assessor: TaskAssessor | None = None,
         high_risk_approved: bool = False,
         external_lifecycle: bool = False,
+        security_manager: SecurityManager | None = None,
     ):
         self.llm = llm_client
         self.workspace_dir = workspace_dir
@@ -40,6 +45,10 @@ class Planner:
         self.current_task_assessment: TaskAssessment | None = None
         self.high_risk_approved = high_risk_approved
         self.external_lifecycle = external_lifecycle
+        self.security_manager = security_manager or build_security_manager(
+            workspace_dir,
+            self.run_context,
+        )
 
         for tool in tools:
             if tool.name == "delegate":
@@ -83,6 +92,8 @@ class Planner:
             emit_token_stats=emit_token_stats,
             run_context=self.run_context,
             manage_run_lifecycle=not self.external_lifecycle,
+            security_manager=self.security_manager,
+            role="planner",
         )
 
     async def run(
@@ -107,7 +118,30 @@ class Planner:
         resume: bool = False,
     ) -> AsyncGenerator[AgentEvent, None]:
         if not resume:
+            user_input, rejection, input_assessment = (
+                await self.inspect_user_input(user_input, audit=False)
+            )
+            if rejection:
+                await self.security_manager.audit_assessment(
+                    GuardStage.USER_INPUT,
+                    input_assessment,
+                )
+                await self.run_context.emit(AgentEvent(
+                    type="security_decision",
+                    content=rejection,
+                ))
+                await self.run_context.emit(AgentEvent(
+                    type="error",
+                    content=rejection,
+                ))
+                while not self.run_context.events.empty():
+                    yield await self.run_context.events.get()
+                return
             await self.prepare_task(user_input)
+            await self.security_manager.audit_assessment(
+                GuardStage.USER_INPUT,
+                input_assessment,
+            )
         else:
             restored_assessment = self._restored_assessment_json()
             if restored_assessment:
@@ -124,6 +158,39 @@ class Planner:
 
         async for event in self.run_prepared_stream(user_input, resume=resume):
             yield event
+
+    async def inspect_user_input(
+        self,
+        user_input: str,
+        *,
+        audit: bool = True,
+    ) -> tuple[str, str, ContentGuardAssessment]:
+        """Apply the shared ingress guard before assessment or persistence."""
+        await self.security_manager.emit_startup_warning()
+        assessment = await self.security_manager.inspect(
+            stage=GuardStage.USER_INPUT,
+            text=user_input,
+            role="planner",
+            emit_events=False,
+        )
+        if audit:
+            await self.security_manager.audit_assessment(
+                GuardStage.USER_INPUT,
+                assessment,
+            )
+        if assessment.outcome is GuardOutcome.DENY:
+            return (
+                user_input,
+                "The request was denied by the input security policy.",
+                assessment,
+            )
+        if assessment.outcome is GuardOutcome.REVIEW:
+            return (
+                user_input,
+                "The request requires explicit review before processing.",
+                assessment,
+            )
+        return str(redact_text(user_input).value), "", assessment
 
     async def prepare_task(
         self,

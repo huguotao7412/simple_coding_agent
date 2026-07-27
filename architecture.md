@@ -67,6 +67,101 @@ creates a new durable RunContext/thread, while only bounded user/assistant histo
 crosses into the next request. CLI approval resumes immediately on the same thread;
 the Web Live Agent exposes equivalent approve/reject controls.
 
+## Security architecture and interception audit
+
+```mermaid
+flowchart LR
+    U["User Input"] --> R["Local Redaction"]
+    R --> L["Local Content Guard"]
+    L --> O["Optional OpenAI Guardrails"]
+    O --> C["Monotonic Composite Decision"]
+    C --> P["TaskAssessor / ExecutionPolicy"]
+    P --> A["AgentRuntime"]
+    A --> T["Tool Call with final args"]
+    T --> M["Deterministic Security Middleware"]
+    M --> D{"Approval / Deny / Execute"}
+    D --> S["Sandbox"]
+    S --> OR["Local Output Redaction"]
+    OR --> EO["Optional External Output Guard"]
+    EO --> U
+```
+
+Guardrails is a probabilistic detector, `SecurityMiddleware` is the final
+PDP/PEP, and `SandboxBackend` is the resource-isolation boundary. Composition is
+monotonic: denial dominates review/error and allow, risk takes the maximum, and
+local rule IDs remain present.
+
+The security package follows an inward-only dependency direction:
+
+```text
+models
+  <- content_guard
+  <- local_guard / openai_guard
+  <- composite_guard
+  <- manager
+  <- factory
+
+models <- capabilities <- approvals <- tool_security
+models <- egress --------^
+redaction ----------------^
+```
+
+`guards.py` and `middleware.py` are compatibility facades only. Core runtime
+code imports the focused leaf modules, while external callers can keep using the
+old paths. The optional `guardrails` and `openai` imports occur only inside the
+OpenAI adapter/factory path, so local mode and the base wheel remain independent.
+
+Within `core.runtime`, `tool_calls.py` owns wire-format parsing and canonical tool
+categories, and `loop_control.py` owns anti-loop/exploration state. `engine.py`
+retains the transaction-sensitive sequence of model call, final-argument
+authorization, side effect, output redaction, conversation update, and durable
+checkpoint. This avoids moving persistence across the execution boundary merely
+to reduce line count.
+
+| Execution point | Location | Security path |
+|---|---|---|
+| Input enters Planner | `Planner.run_stream` | USER_INPUT redaction and local/optional external guard before assessment, conversation, checkpoint, Actor, or tool |
+| Message/checkpoint | `AgentRuntime.run_stream` / `_persist_root` | only allowed, sanitized input persists |
+| Every model call | `AgentRuntime._run_stream_loop` | PRE_MODEL local check; sanitized output and separate usage after |
+| Planner/Actor local tool | `AgentRuntime._execute_single_tool` | shared PEP on final arguments |
+| MCP tool | `MCPToolProvider.call_tool` | role allowlist and deterministic PEP immediately before routing |
+| Run | `SandboxRunTool.execute` | process capability then sandbox with stripped environment |
+| Apply patch | `ApplyPatchTool.execute` | Planner PEP plus exact task/diff/verification evidence |
+| Delegate | `DelegateTool.execute` | `DELEGATE_ACTOR` plus immutable execution policy |
+| Verification | `VerificationRunner._run_gate` | fixed argv (`shell=False`) through sandbox |
+| Tool output to model | `AgentRuntime._execute_single_tool` | local secret redaction before conversation/checkpoint |
+| Event/SQLite persistence | `RunContext.emit`, `SecurityManager._event` | structured sanitized metadata; no raw guarded input/args/output/key/chain-of-thought |
+| Resume/cache | `_pending_tool_calls`, `_decode_cached_tool_result` | cached result was redacted; pending call reauthorized; approval is not replayed |
+
+Capabilities are explicit. Scout is read-only. Coder has bounded worktree
+read/write/create and process execution but no secret, deletion, network, Git
+mutation, dependency-change, or arbitrary external-side-effect capability.
+Verifier reads and runs verification and cannot modify product code. Planner has
+orchestration and verified-patch capability. `Coder tool_allowlist=None` has
+been removed.
+
+Approval fingerprints SHA-256 bind run, Actor, role, normalized workspace,
+canonical tool name/JSON arguments, capabilities, risk, and policy version.
+Grants expire and are single-use, so any argument or scope change invalidates
+them and resume cannot replay them.
+
+Guardrails configuration trust order is built-in/example baseline copied outside
+the repository, user-controlled configuration, then an explicitly selected
+trusted absolute path. `.sca/guardrails.json` is not loaded. Any future workspace
+merge must only add rules, promote `block` false-to-true, shrink allowlists, and
+never disable strict/fail-closed behavior or system denies.
+
+Structured security events include guard start/result/error, security decision,
+approval lifecycle, tool start/finish, output redaction, and egress allow/deny.
+Only sanitized errors and metadata are persisted. Guardrail token and latency
+totals are separate from main-model totals.
+
+Known limitations: regex rules are risk signals rather than complete injection
+defense; the approval store does not yet expose an interactive CLI grant command;
+local sandbox mode retains host-user authority; middleware cannot replace
+firewall/proxy/E2B enforcement; and the preview Guardrails dependency adds
+latency, model cost, transitive packages, and compatibility risk.
+
 Before a new Planner turn enters that loop, `TaskAssessor` performs a bounded,
 read-only workspace scan and classifies intent, complexity, and risk. It publishes a
 versioned `task_assessment` event and injects the same JSON as durable system context.

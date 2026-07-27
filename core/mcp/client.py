@@ -35,6 +35,9 @@ from ..runs.context import RunContext
 from ..sandbox.contracts import SandboxBackend
 from ..sandbox.factory import create_sandbox_backend
 from ..tools.sandbox_run import SandboxRunTool
+from ..security.tool_security import SecurityMiddleware
+from ..security.models import SecurityOutcome
+from ..security.redaction import sanitized_subprocess_environment
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +102,7 @@ class MCPToolProvider:
         self._actor_id = actor_id
         self._sandbox_backend = sandbox_backend or create_sandbox_backend()
         self._install_run_tool()
+        self._security_middleware: SecurityMiddleware | None = None
 
     def configure_sandbox(self, backend: SandboxBackend) -> None:
         if self._sessions:
@@ -125,6 +129,7 @@ class MCPToolProvider:
     ) -> None:
         """Launch MCP servers bound to the given worktree directory."""
         self._worktree_path = os.path.abspath(worktree_path)
+        self._security_middleware = SecurityMiddleware(self._worktree_path)
         self.set_policy(
             tool_policy or ToolPolicy.for_role("actor", tool_allowlist)
         )
@@ -159,7 +164,7 @@ class MCPToolProvider:
             server_params = StdioServerParameters(
                 command=cmd_and_args[0],
                 args=cmd_and_args[1:],
-                env=None,
+                env=sanitized_subprocess_environment(),
                 cwd=self._worktree_path,
             )
 
@@ -199,6 +204,22 @@ class MCPToolProvider:
 
     async def call_tool(self, name: str, args: dict[str, Any]) -> ToolResult:
         """Route a tool call to the correct MCP server and return the result."""
+        args = dict(args)
+        args["workspace_dir"] = self._worktree_path
+        if self._security_middleware is not None:
+            security = self._security_middleware.authorize_tool(
+                run_id=(self._run_context.run_id if self._run_context is not None else "local"),
+                actor_id=self._actor_id,
+                role=self._policy.role,
+                tool_name=name,
+                arguments=args,
+            )
+            if security.outcome is not SecurityOutcome.ALLOW:
+                return ToolResult.fail(
+                    "Tool execution denied by deterministic security middleware."
+                    if security.outcome is SecurityOutcome.DENY
+                    else "Tool execution requires approval for these exact arguments."
+                )
         decision = self._policy.authorize(name)
         if not decision.allowed:
             if self._run_context is not None:
@@ -228,7 +249,6 @@ class MCPToolProvider:
         local_tool = self._local_tools.get(name)
         if local_tool is not None:
             try:
-                args["workspace_dir"] = self._worktree_path
                 return await local_tool.execute(**args)
             except Exception as e:
                 return ToolResult.fail(f"Internal local tool error: {e}")

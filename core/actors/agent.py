@@ -14,6 +14,7 @@ from ..events import AgentEvent
 from ..runtime.engine import AgentRuntime
 from ..runs.context import RunContext
 from ..tools.base import BaseTool
+from ..security.factory import build_security_manager
 
 
 @dataclass
@@ -126,6 +127,7 @@ class ActorAgent:
         self.run_context = run_context or RunContext.create()
         self.tools_by_name = {t.name: t for t in tools} if tools else {}
         self.ctx = context_manager
+        self.security_role = "coder"
 
     def _build_dynamic_context_msg(self) -> dict[str, str]:
         content = (
@@ -135,6 +137,7 @@ class ActorAgent:
         return {"role": "system", "content": content}
 
     def _runtime(self) -> AgentRuntime:
+        security = build_security_manager(self.workspace_dir, self.run_context)
         return AgentRuntime(
             llm_client=self.llm,
             context_manager=self.ctx,
@@ -145,6 +148,8 @@ class ActorAgent:
             actor_id=self.actor_id,
             dynamic_context_builder=self._build_dynamic_context_msg,
             run_context=self.run_context,
+            security_manager=security,
+            role=self.security_role,
         )
 
     async def run(

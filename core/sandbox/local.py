@@ -8,6 +8,7 @@ from time import monotonic
 from .config import SandboxLimits
 from .contracts import SandboxExecutionRequest, SandboxExecutionResult
 from .paths import resolve_sandbox_cwd
+from ..security.redaction import sanitized_subprocess_environment
 
 
 class LocalSandboxBackend:
@@ -47,6 +48,7 @@ class LocalSandboxBackend:
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env=sanitized_subprocess_environment(),
             )
         else:
             process = await asyncio.create_subprocess_exec(
@@ -54,6 +56,7 @@ class LocalSandboxBackend:
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env=sanitized_subprocess_environment(),
             )
         if process.stdout is None:  # pragma: no cover - PIPE guarantees this
             raise RuntimeError("sandbox process stdout pipe was not created")

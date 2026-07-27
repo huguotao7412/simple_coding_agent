@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "guardrails": [
+    {
+      "name": "Secret Keys",
+      "config": {
+        "threshold": "balanced",
+        "custom_regex": null
+      }
+    },
+    {
+      "name": "Prompt Injection Detection",
+      "config": {
+        "model": "gpt-4.1-mini",
+        "confidence_threshold": 0.8,
+        "max_turns": 3,
+        "include_reasoning": false
+      }
+    },
+    {
+      "name": "Jailbreak",
+      "config": {
+        "model": "gpt-4.1-mini",
+        "confidence_threshold": 0.8,
+        "max_turns": 3,
+        "include_reasoning": false
+      }
+    },
+    {
+      "name": "Moderation",
+      "config": {
+        "categories": [
+          "hate",
+          "harassment",
+          "self-harm",
+          "violence",
+          "sexual/minors",
+          "illicit/violent"
+        ]
+      }
+    },
+    {
+      "name": "Contains PII",
+      "config": {
+        "entities": [
+          "EMAIL_ADDRESS",
+          "PHONE_NUMBER",
+          "CREDIT_CARD",
+          "US_SSN"
+        ],
+        "block": true,
+        "detect_encoded_pii": true
+      }
+    },
+    {
+      "name": "URL Filter",
+      "config": {
+        "url_allow_list": [
+          "github.com",
+          "docs.python.org",
+          "pypi.org",
+          "openai.com"
+        ],
+        "allowed_schemes": [
+          "https"
+        ],
+        "block_userinfo": true,
+        "allow_subdomains": true
+      }
+    }
+  ],
+  "config": {
+    "concurrency": 4,
+    "suppress_tripwire": true
+  }
+}

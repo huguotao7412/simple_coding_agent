@@ -20,6 +20,16 @@ SCA_RETENTION_DAYS=30
 SCA_RETAIN_RUNS=50
 SCA_ARTIFACT_MAX_BYTES=1073741824
 
+# Content security. Guardrails credentials are intentionally separate from
+# SCA_API_KEY and are never forwarded to Actor/tool subprocesses.
+SCA_SECURITY_MODE=local
+# SCA_GUARDRAILS_CONFIG=C:\\trusted\\guardrails-coding.json
+# SCA_GUARDRAILS_API_KEY=your-dedicated-guardrails-key
+# SCA_GUARDRAILS_BASE_URL=https://api.openai.com/v1
+# SCA_GUARDRAILS_MODEL=gpt-4.1-mini
+# SCA_GUARDRAILS_TIMEOUT=10
+# SCA_GUARDRAILS_MAX_CONCURRENCY=4
+
 # Optional E2B remote sandbox
 # E2B_API_KEY=e2b_your-key
 # SCA_E2B_TEMPLATE=base

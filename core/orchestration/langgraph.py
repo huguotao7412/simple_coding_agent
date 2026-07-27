@@ -860,11 +860,22 @@ class LangGraphOrchestrator:
             else:
                 graph_input = None
         else:
+            secured_request, rejection, _ = (
+                await self._planner.inspect_user_input(request.user_request)
+            )
+            if rejection:
+                await self._events.put(AgentEvent(
+                    type="security_decision",
+                    content=rejection,
+                    node_name="input_guard",
+                    run_id=self._planner.run_context.run_id,
+                ))
+                raise PermissionError(rejection)
             graph_input = GraphState(
                 schema_version=GRAPH_STATE_SCHEMA_VERSION,
                 run_id=self._planner.run_context.run_id,
                 thread_id=self._planner.run_context.run_id,
-                user_request=request.user_request,
+                user_request=secured_request,
                 approval_result=(
                     {"approved": True, "decided_by": "cli"}
                     if request.approval is True
