@@ -14,6 +14,8 @@ unidiff>=0.7.5       # 用于解析和生成文件变更的 Diff 数据，供前
 
 # --- MCP (Model Context Protocol) ---
 mcp>=1.0.0
+langgraph>=1.0,<2
+langgraph-checkpoint-sqlite>=3.0,<4
 
 # --- Tokenization ---
 deepseek-tokenizer

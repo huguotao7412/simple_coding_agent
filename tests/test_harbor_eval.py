@@ -193,9 +193,21 @@ def test_harbor_entrypoint_writes_trace_summary_and_report(monkeypatch, tmp_path
             )
             yield AgentEvent(type="done", content="completed")
 
+    class FakeOrchestrator:
+        def __init__(self, planner):
+            self.planner = planner
+
+        async def run_stream(self, request):
+            async for event in self.planner.run_stream(request.user_request):
+                yield event
+
     monkeypatch.setattr(
         "evals.harbor_entrypoint.build_planner",
         lambda workspace, model=None, task_assessor=None: FakePlanner(task_assessor),
+    )
+    monkeypatch.setattr(
+        "evals.harbor_entrypoint.create_application_service",
+        lambda planner: FakeOrchestrator(planner),
     )
     workspace = tmp_path / "workspace"
     logs = tmp_path / "logs"

@@ -20,6 +20,8 @@ class AgentEvent:
     run_id: str = ""
     task_id: str = ""
     parent_id: str = ""
+    node_name: str = ""
+    route: str = ""
     prompt_tokens: int = 0
     completion_tokens: int = 0
     usage_estimated: bool = True

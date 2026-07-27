@@ -27,6 +27,9 @@ The project is intentionally aimed at developers who work in terminals, Git repo
 - Replaceable local/E2B sandbox protocol shared by Actor shell and verification.
 - Safety eval fixtures for path escape, dirty workspace, and destructive command behavior.
 - Deterministic unit tests for runtime, isolation, reports, and eval behavior.
+- A single LangGraph 1.x durable control plane with async SQLite checkpoints,
+  structured Actor DAG fan-out, persistent human approval, and the existing
+  secure runtime as its data plane.
 
 This is not positioned as a fully autonomous production coding system yet. The current goal is a reliable, auditable local agent core that can be improved and measured over time.
 
@@ -178,6 +181,33 @@ Precedence is process environment > current workspace `.env` > user config. SCA 
 
 The client uses an OpenAI-compatible chat completions API.
 
+### Durable orchestration
+
+LangGraph is the only top-level control plane for interactive CLI,
+non-interactive CLI, the Web Live Agent, local eval, and Harbor runs:
+
+```powershell
+sca
+sca --prompt "Explain this repository"
+sca --prompt "Fix the reviewed issue"
+```
+
+LangGraph checkpoints compact workflow state in the workspace-keyed user state
+directory and use `run_id` as `thread_id`. High-risk runs pause with a structured
+interrupt and resume with the existing `--approve-high-risk` flag. LangGraph
+provides durable orchestration, not a security sandbox, and checkpoint replay is
+not exactly-once execution for shell, filesystem, or network side effects. See
+[ADR-0006](docs/adr/0006-langgraph-control-plane.md).
+
+In the interactive CLI, every user request receives a separate durable Run and
+LangGraph thread. A compact user/assistant history is carried into the next task,
+while execution policy, tool results, and task DAG state remain run-scoped.
+High-risk interrupts are rendered as an approval prompt and resume the same thread.
+
+Runs created before LangGraph checkpoints remain available to `runs` and
+`inspect`, but `resume` rejects them with an explicit migration explanation.
+SCA never guesses a graph program counter. Start a new Run to continue that work.
+
 ### Command sandbox
 
 `local` is the compatibility default and is **not OS-isolated**. Check the active
@@ -326,6 +356,13 @@ The current safety model is pragmatic rather than magical:
 Git worktrees and shadow repositories provide version-control and working-directory separation, not an operating-system sandbox. Shell processes still run with the permissions of the current user, so only run the agent against projects and environments you are willing to modify.
 
 SQLite cannot atomically commit an arbitrary shell, filesystem, or network side effect together with its tool-result checkpoint. A crash after the side effect but before the checkpoint can still cause a retry. See [ADR-0002](docs/adr/0002-durable-run-store.md) for the exact transaction boundary.
+
+Graph finalization uses an explicit order: validate required artifact digests,
+persist verification while the domain Run remains non-terminal, let LangGraph
+commit the final graph checkpoint, and only then mark the RunStore record
+completed. Any persistence error is surfaced. The local `AsyncSqliteSaver` is
+appropriate for a single-process CLI and is not the production multi-process
+checkpointer.
 
 ## Development
 

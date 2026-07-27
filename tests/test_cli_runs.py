@@ -214,7 +214,7 @@ def test_inspect_unknown_run_returns_nonzero_without_api_key(
 
 
 @pytest.mark.asyncio
-async def test_resume_once_reconstructs_planner_and_completes_run(
+async def test_legacy_run_remains_inspectable_but_resume_is_rejected(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -272,11 +272,11 @@ async def test_resume_once_reconstructs_planner_and_completes_run(
     )
     await store.create_run(record, checkpoint)
 
-    result = await resume_once(record.run_id, str(tmp_path))
+    with pytest.raises(RuntimeError, match="predates the LangGraph checkpoint"):
+        await resume_once(record.run_id, str(tmp_path))
 
-    assert result == "resumed successfully"
-    assert ResumeLLM.observed_messages[1]["content"] == "original request"
-    assert len(ResumeLLM.observed_messages) == 2
-    completed = await store.load_run(record.run_id)
-    assert completed is not None
-    assert completed.record.status is RunStatus.COMPLETED
+    inspectable = await store.load_run(record.run_id)
+    assert inspectable is not None
+    assert inspectable.record.status is RunStatus.PAUSED
+    assert inspectable.checkpoint is not None
+    assert ResumeLLM.observed_messages == []

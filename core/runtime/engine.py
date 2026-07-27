@@ -98,6 +98,7 @@ class AgentRuntime:
         after_tool_call: Callable[[str, ToolResult], Awaitable[list[AgentEvent]]] | None = None,
         emit_token_stats: bool = False,
         run_context: RunContext | None = None,
+        manage_run_lifecycle: bool = True,
     ) -> None:
         self.llm = llm_client
         self.ctx = context_manager
@@ -108,6 +109,7 @@ class AgentRuntime:
         self.dynamic_context_builder = dynamic_context_builder
         self.after_tool_call = after_tool_call
         self.emit_token_stats = emit_token_stats
+        self.manage_run_lifecycle = manage_run_lifecycle
         self.run_context = run_context or RunContext.create()
         self.tools_by_name = {t.name: t for t in tools} if tools else {}
         self._recent_actions: deque[int] = deque(maxlen=10)
@@ -449,6 +451,8 @@ class AgentRuntime:
     ) -> None:
         if self.actor_id:
             return
+        if not self.manage_run_lifecycle:
+            status = None
         await self.run_context.persist_checkpoint(
             self.ctx.messages,
             event_type=event_type,

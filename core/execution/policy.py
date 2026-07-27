@@ -88,6 +88,7 @@ class ExecutionPolicy:
     require_quality_gates: bool
     requires_human_approval: bool
     human_approved: bool = False
+    continue_independent_branches: bool = True
     schema_version: int = EXECUTION_POLICY_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -149,6 +150,7 @@ class ExecutionPolicy:
             "require_quality_gates": self.require_quality_gates,
             "requires_human_approval": self.requires_human_approval,
             "human_approved": self.human_approved,
+            "continue_independent_branches": self.continue_independent_branches,
         }
 
     def to_json(self) -> str:
@@ -180,6 +182,9 @@ class ExecutionPolicy:
             require_quality_gates=bool(value.get("require_quality_gates", False)),
             requires_human_approval=bool(value.get("requires_human_approval", False)),
             human_approved=bool(value.get("human_approved", False)),
+            continue_independent_branches=bool(
+                value.get("continue_independent_branches", True)
+            ),
         )
 
 

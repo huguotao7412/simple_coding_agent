@@ -5,7 +5,7 @@ import asyncio
 import os
 import sys
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from cli.encoding import configure_stdio_encoding
 from core.model_names import normalize_model_name
@@ -100,9 +100,16 @@ async def run_once(
         context_manager=context_manager,
         high_risk_approved=high_risk_approved,
     )
+    from core.orchestration.factory import create_application_service
+    from core.orchestration.protocol import OrchestrationRequest
+
+    orchestrator = create_application_service(planner)
     report = RunReport()
     final_output = ""
-    async for event in planner.run_stream(prompt):
+    async for event in orchestrator.run_stream(OrchestrationRequest(
+        user_request=prompt,
+        approval=True if high_risk_approved else None,
+    )):
         report.observe(event)
         if event.type == "done":
             final_output = event.content
@@ -137,17 +144,32 @@ async def resume_once(
         checkpoint,
         store=store,
     )
-    if high_risk_approved:
-        await run_context.grant_human_approval()
+    from core.orchestration.factory import (
+        create_application_service,
+        has_langgraph_checkpoint,
+    )
+    from core.orchestration.protocol import OrchestrationRequest
+
+    if not has_langgraph_checkpoint(workspace_dir, run_id):
+        raise RuntimeError(
+            f"durable run {run_id} predates the LangGraph checkpoint format "
+            "and remains inspectable, but cannot be resumed safely. SCA will "
+            "not invent a graph program counter; start a new Run instead."
+        )
     planner = build_planner(
         workspace_dir=workspace_dir,
         model=model or stored.record.model,
         run_context=run_context,
         context_manager=context_manager,
     )
+    orchestrator = create_application_service(planner)
     report = RunReport()
     final_output = ""
-    async for event in planner.run_stream("", resume=True):
+    async for event in orchestrator.run_stream(OrchestrationRequest(
+        user_request="",
+        resume=True,
+        approval=True if high_risk_approved else None,
+    )):
         report.observe(event)
         if event.type == "done":
             final_output = event.content
@@ -429,7 +451,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     from cli.ui import UI
 
     try:
-        planner = build_planner(
+        # Validate configuration before entering the REPL. Each turn below gets
+        # its own durable RunContext and LangGraph thread.
+        build_planner(
             workspace_dir=workspace_dir,
             model=args.model,
             high_risk_approved=args.approve_high_risk,
@@ -438,8 +462,40 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
+    from core.orchestration.interactive import InteractiveOrchestrationSession
+    from core.system_prompt import PLANNER_SYSTEM_PROMPT
+
+    async def interactive_context_factory(
+        messages: list[dict[str, Any]],
+    ) -> RunContext:
+        from cli.runs import create_durable_run_context
+
+        return await create_durable_run_context(
+            workspace_dir=workspace_dir,
+            model=_resolved_model(args.model),
+            messages=messages,
+        )
+
+    def interactive_planner_factory(
+        context_manager: ContextManager,
+        run_context: RunContext,
+    ) -> Planner:
+        return build_planner(
+            workspace_dir=workspace_dir,
+            model=args.model,
+            run_context=run_context,
+            context_manager=context_manager,
+            high_risk_approved=args.approve_high_risk,
+        )
+
+    session = InteractiveOrchestrationSession(
+        system_prompt=PLANNER_SYSTEM_PROMPT,
+        context_factory=interactive_context_factory,
+        planner_factory=interactive_planner_factory,
+        preapprove_high_risk=bool(args.approve_high_risk),
+    )
     ui = UI()  # type: ignore[no-untyped-call]
-    bridge = Bridge(agent=planner, ui=ui)
+    bridge = Bridge(session=session, ui=ui)
     asyncio.run(bridge.run())
     return 0
 

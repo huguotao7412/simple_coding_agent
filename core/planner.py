@@ -28,6 +28,7 @@ class Planner:
         run_context: RunContext | None = None,
         task_assessor: TaskAssessor | None = None,
         high_risk_approved: bool = False,
+        external_lifecycle: bool = False,
     ):
         self.llm = llm_client
         self.workspace_dir = workspace_dir
@@ -38,6 +39,7 @@ class Planner:
         self.task_assessor = task_assessor or TaskAssessor(workspace_dir)
         self.current_task_assessment: TaskAssessment | None = None
         self.high_risk_approved = high_risk_approved
+        self.external_lifecycle = external_lifecycle
 
         for tool in tools:
             if tool.name == "delegate":
@@ -80,6 +82,7 @@ class Planner:
             after_tool_call=self._after_tool_call,
             emit_token_stats=emit_token_stats,
             run_context=self.run_context,
+            manage_run_lifecycle=not self.external_lifecycle,
         )
 
     async def run(
@@ -104,30 +107,7 @@ class Planner:
         resume: bool = False,
     ) -> AsyncGenerator[AgentEvent, None]:
         if not resume:
-            if self.run_context.execution_policy is not None:
-                self._remove_prior_task_control_messages()
-            assessment = self.task_assessor.assess(user_input)
-            self.current_task_assessment = assessment
-            self.ctx.add_system_message(assessment.to_system_message())
-            policy = ExecutionPolicy.from_assessment(
-                assessment,
-                human_approved=self.high_risk_approved,
-            )
-            if self.run_context.execution_policy is None:
-                self.run_context.install_execution_policy(policy)
-            elif self.run_context.store is None and self.run_context.record is None:
-                self.run_context.begin_interactive_task(policy)
-            else:
-                self.run_context.install_execution_policy(policy)
-            self.ctx.add_system_message(policy.to_system_message())
-            await self.run_context.emit(AgentEvent(
-                type="task_assessment",
-                content=assessment.to_json(),
-            ))
-            await self.run_context.emit(AgentEvent(
-                type="execution_policy",
-                content=policy.to_json(),
-            ))
+            await self.prepare_task(user_input)
         else:
             restored_assessment = self._restored_assessment_json()
             if restored_assessment:
@@ -142,6 +122,53 @@ class Planner:
                     content=restored_policy.to_json(),
                 ))
 
+        async for event in self.run_prepared_stream(user_input, resume=resume):
+            yield event
+
+    async def prepare_task(
+        self,
+        user_input: str,
+        *,
+        human_approved: bool | None = None,
+    ) -> tuple[TaskAssessment, ExecutionPolicy]:
+        """Assess and install policy without entering the model execution loop."""
+        if self.run_context.execution_policy is not None:
+            self._remove_prior_task_control_messages()
+        assessment = self.task_assessor.assess(user_input)
+        self.current_task_assessment = assessment
+        self.ctx.add_system_message(assessment.to_system_message())
+        policy = ExecutionPolicy.from_assessment(
+            assessment,
+            human_approved=(
+                self.high_risk_approved
+                if human_approved is None
+                else human_approved
+            ),
+        )
+        if self.run_context.execution_policy is None:
+            self.run_context.install_execution_policy(policy)
+        elif self.run_context.store is None and self.run_context.record is None:
+            self.run_context.begin_interactive_task(policy)
+        else:
+            self.run_context.install_execution_policy(policy)
+        self.ctx.add_system_message(policy.to_system_message())
+        await self.run_context.emit(AgentEvent(
+            type="task_assessment",
+            content=assessment.to_json(),
+        ))
+        await self.run_context.emit(AgentEvent(
+            type="execution_policy",
+            content=policy.to_json(),
+        ))
+        return assessment, policy
+
+    async def run_prepared_stream(
+        self,
+        user_input: str,
+        *,
+        resume: bool = False,
+    ) -> AsyncGenerator[AgentEvent, None]:
+        """Run the existing secure data plane after control-plane preparation."""
         async def produce() -> None:
             async for _ in self._runtime(emit_token_stats=True).run_stream(
                 user_input,
