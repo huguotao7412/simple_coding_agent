@@ -21,6 +21,10 @@ def _merge_attempts(
 
 class GraphState(TypedDict, total=False):
     schema_version: int
+    workflow_schema_version: int
+    current_stage: str
+    domain_state_ref: str
+    interrupt_info: dict[str, Any]
     run_id: str
     thread_id: str
     user_request: str

@@ -6,6 +6,8 @@ from .file_ops import EditFileTool, WriteFileTool
 from .update_state import UpdateStateTool
 from .delegate import DelegateTool
 from .apply_patch import ApplyPatchTool
+from .gateway import ToolGateway
+from .models import AuthorizedToolCall, ToolCall
 
 # Actor tools (execution layer). These are the node-free baseline tools that
 # ship with the wheel. MCP servers may add richer filesystem/shell tools, but
@@ -35,4 +37,5 @@ __all__ = [
     "EditFileTool", "WriteFileTool",
     "UpdateStateTool", "DelegateTool", "ApplyPatchTool",
     "ACTOR_TOOLS", "PLANNER_TOOLS",
+    "AuthorizedToolCall", "ToolCall", "ToolGateway",
 ]

@@ -1,5 +1,15 @@
 # Simple Coding Agent Architecture
 
+> The canonical post-refactor boundary documents are
+> [overview](docs/architecture/overview.md),
+> [workflow](docs/architecture/workflow.md),
+> [ToolGateway](docs/architecture/tool-gateway.md),
+> [state ownership](docs/architecture/state-ownership.md),
+> [dependency rules](docs/architecture/dependency-rules.md), and
+> [migration](docs/architecture/migration.md). They define `AgentWorkflow` as
+> the only workflow transition owner, `ToolGateway` as the final tool PEP, and
+> `RunAggregate` as the Run state authority.
+
 This document describes the runtime boundaries that make Simple Coding Agent auditable: the Planner/Actor lifecycle, worktree isolation, MCP tool boundary, and local eval design.
 
 ## Core Package Boundaries

@@ -69,6 +69,10 @@ follow_imports = "silent"
 exclude = [".venv", ".worktrees", "__pycache__"]
 ignore_missing_imports = true
 files = [
+    "core/application",
+    "core/domain",
+    "core/ports",
+    "core/adapters",
     "core/a2a_lite",
     "core/orchestration",
     "core/execution",
@@ -87,6 +91,9 @@ files = [
     "core/runs/context.py",
     "core/runs/task_state.py",
     "core/runtime/engine.py",
+    "core/runtime/model_loop.py",
+    "core/runtime/tool_cycle.py",
+    "core/runtime/message_payload.py",
     "core/runtime/loop_control.py",
     "core/runtime/tool_calls.py",
     "core/planner.py",
@@ -96,6 +103,9 @@ files = [
     "core/verification",
     "core/mcp/client.py",
     "core/tools/update_state.py",
+    "core/tools/gateway.py",
+    "core/tools/catalog.py",
+    "core/tools/models.py",
     "core/tools/delegate.py",
     "core/tools/apply_patch.py",
     "core/tools/file_ops.py",

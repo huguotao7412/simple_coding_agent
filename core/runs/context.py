@@ -13,35 +13,56 @@ from ..execution.policy import (
     RunBudgetLedger,
 )
 from ..events import AgentEvent, QueueEventSink
+from ..domain.runs import RunAggregate, UsageTotals
 from .models import RunCheckpoint, RunRecord, RunStatus, transition_run
 from .store import RunStore
 from .task_state import GlobalState
 
 
 @dataclass
-class UsageTotals:
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    estimated: bool = False
-
-    @property
-    def total_tokens(self) -> int:
-        return self.prompt_tokens + self.completion_tokens
-
-
-@dataclass
 class RunContext:
-    run_id: str
-    state: GlobalState
+    aggregate: RunAggregate
     events: QueueEventSink
-    usage: UsageTotals = field(default_factory=UsageTotals)
-    completed_tool_calls: dict[str, str] = field(default_factory=dict)
-    execution_policy: ExecutionPolicy | None = None
-    budget_ledger: RunBudgetLedger | None = None
     record: RunRecord | None = None
     store: RunStore | None = None
     _usage_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     _persistence_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+
+    @property
+    def run_id(self) -> str:
+        return self.aggregate.run_id
+
+    @property
+    def state(self) -> GlobalState:
+        return self.aggregate.state
+
+    @state.setter
+    def state(self, value: GlobalState) -> None:
+        self.aggregate.state = value
+
+    @property
+    def usage(self) -> UsageTotals:
+        return self.aggregate.usage
+
+    @property
+    def completed_tool_calls(self) -> dict[str, str]:
+        return self.aggregate.completed_tool_calls
+
+    @property
+    def execution_policy(self) -> ExecutionPolicy | None:
+        return self.aggregate.execution_policy
+
+    @execution_policy.setter
+    def execution_policy(self, value: ExecutionPolicy | None) -> None:
+        self.aggregate.execution_policy = value
+
+    @property
+    def budget_ledger(self) -> RunBudgetLedger | None:
+        return self.aggregate.budget_ledger
+
+    @budget_ledger.setter
+    def budget_ledger(self, value: RunBudgetLedger | None) -> None:
+        self.aggregate.budget_ledger = value
 
     @classmethod
     def create(
@@ -56,8 +77,15 @@ class RunContext:
         if record is not None and record.run_id != resolved_run_id:
             raise ValueError("record run_id does not match RunContext run_id")
         return cls(
-            run_id=resolved_run_id,
-            state=GlobalState(),
+            aggregate=RunAggregate(
+                run_id=resolved_run_id,
+                state=GlobalState(),
+                lifecycle_status=(
+                    record.status.value
+                    if record is not None
+                    else RunStatus.CREATED.value
+                ),
+            ),
             events=QueueEventSink(),
             record=record,
             store=store,
@@ -84,21 +112,45 @@ class RunContext:
             else None
         )
         return cls(
-            run_id=record.run_id,
-            state=GlobalState.from_snapshot(checkpoint.task_snapshot),
+            aggregate=RunAggregate(
+                run_id=record.run_id,
+                state=GlobalState.from_snapshot(checkpoint.task_snapshot),
+                lifecycle_status=record.status.value,
+                usage=UsageTotals(
+                    prompt_tokens=checkpoint.prompt_tokens,
+                    completion_tokens=checkpoint.completion_tokens,
+                    estimated=checkpoint.usage_estimated,
+                ),
+                completed_tool_calls=dict(checkpoint.completed_tool_calls or {}),
+                execution_policy=policy,
+                budget_ledger=(
+                    RunBudgetLedger(policy, budget_snapshot)
+                    if policy is not None
+                    else None
+                ),
+                conversation=tuple(deepcopy(checkpoint.messages)),
+                approval_references=set(
+                    (checkpoint.aggregate_snapshot or {}).get(
+                        "approval_references", []
+                    )
+                ),
+                artifact_references=list(
+                    (checkpoint.aggregate_snapshot or {}).get(
+                        "artifact_references", []
+                    )
+                ),
+                verification_summary=dict(
+                    (checkpoint.aggregate_snapshot or {}).get(
+                        "verification_summary", {}
+                    )
+                ),
+                security_metric_references=dict(
+                    (checkpoint.aggregate_snapshot or {}).get(
+                        "security_metric_references", {}
+                    )
+                ),
+            ),
             events=QueueEventSink(),
-            usage=UsageTotals(
-                prompt_tokens=checkpoint.prompt_tokens,
-                completion_tokens=checkpoint.completion_tokens,
-                estimated=checkpoint.usage_estimated,
-            ),
-            completed_tool_calls=dict(checkpoint.completed_tool_calls or {}),
-            execution_policy=policy,
-            budget_ledger=(
-                RunBudgetLedger(policy, budget_snapshot)
-                if policy is not None
-                else None
-            ),
             record=record,
             store=store,
         )
@@ -176,6 +228,15 @@ class RunContext:
             if self.budget_ledger is not None
             else None
         )
+        self.aggregate.conversation = tuple(deepcopy(messages))
+        aggregate_snapshot = self.aggregate.snapshot(
+            task_snapshot=task_snapshot,
+            budget_snapshot=(
+                budget_snapshot.to_dict()
+                if budget_snapshot is not None
+                else None
+            ),
+        )
         return RunCheckpoint(
             run_id=self.run_id,
             messages=tuple(deepcopy(messages)),
@@ -195,6 +256,8 @@ class RunContext:
                 else None
             ),
             saved_at=time.time() if saved_at is None else saved_at,
+            schema_version=2,
+            aggregate_snapshot=aggregate_snapshot,
         )
 
     async def persist_checkpoint(
@@ -227,6 +290,7 @@ class RunContext:
                 expected_version=current.version,
             )
             self.record = updated
+            self.aggregate.lifecycle_status = updated.status.value
             await self.store.append_event(
                 self.run_id,
                 event_type,

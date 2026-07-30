@@ -48,6 +48,8 @@ class RunCheckpoint:
     completed_tool_calls: dict[str, str] | None = None
     execution_policy: dict[str, Any] | None = None
     budget_snapshot: dict[str, Any] | None = None
+    schema_version: int = 2
+    aggregate_snapshot: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.run_id:
@@ -64,6 +66,12 @@ class RunCheckpoint:
             self.budget_snapshot, dict
         ):
             raise ValueError("budget_snapshot must be an object")
+        if self.schema_version not in {1, 2}:
+            raise ValueError("unsupported RunCheckpoint schema")
+        if self.aggregate_snapshot is not None and not isinstance(
+            self.aggregate_snapshot, dict
+        ):
+            raise ValueError("aggregate_snapshot must be an object")
 
 
 _LEGAL_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {

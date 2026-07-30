@@ -231,8 +231,13 @@ def _walk(value: Any) -> list[tuple[str, Any]]:
 
 def _command(arguments: dict[str, Any]) -> str:
     for key in ("command", "cmd", "script"):
-        if isinstance(value := arguments.get(key), str):
+        value = arguments.get(key)
+        if isinstance(value, str):
             return value
+        if isinstance(value, (list, tuple)) and all(
+            isinstance(item, str) for item in value
+        ):
+            return " ".join(value)
     return ""
 
 

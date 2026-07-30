@@ -105,7 +105,10 @@ tests/
   test_mcp_provider.py     MCP provider isolation tests
 ```
 
-See [architecture.md](architecture.md) and [architecture_CN.md](architecture_CN.md) for the Planner/Actor lifecycle, worktree isolation, MCP boundary, and eval design.
+See [architecture.md](architecture.md), [architecture_CN.md](architecture_CN.md),
+and the focused [architecture boundary overview](docs/architecture/overview.md)
+for the single workflow owner, ToolGateway, state ownership, compatibility, and
+security boundaries.
 
 ## Hybrid security
 

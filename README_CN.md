@@ -71,7 +71,9 @@ handoff 注入下游 Actor。完整 patch 与验证日志保留在用户级 SCA 
 - `ExecutionPolicy` 将评估结果编译为不可由工具调用覆盖的拓扑与资源约束；`RunBudgetLedger` 由 Planner 和全部 Actor 共享。
 - `GlobalState` 记录任务树、任务状态和 Actor 更新。
 
-更完整的架构说明见 [architecture.md](architecture.md) 和 [architecture_CN.md](architecture_CN.md)。
+更完整的架构说明见 [architecture.md](architecture.md)、
+[architecture_CN.md](architecture_CN.md) 和
+[重构后架构边界总览](docs/architecture/overview.md)。
 
 ## 项目结构
 

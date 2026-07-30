@@ -1,5 +1,15 @@
 # Simple Coding Agent 架构说明
 
+> 本轮重构后的权威边界文档位于：
+> [总览](docs/architecture/overview.md)、
+> [唯一工作流](docs/architecture/workflow.md)、
+> [ToolGateway](docs/architecture/tool-gateway.md)、
+> [状态所有权](docs/architecture/state-ownership.md)、
+> [依赖规则](docs/architecture/dependency-rules.md)和
+> [迁移/兼容](docs/architecture/migration.md)。核心结论是：
+> `AgentWorkflow` 是唯一阶段流转所有者，`ToolGateway` 是最终 Tool PEP，
+> `RunAggregate` 是 Run 领域状态的唯一权威来源。
+
 本文说明 Simple Coding Agent 的几个核心边界：Planner/Actor 生命周期、git worktree 隔离、MCP 工具边界，以及本地 eval 设计。目标是让这个 agent runtime 可审计、可复现、可衡量。
 
 ## Core 包边界

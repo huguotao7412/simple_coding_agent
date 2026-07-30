@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..events import AgentEvent
@@ -26,6 +25,8 @@ from .models import (
     RiskLevel,
 )
 from .redaction import redact_text
+from .output import OutputSanitizer
+from .tool_intent import ToolIntentSummarizer
 
 
 @dataclass
@@ -39,6 +40,13 @@ class SecurityManager:
     startup_warning: str = ""
     provider_url: str = "https://api.openai.com/v1"
     max_output_bytes: int = 65_536
+    intent_summarizer: ToolIntentSummarizer = field(
+        default_factory=ToolIntentSummarizer
+    )
+
+    @property
+    def output_sanitizer(self) -> OutputSanitizer:
+        return OutputSanitizer(self.max_output_bytes)
 
     async def inspect(
         self,
@@ -217,14 +225,10 @@ class SecurityManager:
             )
             return decision
         capabilities = TOOL_CAPABILITIES.get(tool_name, frozenset())
-        summary = json.dumps(
-            {
-                "tool": tool_name,
-                "capabilities": sorted(cap.value for cap in capabilities),
-                "arguments": _summarize_tool_arguments(sanitized),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
+        summary = self.intent_summarizer.summarize(
+            tool_name,
+            capabilities,
+            sanitized,
         )
         guard = await self.inspect(
             stage=GuardStage.TOOL_INTENT,
@@ -295,33 +299,24 @@ class SecurityManager:
         stage: GuardStage,
         actor_id: str = "",
     ) -> str:
-        redacted = redact_text(value)
-        output = str(redacted.value)
-        encoded = output.encode("utf-8")
-        truncated = len(encoded) > self.max_output_bytes
-        if truncated:
-            output = (
-                encoded[: self.max_output_bytes]
-                .decode("utf-8", errors="ignore")
-                + "\n[OUTPUT TRUNCATED BY SECURITY POLICY]"
-            )
-        if redacted.count:
+        sanitized = self.output_sanitizer.sanitize(value)
+        if sanitized.redaction.count:
             await self._event(
                 "output_redacted",
                 stage=stage.value,
-                redaction_count=redacted.count,
-                categories=redacted.categories,
+                redaction_count=sanitized.redaction.count,
+                categories=sanitized.redaction.categories,
             )
-        if truncated:
+        if sanitized.truncated:
             await self._event(
                 "output_redacted",
                 stage=stage.value,
                 redaction_count=0,
                 categories=("output_size_limit",),
-                original_bytes=len(encoded),
+                original_bytes=sanitized.original_bytes,
                 retained_bytes=self.max_output_bytes,
             )
-        return output
+        return sanitized.value
 
     async def emit_startup_warning(self) -> None:
         if self.startup_warning:
@@ -344,62 +339,6 @@ class SecurityManager:
                 sanitized,
                 time.time(),
             )
-
-
-_SAFE_ARGUMENT_KEYS = frozenset({
-    "attempt",
-    "cwd",
-    "mode",
-    "strategy",
-    "task_id",
-    "timeout",
-})
-_PATH_ARGUMENT_KEYS = frozenset({
-    "path",
-    "paths",
-    "file_path",
-    "dir_path",
-    "source",
-    "destination",
-    "workspace_dir",
-})
-
-
-def _summarize_tool_arguments(value: Any, key: str = "") -> Any:
-    """Return egress-safe metadata, never raw source, diffs, or commands."""
-    if isinstance(value, dict):
-        return {
-            str(item_key): _summarize_tool_arguments(item, str(item_key))
-            for item_key, item in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        return {
-            "type": "array",
-            "items": len(value),
-            "sample": [
-                _summarize_tool_arguments(item, key) for item in value[:5]
-            ],
-        }
-    if isinstance(value, str):
-        if key in _PATH_ARGUMENT_KEYS:
-            return {
-                "type": "path",
-                "basename": os.path.basename(value.rstrip("/\\")),
-                "absolute": os.path.isabs(value),
-            }
-        if key in {"command", "cmd", "script"}:
-            executable = value.strip().split(maxsplit=1)[0] if value.strip() else ""
-            return {
-                "type": "command",
-                "executable": os.path.basename(executable),
-                "characters": len(value),
-            }
-        if key in _SAFE_ARGUMENT_KEYS and len(value) <= 128:
-            return value
-        return {"type": "string", "characters": len(value)}
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return {"type": type(value).__name__}
 
 
 def build_security_manager(

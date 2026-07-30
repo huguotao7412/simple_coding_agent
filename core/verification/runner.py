@@ -3,9 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from ..sandbox.contracts import SandboxBackend, SandboxExecutionRequest
+from ..sandbox.contracts import (
+    SandboxBackend,
+    SandboxExecutionRequest,
+    SandboxExecutionResult,
+)
 from ..sandbox.local import LocalSandboxBackend
-from ..security.models import SecurityOutcome
 from ..security.tool_security import SecurityMiddleware
 from .models import GateResult, GateSpec, VerificationConfig, VerificationReport
 
@@ -84,17 +87,72 @@ class VerificationRunner:
             python_executable=self._sandbox_backend.python_executable,
         )
         middleware = self._security_middleware or SecurityMiddleware(str(worktree))
-        decision = middleware.authorize_tool(
+        # Lazy imports preserve the legacy tools -> actors -> verification
+        # compatibility path while execution itself is delegated to the gateway.
+        from ..tools.base import ToolResult
+        from ..tools.catalog import ToolCatalog, ToolRegistration
+        from ..tools.gateway import ToolGateway
+        from ..tools.models import ToolCall
+
+        execution_box: list[SandboxExecutionResult] = []
+
+        async def dispatch(arguments: dict[str, object]) -> ToolResult:
+            authorized_command = arguments.get("command")
+            if not isinstance(authorized_command, list) or not all(
+                isinstance(item, str) for item in authorized_command
+            ):
+                return ToolResult.deny("Invalid verification command.")
+            execution = await self._sandbox_backend.execute(
+                SandboxExecutionRequest(
+                    workspace=worktree,
+                    command=tuple(authorized_command),
+                    timeout_seconds=gate.timeout_seconds,
+                )
+            )
+            execution_box.append(execution)
+            return (
+                ToolResult.ok(execution.output)
+                if execution.succeeded
+                else ToolResult.fail("Verification command failed.", execution.output)
+            )
+
+        catalog = ToolCatalog()
+        catalog.register(ToolRegistration(
+            name="run",
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "run",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {"type": "array"},
+                            "workspace_dir": {"type": "string"},
+                        },
+                        "required": ["command"],
+                    },
+                },
+            },
+            dispatch=dispatch,
+            workspace_aware=True,
+            adapter_kind="verification",
+        ))
+        gateway = ToolGateway(
+            catalog,
+            workspace_dir=str(worktree),
+            middleware=middleware,
+        )
+        gateway_result = await gateway.execute(ToolCall(
+            call_id=f"verification:{task_id}:{attempt}:{gate.name}",
+            name="run",
+            arguments={"command": list(command)},
             run_id=f"verification:{task_id}",
             actor_id=task_id,
             role="verifier",
-            tool_name="run",
-            arguments={
-                "command": " ".join(command),
-                "workspace_dir": str(worktree),
-            },
-        )
-        if decision.outcome is not SecurityOutcome.ALLOW:
+            workspace_identity=str(worktree),
+            correlation_id=f"{task_id}:{attempt}:{gate.name}",
+        ))
+        if not execution_box:
             return GateResult(
                 gate_name=gate.name,
                 command=command,
@@ -103,16 +161,15 @@ class VerificationRunner:
                 exit_code=None,
                 duration_ms=0,
                 output_artifact="",
-                output_excerpt="Verification command denied by security policy.",
+                output_excerpt=(
+                    gateway_result.error
+                    or "Verification command denied by security policy."
+                ),
                 execution_backend=self._sandbox_backend.name,
                 isolated=self._sandbox_backend.isolated,
             )
-        execution = await self._sandbox_backend.execute(SandboxExecutionRequest(
-            workspace=worktree,
-            command=command,
-            timeout_seconds=gate.timeout_seconds,
-        ))
-        output_text = execution.output
+        execution = execution_box[0]
+        output_text = gateway_result.content
         artifact_path = self._artifact_path(task_id, attempt, gate.name)
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
         artifact_path.write_text(output_text, encoding="utf-8")
