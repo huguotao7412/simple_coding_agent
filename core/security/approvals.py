@@ -20,6 +20,7 @@ def canonical_action_fingerprint(
     tool_name: str,
     arguments: dict[str, Any],
     capabilities: frozenset[Capability],
+    risk_level: RiskLevel,
     policy_version: str,
 ) -> str:
     payload = {
@@ -30,6 +31,7 @@ def canonical_action_fingerprint(
         "tool_name": tool_name,
         "arguments": arguments,
         "capabilities": sorted(cap.value for cap in capabilities),
+        "risk_level": risk_level.name,
         "policy_version": policy_version,
     }
     canonical = json.dumps(
@@ -57,9 +59,40 @@ class ApprovalGrant:
     single_use: bool = True
     consumed_at: float | None = None
 
-    def consume(self, fingerprint: str, now: float | None = None) -> bool:
+    def consume(
+        self,
+        fingerprint: str,
+        *,
+        run_id: str,
+        actor_id: str,
+        role: str,
+        workspace_identity: str,
+        tool_name: str,
+        capabilities: frozenset[Capability],
+        risk_level: RiskLevel,
+        policy_version: str,
+        now: float | None = None,
+    ) -> bool:
         current = time.time() if now is None else now
-        if self.arguments_hash != fingerprint or current >= self.expires_at:
+        expected_workspace = os.path.normcase(
+            str(Path(workspace_identity).resolve())
+        )
+        grant_workspace = os.path.normcase(
+            str(Path(self.workspace_identity).resolve())
+        )
+        if (
+            self.arguments_hash != fingerprint
+            or self.run_id != run_id
+            or self.actor_id != actor_id
+            or self.role != role
+            or grant_workspace != expected_workspace
+            or self.tool_name != tool_name
+            or self.capabilities != capabilities
+            or self.risk_level is not risk_level
+            or self.policy_version != policy_version
+            or current < self.created_at
+            or current >= self.expires_at
+        ):
             return False
         if self.single_use and self.consumed_at is not None:
             return False
@@ -74,9 +107,35 @@ class ApprovalStore:
     def add(self, grant: ApprovalGrant) -> None:
         self.grants[grant.arguments_hash] = grant
 
-    def consume(self, fingerprint: str) -> bool:
+    def consume(
+        self,
+        fingerprint: str,
+        *,
+        run_id: str,
+        actor_id: str,
+        role: str,
+        workspace_identity: str,
+        tool_name: str,
+        capabilities: frozenset[Capability],
+        risk_level: RiskLevel,
+        policy_version: str,
+    ) -> bool:
         grant = self.grants.get(fingerprint)
-        return grant.consume(fingerprint) if grant is not None else False
+        return (
+            grant.consume(
+                fingerprint,
+                run_id=run_id,
+                actor_id=actor_id,
+                role=role,
+                workspace_identity=workspace_identity,
+                tool_name=tool_name,
+                capabilities=capabilities,
+                risk_level=risk_level,
+                policy_version=policy_version,
+            )
+            if grant is not None
+            else False
+        )
 
 
 __all__ = [

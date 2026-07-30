@@ -17,6 +17,7 @@ from ..git_utils import (
 )
 from ..runs.context import RunContext
 from ..runs.task_state import GlobalState
+from ..security.redaction import sanitized_subprocess_environment
 
 
 def _cleanup_rej_files(base_dir: str) -> dict[str, str]:
@@ -44,9 +45,8 @@ def _run_git(
     isolate_from_parent_repo: bool = False,
 ) -> tuple[int, str, str]:
     """Run a git command. Returns (returncode, stdout, stderr)."""
-    environment = None
+    environment = sanitized_subprocess_environment()
     if isolate_from_parent_repo:
-        environment = os.environ.copy()
         environment["GIT_CEILING_DIRECTORIES"] = os.path.dirname(
             os.path.realpath(cwd)
         )

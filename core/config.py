@@ -37,6 +37,18 @@ SCA_SECURITY_MODE=local
 """
 
 _MANAGED_ENV_VALUES: dict[str, str] = {}
+_TRUSTED_ONLY_SETTINGS = frozenset({
+    "SCA_SECURITY_MODE",
+    "SCA_GUARDRAILS_CONFIG",
+    "SCA_GUARDRAILS_API_KEY",
+    "SCA_GUARDRAILS_BASE_URL",
+    "SCA_GUARDRAILS_MODEL",
+    "SCA_GUARDRAILS_TIMEOUT",
+    "SCA_GUARDRAILS_MAX_CONCURRENCY",
+    "SCA_GUARDRAILS_MAX_CALLS",
+    "SCA_GUARDRAILS_MAX_TOKENS",
+    "SCA_GUARDRAILS_FAILURE_THRESHOLD",
+})
 
 
 def _is_sca_setting(key: str) -> bool:
@@ -116,7 +128,7 @@ def load_runtime_environment(
     workspace_path = Path(workspace_dir).resolve() / ".env"
     loaded: list[Path] = []
 
-    for path in (user_path, workspace_path):
+    for path, trusted in ((user_path, True), (workspace_path, False)):
         if not path.is_file():
             continue
         values = dotenv_values(path)
@@ -125,6 +137,7 @@ def load_runtime_environment(
                 value is not None
                 and key not in protected
                 and _is_sca_setting(key)
+                and (trusted or key not in _TRUSTED_ONLY_SETTINGS)
             ):
                 target[key] = value
                 managed[key] = value

@@ -123,6 +123,7 @@ def _external_provider(
         config_source=config,
         timeout=float(values.get("SCA_GUARDRAILS_TIMEOUT", "10")),
         concurrency=int(values.get("SCA_GUARDRAILS_MAX_CONCURRENCY", "4")),
+        model=values.get("SCA_GUARDRAILS_MODEL", ""),
         runtime=external_runtime,
         context=context,
         max_calls=int(values.get("SCA_GUARDRAILS_MAX_CALLS", "20")),

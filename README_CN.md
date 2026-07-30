@@ -398,6 +398,18 @@ Git worktree 和影子仓库提供版本控制及默认工作目录隔离，不�
 
 SQLite checkpoint 也不能与任意 shell、文件系统或网络副作用组成同一个原子事务。如果进程恰好在副作用成功后、tool result 落盘前崩溃，该操作仍可能在恢复时重试。完整取舍见 [ADR-0002](docs/adr/0002-durable-run-store.md)。
 
+### 混合式安全边界
+
+安全链路分成三个不能互相替代的层次：
+
+1. 可选的 OpenAI Guardrails Python 0.2.x 是概率型内容风险信号。
+2. `SecurityMiddleware` 是最终确定性 PDP/PEP，负责 capability、最终参数、workspace、审批、破坏性命令、审计与脱敏。
+3. `SandboxBackend`、OS、代理、防火墙或 E2B 才负责真实资源和网络隔离。
+
+`ALLOW` 不能覆盖本地 `DENY`；未知 Tool/capability 默认拒绝；输入审批不批准后续 Tool。模式为 `local`（仅本地检测）、`hybrid`（外部不可用时明确降级并保留本地限制）、`strict`（外部异常 fail closed）和 `off`（仅关闭内容检测，确定性控制仍开启）。
+
+Guardrails 是可选依赖：`pip install -e ".[guardrails]"`。配置必须来自用户级可信配置或显式进程/CLI 环境，并使用绝对路径和独立的 `SCA_GUARDRAILS_API_KEY`。目标仓库 `.env` 不能设置安全模式、Guardrails endpoint/model/budget/config/key，仓库内 `.sca/guardrails.json` 也不会自动加载。源码、二进制、secret、credential 和原始 Tool output 默认禁止外发。
+
 成功提交顺序是：校验 required artifact 及 digest；在领域 Run 仍非终态时持久化
 verification；让 LangGraph 成功写入最终 checkpoint；最后才把 RunStore 标为
 completed。任意持久化错误都会显式返回。本地 `AsyncSqliteSaver` 适合单进程

@@ -128,26 +128,32 @@ to reduce line count.
 | Run | `SandboxRunTool.execute` | process capability then sandbox with stripped environment |
 | Apply patch | `ApplyPatchTool.execute` | Planner PEP plus exact task/diff/verification evidence |
 | Delegate | `DelegateTool.execute` | `DELEGATE_ACTOR` plus immutable execution policy |
-| Verification | `VerificationRunner._run_gate` | fixed argv (`shell=False`) through sandbox |
+| Verification | `VerificationRunner._run_gate` | final expanded argv reauthorized by the shared deterministic PEP, then fixed argv (`shell=False`) through sandbox |
 | Tool output to model | `AgentRuntime._execute_single_tool` | local secret redaction before conversation/checkpoint |
 | Event/SQLite persistence | `RunContext.emit`, `SecurityManager._event` | structured sanitized metadata; no raw guarded input/args/output/key/chain-of-thought |
 | Resume/cache | `_pending_tool_calls`, `_decode_cached_tool_result` | cached result was redacted; pending call reauthorized; approval is not replayed |
 
 Capabilities are explicit. Scout is read-only. Coder has bounded worktree
-read/write/create and process execution but no secret, deletion, network, Git
-mutation, dependency-change, or arbitrary external-side-effect capability.
+read/write/create and process execution but no secret, deletion, or Git-mutation
+capability. Network and dependency-change capabilities are maximum role bounds,
+not grants: the final command still requires an exact, expiring, single-use
+action approval.
 Verifier reads and runs verification and cannot modify product code. Planner has
 orchestration and verified-patch capability. `Coder tool_allowlist=None` has
 been removed.
 
 Approval fingerprints SHA-256 bind run, Actor, role, normalized workspace,
-canonical tool name/JSON arguments, capabilities, risk, and policy version.
+canonical tool name/JSON arguments, effective capabilities (including those
+derived from the final command), risk, and policy version. Consumption validates
+every bound field again rather than trusting the fingerprint lookup key alone.
 Grants expire and are single-use, so any argument or scope change invalidates
 them and resume cannot replay them.
 
-Guardrails configuration trust order is built-in/example baseline copied outside
-the repository, user-controlled configuration, then an explicitly selected
-trusted absolute path. `.sca/guardrails.json` is not loaded. Any future workspace
+Guardrails configuration trust order is the packaged example copied outside the
+repository, the user-level config, then explicit process/CLI environment values
+selecting a trusted absolute path. Workspace `.env` values for security mode,
+Guardrails configuration, endpoint, model, budgets, and credentials are ignored;
+`.sca/guardrails.json` is not loaded. Any future workspace
 merge must only add rules, promote `block` false-to-true, shrink allowlists, and
 never disable strict/fail-closed behavior or system denies.
 
@@ -161,6 +167,14 @@ defense; the approval store does not yet expose an interactive CLI grant command
 local sandbox mode retains host-user authority; middleware cannot replace
 firewall/proxy/E2B enforcement; and the preview Guardrails dependency adds
 latency, model cost, transitive packages, and compatibility risk.
+
+The optional adapter targets the published `openai-guardrails` 0.2.x runtime.
+Version 0.2.1 exposes `check_plain_text(text, bundle_path, ctx, **kwargs)` and
+forwards concurrency, tripwire suppression, stage, and fail-secure error handling
+to `run_guardrails`. SCA checks `GuardrailResult.execution_failed`, never persists
+`original_exception`, and maps malformed results to provider `ERROR`. See the
+[official runtime reference](https://openai.github.io/openai-guardrails-python/ref/runtime/)
+and [v0.2.1 package release](https://pypi.org/project/openai-guardrails/).
 
 Before a new Planner turn enters that loop, `TaskAssessor` performs a bounded,
 read-only workspace scan and classifies intent, complexity, and risk. It publishes a

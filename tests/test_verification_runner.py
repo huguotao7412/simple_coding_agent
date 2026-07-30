@@ -148,3 +148,39 @@ async def test_runner_uses_injected_isolated_backend_and_container_python(
     assert requests[0].command == ("python", "-m", "pytest")
     assert report.results[0].execution_backend == "e2b"
     assert report.results[0].isolated is True
+
+
+@pytest.mark.asyncio
+async def test_runner_reauthorizes_final_verification_command_before_backend(
+    tmp_path: Path,
+) -> None:
+    requests = []
+
+    class FakeBackend:
+        name = "fake"
+        isolated = True
+        python_executable = "python"
+
+        async def ensure_available(self):
+            return None
+
+        async def execute(self, request):
+            requests.append(request)
+            raise AssertionError("denied verification command must not execute")
+
+    runner = VerificationRunner(
+        artifact_root=tmp_path / "artifacts",
+        sandbox_backend=FakeBackend(),
+    )
+    report = await runner.run(
+        VerificationConfig(gates=(
+            GateSpec("network", ("curl", "https://example.test")),
+        )),
+        worktree=tmp_path,
+        task_id="task",
+        attempt=1,
+    )
+
+    assert requests == []
+    assert not report.passed
+    assert "denied by security policy" in report.results[0].output_excerpt

@@ -66,6 +66,41 @@ Planner 负责 orchestration：每个 Planner 拥有独立的 `RunContext`，其
 
 Actor 负责 execution：每个 Actor 只接收一个明确子任务，在自己的 git worktree 中运行，最后返回 summary 和提取出的 diff。
 
+## 混合式安全架构与拦截点
+
+```mermaid
+flowchart LR
+    U["用户输入"] --> R["本地脱敏"]
+    R --> L["本地 Content Guard"]
+    L --> O["可选 OpenAI Guardrails"]
+    O --> C["单调收紧的组合决策"]
+    C --> P["TaskAssessor / ExecutionPolicy"]
+    P --> A["AgentRuntime"]
+    A --> T["最终 Tool 名称与参数"]
+    T --> M["确定性 Security Middleware"]
+    M --> D{"审批 / 拒绝 / 执行"}
+    D --> S["Sandbox"]
+    S --> OR["本地输出脱敏"]
+    OR --> U
+```
+
+OpenAI Guardrails 只提供概率型风险信号；`SecurityMiddleware` 是最终 PDP/PEP；`SandboxBackend`、OS、代理/防火墙或 E2B 是资源隔离边界。组合规则为 `DENY > REQUIRE_APPROVAL > ALLOW`，风险取最高值，外部 `ALLOW` 不能删除本地 rule ID 或降低本地决定。
+
+| 执行点 | 位置 | 安全路径 |
+|---|---|---|
+| 用户输入、conversation/checkpoint | `Planner.run_stream`、`AgentRuntime.run_stream` | USER_INPUT 在任务评估、模型调用和持久化前检查；仅允许的脱敏输入进入 |
+| 每次模型调用 | `AgentRuntime._run_stream_loop` | PRE_MODEL 本地检查 |
+| Planner/Actor/local/MCP Tool | `AgentRuntime._execute_single_tool`、`MCPToolProvider.call_tool` | 使用最终参数经过共享 PEP；未知 Tool 默认拒绝 |
+| run/apply_patch/delegate | 对应 Tool 的 `execute` | capability + workspace + 命令风险 + 精确审批；patch 另校验 task/diff/verification provenance |
+| verification | `VerificationRunner._run_gate` | 最终展开 argv 先过同一 PEP，再以 `shell=False` 进入 sandbox |
+| Tool output/final output | `AgentRuntime._execute_single_tool` / final 分支 | 本地脱敏、大小/不可信标记；原始 Tool output 默认不外发 |
+| Event/SQLite | `SecurityManager._event`、`RunStore.append_event` | 仅结构化脱敏元数据 |
+| resume/cache | `_pending_tool_calls`、`_decode_cached_tool_result` | 未完成调用重新授权；已脱敏结果只复用、不重放副作用；single-use approval 不可重放 |
+
+审批 SHA-256 指纹绑定 run、Actor、role、规范化 workspace、Tool、规范化最终参数、动态 capability、风险和 policy version；消费时逐字段复验、检查过期并标记 single-use。Guardrails 配置只信任包内示例的外部副本、用户配置和显式进程/CLI 指定的绝对路径。workspace `.env` 的安全/Guardrails 设置会被忽略，`.sca/guardrails.json` 不会自动加载。
+
+模式：`local` 只运行本地确定性内容规则；`hybrid` 可调用外部检测且故障不会降低本地限制；`strict` 要求依赖/配置/服务可用并在异常时 fail closed；`off` 仅关闭内容检测，ToolPolicy、ExecutionPolicy、workspace、审批、审计、sandbox 与破坏性操作保护仍开启。Guardrails token、调用、失败、tripwire 和延迟与主模型 token 分开统计。
+
 ## 执行策略与预算边界
 
 `TaskAssessment` 不再只是 prompt 建议。Planner 会将其确定性编译为版本化 `ExecutionPolicy`，并在首个模型调用前安装到 `RunContext`。策略声明 Actor 拓扑、允许角色、是否必须存在质量门禁、是否需要人工批准，以及 Planner/Actor 步数、模型调用、总 token、失败工具调用、修复次数和活跃时长预算。

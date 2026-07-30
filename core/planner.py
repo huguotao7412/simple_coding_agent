@@ -184,7 +184,10 @@ class Planner:
                 "The request was denied by the input security policy.",
                 assessment,
             )
-        if assessment.outcome is GuardOutcome.REVIEW:
+        if (
+            assessment.outcome is GuardOutcome.REVIEW
+            and not self.high_risk_approved
+        ):
             return (
                 user_input,
                 "The request requires explicit review before processing.",

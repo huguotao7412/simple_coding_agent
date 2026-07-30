@@ -87,6 +87,35 @@ def test_config_loader_ignores_unrelated_dotenv_keys(tmp_path: Path) -> None:
     assert environ == {"SCA_MODEL": "safe-model"}
 
 
+def test_workspace_cannot_supply_trusted_guardrail_settings(tmp_path: Path) -> None:
+    user_config = tmp_path / "user.env"
+    user_config.write_text(
+        "SCA_SECURITY_MODE=hybrid\n"
+        "SCA_GUARDRAILS_CONFIG=C:/trusted/guardrails.json\n"
+        "SCA_GUARDRAILS_API_KEY=user-secret\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".env").write_text(
+        "SCA_SECURITY_MODE=off\n"
+        "SCA_GUARDRAILS_CONFIG=.sca/guardrails.json\n"
+        "SCA_GUARDRAILS_API_KEY=repository-secret\n",
+        encoding="utf-8",
+    )
+    environ: dict[str, str] = {}
+
+    load_runtime_environment(
+        workspace,
+        environ=environ,
+        config_path=user_config,
+    )
+
+    assert environ["SCA_SECURITY_MODE"] == "hybrid"
+    assert environ["SCA_GUARDRAILS_CONFIG"] == "C:/trusted/guardrails.json"
+    assert environ["SCA_GUARDRAILS_API_KEY"] == "user-secret"
+
+
 def test_process_environment_can_switch_managed_workspace_config(
     monkeypatch,
     tmp_path: Path,

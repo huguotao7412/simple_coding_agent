@@ -105,6 +105,7 @@ files = [
     "cli/runs.py",
     "cli/main.py",
     "evals/run_evals.py",
+    "evals/security_eval.py",
     "evals/harbor_entrypoint.py",
     "evals/harbor_runner.py",
     "evals/harbor_support.py",

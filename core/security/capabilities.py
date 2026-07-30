@@ -40,6 +40,11 @@ _CODER_CAPABILITIES = frozenset({
     Capability.CREATE_FILE,
     Capability.EXECUTE_PROCESS,
     Capability.GIT_READ,
+    # These are maximum capabilities, not unconditional grants. The
+    # deterministic command middleware still requires an action-bound approval.
+    Capability.NETWORK_ACCESS,
+    Capability.CHANGE_DEPENDENCIES,
+    Capability.EXTERNAL_SIDE_EFFECT,
 })
 
 ROLE_CAPABILITIES: dict[str, frozenset[Capability]] = {

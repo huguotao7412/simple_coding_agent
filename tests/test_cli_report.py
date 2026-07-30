@@ -76,6 +76,33 @@ def test_run_report_falls_back_to_accumulated_model_usage():
     assert report.usage_estimated is True
 
 
+def test_run_report_keeps_guardrail_usage_separate_from_agent_tokens():
+    report = RunReport()
+    report.observe(AgentEvent(
+        type="token_stats",
+        prompt_tokens=10,
+        completion_tokens=5,
+    ))
+    report.observe(AgentEvent(
+        type="content_guard_result",
+        content=json.dumps({
+            "guardrail_called": True,
+            "guardrail_prompt_tokens": 3,
+            "guardrail_completion_tokens": 2,
+            "guardrail_tripwire": True,
+            "guardrail_latency_ms": 12.5,
+            "sanitized_error": "",
+        }),
+    ))
+
+    assert report.total_tokens == 15
+    assert report.guardrail_prompt_tokens == 3
+    assert report.guardrail_completion_tokens == 2
+    assert report.guardrail_calls == 1
+    assert report.guardrail_tripwires == 1
+    assert "Guardrail Usage" in report.to_markdown()
+
+
 def test_terminal_token_stats_replace_model_usage_fallback():
     report = RunReport()
     report.observe(AgentEvent(

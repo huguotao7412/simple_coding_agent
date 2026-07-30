@@ -33,6 +33,12 @@ class RunReport:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     usage_estimated: bool = False
+    guardrail_prompt_tokens: int = 0
+    guardrail_completion_tokens: int = 0
+    guardrail_calls: int = 0
+    guardrail_failures: int = 0
+    guardrail_tripwires: int = 0
+    guardrail_latency_ms: float = 0.0
     errors: list[str] = field(default_factory=list)
     final_output: str = ""
     task_assessment: dict[str, Any] | None = None
@@ -85,6 +91,9 @@ class RunReport:
         elif event.type == "token_stats":
             self._record_token_stats(event)
             self._has_token_stats = True
+
+        elif event.type in {"content_guard_result", "content_guard_error"}:
+            self._record_guardrail_usage(event)
 
         elif event.type == "error":
             if event.content:
@@ -258,6 +267,20 @@ class RunReport:
                 f"- Source: {'estimated' if self.usage_estimated else 'provider-reported'}",
             ])
 
+        if self.guardrail_calls:
+            lines.extend([
+                "",
+                "## Guardrail Usage (separate from agent tokens)",
+                "",
+                f"- Calls: {self.guardrail_calls}",
+                f"- Prompt tokens: {self.guardrail_prompt_tokens}",
+                f"- Completion tokens: {self.guardrail_completion_tokens}",
+                f"- Total tokens: {self.guardrail_prompt_tokens + self.guardrail_completion_tokens}",
+                f"- Failures: {self.guardrail_failures}",
+                f"- Tripwires: {self.guardrail_tripwires}",
+                f"- Total latency: {self.guardrail_latency_ms:.2f} ms",
+            ])
+
         if self.final_output:
             lines.extend([
                 "",
@@ -407,4 +430,24 @@ class RunReport:
         self.completion_tokens += int(usage.get("completion_tokens", 0) or 0)
         self.usage_estimated = self.usage_estimated or bool(
             usage.get("estimated", False)
+        )
+
+    def _record_guardrail_usage(self, event: AgentEvent) -> None:
+        try:
+            payload = json.loads(event.content or "{}")
+        except (json.JSONDecodeError, TypeError):
+            return
+        if not isinstance(payload, dict) or not payload.get("guardrail_called"):
+            return
+        self.guardrail_calls += 1
+        self.guardrail_prompt_tokens += int(
+            payload.get("guardrail_prompt_tokens", 0) or 0
+        )
+        self.guardrail_completion_tokens += int(
+            payload.get("guardrail_completion_tokens", 0) or 0
+        )
+        self.guardrail_failures += int(bool(payload.get("sanitized_error")))
+        self.guardrail_tripwires += int(bool(payload.get("guardrail_tripwire")))
+        self.guardrail_latency_ms += float(
+            payload.get("guardrail_latency_ms", 0.0) or 0.0
         )

@@ -156,7 +156,8 @@ SCA_GUARDRAILS_MAX_CONCURRENCY=4
 removed from MCP, Actor, sandbox, and verification subprocess environments.
 Copy [`examples/openai-guardrails-coding.json`](examples/openai-guardrails-coding.json)
 to a user-controlled location; repository Guardrails config is not trusted or
-loaded automatically.
+loaded automatically. Workspace `.env` cannot set the security mode, Guardrails
+configuration, endpoint, model, budgets, or credentials.
 
 External egress is allowlisted by stage, classification, host, and payload size
 after local redaction. Source code, binary data, secrets, credentials, and raw

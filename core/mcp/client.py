@@ -194,8 +194,6 @@ class MCPToolProvider:
         """Return cached tool schemas in OpenAI function-calling format."""
         if not self._tool_schemas:
             await self._build_routing_table()
-        if self._policy.allowed_tools is None:
-            return list(self._tool_schemas)
         return [
             tool
             for tool in self._tool_schemas

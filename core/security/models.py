@@ -105,6 +105,7 @@ class SecurityDecision:
     risk_level: RiskLevel = RiskLevel.LOW
     capabilities: frozenset[Capability] = frozenset()
     action_fingerprint: str = ""
+    approval_consumed: bool = False
 
     @property
     def allowed(self) -> bool:

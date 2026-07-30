@@ -79,6 +79,13 @@ class CompositeContentGuardProvider:
             latency_ms=sum(item.latency_ms for item in assessments),
             sanitized_metadata={
                 "providers": tuple(item.provider for item in assessments),
+                "provider_latency_ms": {
+                    item.provider: item.latency_ms for item in assessments
+                },
+                "provider_tripwires": {
+                    item.provider: item.tripwire_triggered
+                    for item in assessments
+                },
             },
         )
 

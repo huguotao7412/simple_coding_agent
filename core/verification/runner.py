@@ -5,6 +5,8 @@ import re
 
 from ..sandbox.contracts import SandboxBackend, SandboxExecutionRequest
 from ..sandbox.local import LocalSandboxBackend
+from ..security.models import SecurityOutcome
+from ..security.tool_security import SecurityMiddleware
 from .models import GateResult, GateSpec, VerificationConfig, VerificationReport
 
 
@@ -34,12 +36,14 @@ class VerificationRunner:
         artifact_root: str | Path,
         excerpt_limit: int = 4000,
         sandbox_backend: SandboxBackend | None = None,
+        security_middleware: SecurityMiddleware | None = None,
     ) -> None:
         if excerpt_limit <= 0:
             raise ValueError("excerpt_limit must be positive")
         self._artifact_root = Path(artifact_root)
         self._excerpt_limit = excerpt_limit
         self._sandbox_backend = sandbox_backend or LocalSandboxBackend()
+        self._security_middleware = security_middleware
 
     async def run(
         self,
@@ -79,6 +83,30 @@ class VerificationRunner:
             gate.command,
             python_executable=self._sandbox_backend.python_executable,
         )
+        middleware = self._security_middleware or SecurityMiddleware(str(worktree))
+        decision = middleware.authorize_tool(
+            run_id=f"verification:{task_id}",
+            actor_id=task_id,
+            role="verifier",
+            tool_name="run",
+            arguments={
+                "command": " ".join(command),
+                "workspace_dir": str(worktree),
+            },
+        )
+        if decision.outcome is not SecurityOutcome.ALLOW:
+            return GateResult(
+                gate_name=gate.name,
+                command=command,
+                required=gate.required,
+                passed=False,
+                exit_code=None,
+                duration_ms=0,
+                output_artifact="",
+                output_excerpt="Verification command denied by security policy.",
+                execution_backend=self._sandbox_backend.name,
+                isolated=self._sandbox_backend.isolated,
+            )
         execution = await self._sandbox_backend.execute(SandboxExecutionRequest(
             workspace=worktree,
             command=command,

@@ -7,6 +7,7 @@ from typing import Any
 from .approvals import ApprovalStore, canonical_action_fingerprint
 from .capabilities import ROLE_CAPABILITIES, TOOL_CAPABILITIES
 from .models import (
+    Capability,
     ContentGuardAssessment,
     GuardOutcome,
     RiskLevel,
@@ -29,6 +30,16 @@ DEPENDENCY = re.compile(
     r"\b(?:npm|pnpm|yarn)\s+(?:install|add)\b|"
     r"\bpoetry\s+add\b|\bcargo\s+add\b)"
 )
+GIT_COMMAND = re.compile(r"(?i)^\s*git(?:\.exe)?\s+([a-z-]+)")
+GIT_READ_SUBCOMMANDS = frozenset({
+    "branch",
+    "diff",
+    "grep",
+    "log",
+    "rev-parse",
+    "show",
+    "status",
+})
 PATH_ARGUMENT_KEYS = frozenset({
     "path",
     "paths",
@@ -64,15 +75,37 @@ class SecurityMiddleware:
         arguments: dict[str, Any],
         guard: ContentGuardAssessment | None = None,
     ) -> SecurityDecision:
-        capabilities = TOOL_CAPABILITIES.get(tool_name)
-        if capabilities is None:
+        registered_capabilities = TOOL_CAPABILITIES.get(tool_name)
+        if registered_capabilities is None:
             return SecurityDecision(
                 SecurityOutcome.DENY,
                 "Unknown tool denied by default.",
                 ("SCA-UNKNOWN-TOOL",),
                 RiskLevel.HIGH,
             )
-        allowed = ROLE_CAPABILITIES.get(role, frozenset())
+        if not isinstance(arguments, dict):
+            return SecurityDecision(
+                SecurityOutcome.DENY,
+                "Tool arguments do not match the required object schema.",
+                ("SCA-TOOL-SCHEMA",),
+                RiskLevel.HIGH,
+                registered_capabilities,
+            )
+        command = _command(arguments)
+        capabilities = _effective_capabilities(
+            registered_capabilities,
+            command,
+        )
+        risk = RiskLevel.LOW
+        approval_rules: list[str] = []
+        if command and NETWORK.search(command):
+            risk = RiskLevel.HIGH
+            approval_rules.append("SCA-NETWORK-AUTHORIZATION")
+        if command and DEPENDENCY.search(command):
+            risk = max(risk, RiskLevel.HIGH)
+            approval_rules.append("SCA-DEPENDENCY-CHANGE")
+        if guard is not None:
+            risk = max(risk, guard.risk_level)
         fingerprint = canonical_action_fingerprint(
             run_id=run_id,
             actor_id=actor_id,
@@ -81,22 +114,15 @@ class SecurityMiddleware:
             tool_name=tool_name,
             arguments=arguments,
             capabilities=capabilities,
+            risk_level=risk,
             policy_version=self.policy_version,
         )
+        allowed = ROLE_CAPABILITIES.get(role, frozenset())
         if capabilities - allowed:
             return SecurityDecision(
                 SecurityOutcome.DENY,
                 "Role lacks one or more required capabilities.",
                 ("SCA-ROLE-CAPABILITY",),
-                RiskLevel.HIGH,
-                capabilities,
-                fingerprint,
-            )
-        if not isinstance(arguments, dict):
-            return SecurityDecision(
-                SecurityOutcome.DENY,
-                "Tool arguments do not match the required object schema.",
-                ("SCA-TOOL-SCHEMA",),
                 RiskLevel.HIGH,
                 capabilities,
                 fingerprint,
@@ -110,7 +136,6 @@ class SecurityMiddleware:
                 capabilities,
                 fingerprint,
             )
-        command = _command(arguments)
         if command and DESTRUCTIVE.search(command):
             return SecurityDecision(
                 SecurityOutcome.DENY,
@@ -120,16 +145,7 @@ class SecurityMiddleware:
                 capabilities,
                 fingerprint,
             )
-        risk = RiskLevel.LOW
-        approval_rules: list[str] = []
-        if command and NETWORK.search(command):
-            risk = RiskLevel.HIGH
-            approval_rules.append("SCA-NETWORK-AUTHORIZATION")
-        if command and DEPENDENCY.search(command):
-            risk = max(risk, RiskLevel.HIGH)
-            approval_rules.append("SCA-DEPENDENCY-CHANGE")
         if guard is not None:
-            risk = max(risk, guard.risk_level)
             if guard.outcome is GuardOutcome.DENY:
                 return SecurityDecision(
                     SecurityOutcome.DENY,
@@ -141,15 +157,28 @@ class SecurityMiddleware:
                 )
             if guard.outcome in {GuardOutcome.REVIEW, GuardOutcome.ERROR}:
                 approval_rules.extend(guard.rule_ids or ("SCA-GUARD-REVIEW",))
-        if approval_rules and not self.approvals.consume(fingerprint):
-            return SecurityDecision(
-                SecurityOutcome.REQUIRE_APPROVAL,
-                "This exact action requires approval.",
-                tuple(dict.fromkeys(approval_rules)),
-                risk,
-                capabilities,
+        approval_consumed = False
+        if approval_rules:
+            approval_consumed = self.approvals.consume(
                 fingerprint,
+                run_id=run_id,
+                actor_id=actor_id,
+                role=role,
+                workspace_identity=self.workspace,
+                tool_name=tool_name,
+                capabilities=capabilities,
+                risk_level=risk,
+                policy_version=self.policy_version,
             )
+            if not approval_consumed:
+                return SecurityDecision(
+                    SecurityOutcome.REQUIRE_APPROVAL,
+                    "This exact action requires approval.",
+                    tuple(dict.fromkeys(approval_rules)),
+                    risk,
+                    capabilities,
+                    fingerprint,
+                )
         return SecurityDecision(
             SecurityOutcome.ALLOW,
             "Allowed by deterministic security policy.",
@@ -157,6 +186,7 @@ class SecurityMiddleware:
             risk,
             capabilities,
             fingerprint,
+            approval_consumed,
         )
 
     def redact_tool_output(self, value: Any) -> tuple[Any, int, tuple[str, ...]]:
@@ -204,6 +234,27 @@ def _command(arguments: dict[str, Any]) -> str:
         if isinstance(value := arguments.get(key), str):
             return value
     return ""
+
+
+def _effective_capabilities(
+    registered: frozenset[Capability],
+    command: str,
+) -> frozenset[Capability]:
+    effective = set(registered)
+    if NETWORK.search(command):
+        effective.update({
+            Capability.NETWORK_ACCESS,
+            Capability.EXTERNAL_SIDE_EFFECT,
+        })
+    if DEPENDENCY.search(command):
+        effective.add(Capability.CHANGE_DEPENDENCIES)
+    if match := GIT_COMMAND.search(command):
+        effective.add(
+            Capability.GIT_READ
+            if match.group(1).lower() in GIT_READ_SUBCOMMANDS
+            else Capability.GIT_MUTATION
+        )
+    return frozenset(effective)
 
 
 __all__ = ["SecurityMiddleware"]
