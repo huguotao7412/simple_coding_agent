@@ -65,6 +65,18 @@ def test_small_targeted_change_prefers_deterministic_gates(tmp_path: Path):
     assert assessment.verifier_recommended is False
 
 
+def test_simple_new_file_request_stays_small_in_a_large_repository(tmp_path: Path):
+    for index in range(120):
+        (tmp_path / f"module_{index}.py").write_text("", encoding="utf-8")
+
+    assessment = TaskAssessor(tmp_path).assess(
+        "你好，请在当前工作文件夹下新建一个 Python 文件，写一个简单的计算器程序"
+    )
+
+    assert assessment.intent is TaskIntent.CODE_CHANGE
+    assert assessment.complexity is TaskComplexity.SMALL
+
+
 def test_fixing_pytest_is_a_code_change_unless_tests_are_explicit_target(tmp_path: Path):
     assessor = TaskAssessor(tmp_path)
 

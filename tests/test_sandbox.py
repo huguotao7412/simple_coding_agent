@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import sys
 from pathlib import Path
 
 import pytest
@@ -76,6 +78,25 @@ async def test_local_backend_reports_that_execution_is_not_isolated(tmp_path: Pa
     assert result.output.strip() == "ok"
     assert result.backend == "local"
     assert result.isolated is False
+
+
+@pytest.mark.asyncio
+async def test_local_backend_timeout_terminates_shell_descendants(
+    tmp_path: Path,
+):
+    command = f'"{sys.executable}" -c "import time; time.sleep(60)"'
+
+    result = await asyncio.wait_for(
+        LocalSandboxBackend().execute(SandboxExecutionRequest(
+            workspace=tmp_path,
+            command=(command,),
+            timeout_seconds=0.1,
+            shell=True,
+        )),
+        timeout=5,
+    )
+
+    assert result.timed_out is True
 
 
 @pytest.mark.asyncio

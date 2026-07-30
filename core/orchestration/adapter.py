@@ -930,6 +930,7 @@ class LangGraphOrchestrator:
             return
         # One orchestrator may be resumed from a different UI event loop.
         # A fresh transport queue keeps the durable graph state loop-independent.
+        task: asyncio.Task[GraphState] | None = None
         try:
             self._events = asyncio.Queue()
             task = asyncio.create_task(self._run(request))
@@ -998,6 +999,24 @@ class LangGraphOrchestrator:
                     node_name="finalize_failure",
                     run_id=self._planner.run_context.run_id,
                 )
+        except asyncio.CancelledError:
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            context = self._planner.run_context
+            if (
+                context.record is not None
+                and context.record.status is RunStatus.RUNNING
+            ):
+                await asyncio.shield(context.persist_checkpoint(
+                    self._planner.ctx.messages,
+                    event_type="graph_cancelled",
+                    status=RunStatus.PAUSED,
+                ))
+            raise
         finally:
             self._invocation_guard.release()
 

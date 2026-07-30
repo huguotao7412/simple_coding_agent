@@ -235,6 +235,15 @@ def test_run_report_records_versioned_task_assessment():
     assert "Strategy: coder_with_gates" in markdown
 
 
+def test_cancelled_report_does_not_claim_completion():
+    report = RunReport()
+
+    report.mark_cancelled()
+
+    assert report.outcome == "cancelled"
+    assert "Status: cancelled" in report.to_markdown()
+
+
 def test_report_run_id_cannot_escape_state_directory(tmp_path, monkeypatch):
     state_home = tmp_path / "state"
     workspace = tmp_path / "workspace"

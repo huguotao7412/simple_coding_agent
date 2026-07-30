@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from core.exceptions import LLMAPIError
 from core.llm import LLMClient
 
 
@@ -9,6 +10,17 @@ def test_llm_client_upgrades_deepseek_legacy_aliases_to_pro():
     assert LLMClient(api_key="test", model="deepseek-chat").model == "deepseek-v4-pro"
     assert LLMClient(api_key="test", model="deepseek/deepseek-reasoner").model == "deepseek-v4-pro"
     assert LLMClient(api_key="test", model="deepseek-v4-flash").model == "deepseek-v4-flash"
+
+
+def test_llm_client_separates_context_and_output_token_limits():
+    client = LLMClient(
+        api_key="test",
+        max_tokens=128_000,
+        max_output_tokens=4_096,
+    )
+
+    assert client.max_tokens == 128_000
+    assert client.max_output_tokens == 4_096
 
 
 class FakeStreamingResponse:
@@ -49,3 +61,16 @@ async def test_parse_stream_does_not_emit_reasoning_tokens_to_callback():
     assert result["reasoning_content"] == "internal"
     assert result["content"] == "visible"
     assert tokens == ["visible"]
+
+
+class TruncatedReasoningStream:
+    async def aiter_lines(self):
+        yield 'data: {"choices":[{"delta":{"reasoning_content":"partial"}}]}'
+
+
+@pytest.mark.asyncio
+async def test_parse_stream_rejects_truncated_reasoning_only_response():
+    client = LLMClient(api_key="test")
+
+    with pytest.raises(LLMAPIError, match="before a finish signal"):
+        await client._parse_stream(TruncatedReasoningStream(), on_token=None)

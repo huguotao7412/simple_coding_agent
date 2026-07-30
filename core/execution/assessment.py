@@ -323,7 +323,6 @@ class TaskAssessor:
             len(explicit_paths) >= 2
             or _contains_any(text, medium_terms)
             or word_count >= 60
-            or (profile.source_file_count >= 100 and not explicit_paths)
         ):
             return TaskComplexity.MEDIUM, ("multi-part, cross-cutting, or unfamiliar scope",)
         return TaskComplexity.SMALL, ("bounded request with a narrow inferred scope",)

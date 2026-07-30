@@ -12,6 +12,9 @@ SCA_API_KEY=your-api-key
 SCA_API_BASE=https://api.deepseek.com
 SCA_MODEL=deepseek-v4-pro
 SCA_MAX_TOKENS=128000
+# Per model turn; separate from the context-window budget above.
+SCA_MAX_OUTPUT_TOKENS=8192
+SCA_LLM_READ_TIMEOUT=120
 SCA_MAX_ACTORS=4
 SCA_SANDBOX_BACKEND=local
 # Optional runtime state override (reports, checkpoints, patches, verification logs)

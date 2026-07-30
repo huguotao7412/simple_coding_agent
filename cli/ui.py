@@ -201,8 +201,7 @@ class UI:
         if report.errors:
             table.add_row("Errors", str(len(report.errors)))
 
-        outcome = "failed" if report.errors or failed_tools else "completed"
-        table.add_row("Outcome", outcome)
+        table.add_row("Outcome", report.outcome)
 
         self.console.print()
         self.console.print(table)

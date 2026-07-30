@@ -59,6 +59,8 @@ def build_planner(
         base_url=os.getenv("SCA_API_BASE", "https://api.deepseek.com"),
         model=_resolved_model(model),
         max_tokens=int(os.getenv("SCA_MAX_TOKENS", "128000")),
+        max_output_tokens=int(os.getenv("SCA_MAX_OUTPUT_TOKENS", "8192")),
+        read_timeout_seconds=float(os.getenv("SCA_LLM_READ_TIMEOUT", "120")),
     )
     ctx = context_manager or ContextManager(system_prompt=PLANNER_SYSTEM_PROMPT)
     tools = [tool_cls() for tool_cls in PLANNER_TOOLS]

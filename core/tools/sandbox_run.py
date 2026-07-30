@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,9 @@ from ..sandbox.contracts import (
     SandboxUnavailableError,
 )
 from .base import BaseTool, ToolResult
+
+
+logger = logging.getLogger(__name__)
 
 
 class SandboxRunTool(BaseTool):
@@ -62,6 +67,13 @@ class SandboxRunTool(BaseTool):
             return ToolResult.fail("'timeout' must be a positive number of milliseconds")
         if raw_timeout <= 0:
             return ToolResult.fail("'timeout' must be a positive number of milliseconds")
+        started = time.monotonic()
+        logger.info(
+            "Sandbox command started actor=%s backend=%s timeout_ms=%d",
+            self._actor_id,
+            self._backend.name,
+            int(raw_timeout),
+        )
         try:
             result = await self._backend.execute(SandboxExecutionRequest(
                 workspace=Path(workspace),
@@ -72,6 +84,15 @@ class SandboxRunTool(BaseTool):
             ))
         except (OSError, ValueError, SandboxUnavailableError) as error:
             return ToolResult.fail(f"Sandbox execution failed: {error}")
+        logger.info(
+            "Sandbox command completed actor=%s backend=%s duration_ms=%d "
+            "exit_code=%s timed_out=%s",
+            self._actor_id,
+            result.backend,
+            int((time.monotonic() - started) * 1000),
+            result.exit_code,
+            result.timed_out,
+        )
 
         payload = {
             "success": result.succeeded,

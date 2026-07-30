@@ -23,9 +23,21 @@ class Bridge:
             except (EOFError, KeyboardInterrupt):
                 self.ui.render_info("\nGoodbye.")
                 break
+            except UnicodeError as error:
+                self.ui.render_error(
+                    "Input encoding error. Configure the terminal to send UTF-8 "
+                    f"and try again ({error})."
+                )
+                continue
 
             user_input = user_input.strip()
             if not user_input:
+                continue
+            if "\ufffd" in user_input:
+                self.ui.render_error(
+                    "Input contains invalid replacement characters and was not "
+                    "sent to an Actor. Configure the terminal for UTF-8 and retry."
+                )
                 continue
             if user_input.lower() in ("exit", "quit"):
                 self.ui.render_info("Goodbye.")
@@ -153,6 +165,9 @@ class Bridge:
                     )
                     event_stream = active_run.resume_stream(approved)
                     active_run.interrupted = False
+            except asyncio.CancelledError:
+                report.mark_cancelled()
+                raise
             finally:
                 self.session.complete(active_run, final_output)
                 self.ui.clear_tool_status()

@@ -138,6 +138,8 @@ success without a test/check attempt.
 - Prefer `edit_file` over `write_file` for small changes to large files.
 - When you encounter errors, read the error message and fix the problem yourself.
 - Prefer foreground commands. Background-process tools may be unavailable in isolated mode.
+- Never launch a command that waits for interactive stdin. Test interactive CLIs
+  with piped/redirected sample input, or import their functions in a finite assertion.
 - Return a structured summary when done; do NOT chain into unrelated work.
 - Before making edits, maintain a mental note of bugs found and files modified.
 - If your task is exploration-only, do NOT write code; only analyze and report findings.

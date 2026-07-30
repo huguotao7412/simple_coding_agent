@@ -40,6 +40,7 @@ class RunReport:
     guardrail_tripwires: int = 0
     guardrail_latency_ms: float = 0.0
     errors: list[str] = field(default_factory=list)
+    cancelled: bool = False
     final_output: str = ""
     task_assessment: dict[str, Any] | None = None
     execution_policy: dict[str, Any] | None = None
@@ -128,7 +129,12 @@ class RunReport:
 
     @property
     def outcome(self) -> str:
+        if self.cancelled:
+            return "cancelled"
         return "failed" if self.errors or self.failed_tool_count else "completed"
+
+    def mark_cancelled(self) -> None:
+        self.cancelled = True
 
     def to_markdown(self) -> str:
         """Render a deterministic audit report suitable for eval checks."""

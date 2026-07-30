@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -18,6 +19,9 @@ except ImportError:  # pragma: no cover
 from .exceptions import LLMAPIError
 
 
+logger = logging.getLogger(__name__)
+
+
 class LLMClient:
     """Async OpenAI-compatible API client with streaming support."""
 
@@ -27,11 +31,22 @@ class LLMClient:
         base_url: str = "https://api.deepseek.com",
         model: str = DEFAULT_MODEL,
         max_tokens: int = 128000,
+        max_output_tokens: int = 8192,
+        read_timeout_seconds: float = 120.0,
     ):
+        if max_tokens <= 0 or max_output_tokens <= 0:
+            raise ValueError("token limits must be positive")
+        if read_timeout_seconds <= 0:
+            raise ValueError("read timeout must be positive")
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = normalize_model_name(model)
+        # max_tokens is the context budget used by ContextManager. Keep the
+        # per-response generation cap separate so a single tool turn cannot
+        # consume the entire context window in hidden reasoning.
         self.max_tokens = max_tokens
+        self.max_output_tokens = min(max_output_tokens, max_tokens)
+        self.read_timeout_seconds = read_timeout_seconds
         self._tokenizer = ds_token
 
     def count_tokens(self, text: str) -> int:
@@ -70,16 +85,29 @@ class LLMClient:
         body: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "max_tokens": self.max_tokens,
+            "max_tokens": self.max_output_tokens,
             "stream": True,
         }
         if tools:
             body["tools"] = tools
 
-        timeout_config = httpx.Timeout(600.0)
+        timeout_config = httpx.Timeout(
+            connect=15.0,
+            read=self.read_timeout_seconds,
+            write=30.0,
+            pool=15.0,
+        )
         max_retries_network = 3
         max_retries_server = 4
         max_retries_rate = 5
+        request_started = time.monotonic()
+        logger.info(
+            "LLM request started model=%s messages=%d tools=%d max_output_tokens=%d",
+            self.model,
+            len(messages),
+            len(tools or []),
+            self.max_output_tokens,
+        )
 
         async with httpx.AsyncClient(timeout=timeout_config) as client:
             for attempt in range(max(max_retries_network, max_retries_server, max_retries_rate)):
@@ -110,6 +138,13 @@ class LLMClient:
                                     "completion_tokens": self.count_tokens(completion_payload),
                                     "estimated": True,
                                 }
+                            logger.info(
+                                "LLM request completed model=%s duration_ms=%d "
+                                "tool_calls=%d",
+                                self.model,
+                                int((time.monotonic() - request_started) * 1000),
+                                len(result.get("tool_calls") or []),
+                            )
                             return result
 
                         text = await response.aread()
@@ -123,13 +158,26 @@ class LLMClient:
                                 wait = int(retry_after)
                             except ValueError:
                                 wait = 5
+                            logger.warning(
+                                "LLM rate limited; retrying attempt=%d wait_seconds=%d",
+                                attempt + 1,
+                                wait,
+                            )
                             await asyncio.sleep(wait)
                             continue
 
                         if response.status_code >= 500:
                             if attempt >= max_retries_server - 1:
                                 raise LLMAPIError(response.status_code, error_body)
-                            await asyncio.sleep(2 ** attempt)
+                            wait = 2 ** attempt
+                            logger.warning(
+                                "LLM server error status=%d; retrying attempt=%d "
+                                "wait_seconds=%d",
+                                response.status_code,
+                                attempt + 1,
+                                wait,
+                            )
+                            await asyncio.sleep(wait)
                             continue
 
                         raise LLMAPIError(response.status_code, error_body)
@@ -141,7 +189,14 @@ class LLMClient:
                             f"{str(e) or 'Connection dropped or timed out'}"
                         )
                         raise LLMAPIError(0, error_detail) from e
-                    await asyncio.sleep(2 ** attempt)
+                    wait = 2 ** attempt
+                    logger.warning(
+                        "LLM network error %s; retrying attempt=%d wait_seconds=%d",
+                        type(e).__name__,
+                        attempt + 1,
+                        wait,
+                    )
+                    await asyncio.sleep(wait)
 
         raise LLMAPIError(0, "LLM request exhausted retry loop without a response")
 
@@ -155,6 +210,10 @@ class LLMClient:
         tool_calls: list[dict] = []
         tool_call_buf: dict[int, dict] = {}
         provider_usage: dict[str, Any] | None = None
+        stream_started = time.monotonic()
+        last_activity_log = stream_started
+        received_event = False
+        stream_completed = False
 
         try:
             async for line in response.aiter_lines():
@@ -162,6 +221,7 @@ class LLMClient:
                     continue
                 data = line[6:]
                 if data == "[DONE]":
+                    stream_completed = True
                     break
 
                 try:
@@ -172,6 +232,25 @@ class LLMClient:
                         data[:200],
                     )
                     continue
+                now = time.monotonic()
+                if not received_event:
+                    received_event = True
+                    last_activity_log = now
+                    logger.info(
+                        "LLM stream connected model=%s first_event_ms=%d",
+                        self.model,
+                        int((now - stream_started) * 1000),
+                    )
+                elif now - last_activity_log >= 15:
+                    logger.info(
+                        "LLM stream active model=%s elapsed_seconds=%d "
+                        "visible_chunks=%d reasoning_chunks=%d",
+                        self.model,
+                        int(now - stream_started),
+                        len(content_parts),
+                        len(reasoning_parts),
+                    )
+                    last_activity_log = now
 
                 raw_usage = chunk.get("usage")
                 if isinstance(raw_usage, dict):
@@ -183,6 +262,8 @@ class LLMClient:
 
                 choice = choices[0] if isinstance(choices, list) else choices
                 delta = choice.get("delta", {})
+                if choice.get("finish_reason") is not None:
+                    stream_completed = True
 
                 if "reasoning_content" in delta and delta["reasoning_content"]:
                     token = delta["reasoning_content"]
@@ -211,8 +292,16 @@ class LLMClient:
                             if "arguments" in function:
                                 tool_call_buf[idx]["function"]["arguments"] += function["arguments"]
         except httpx.HTTPError as e:
-            if not content_parts and not tool_call_buf:
-                raise LLMAPIError(0, f"Stream connection dropped or timed out: {e}") from e
+            raise LLMAPIError(
+                0,
+                f"Stream connection dropped or timed out: {type(e).__name__}: {e}",
+            ) from e
+
+        if not stream_completed:
+            raise LLMAPIError(
+                0,
+                "Stream ended before a finish signal; partial output was discarded",
+            )
 
         for idx in sorted(tool_call_buf.keys()):
             tool_call = tool_call_buf[idx]
