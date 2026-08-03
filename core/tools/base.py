@@ -10,14 +10,21 @@ class ToolResult:
     content: str = ""
     error: str | None = None
     policy_denied: bool = False
+    fatal: bool = False
 
     @classmethod
     def ok(cls, content: str) -> ToolResult:
         return cls(success=True, content=content)
 
     @classmethod
-    def fail(cls, error: str, content: str = "") -> ToolResult:
-        return cls(success=False, content=content, error=error)
+    def fail(
+        cls,
+        error: str,
+        content: str = "",
+        *,
+        fatal: bool = False,
+    ) -> ToolResult:
+        return cls(success=False, content=content, error=error, fatal=fatal)
 
     @classmethod
     def deny(cls, error: str) -> ToolResult:

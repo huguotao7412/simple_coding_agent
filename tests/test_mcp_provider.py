@@ -76,7 +76,7 @@ class FakeIsolatedSandbox:
 async def test_mcp_servers_start_with_worktree_cwd(monkeypatch, tmp_path):
     captured_params = []
 
-    def fake_stdio_client(params):
+    def fake_stdio_client(params, errlog=None):
         captured_params.append(params)
         return FakeStdioContext()
 
@@ -108,7 +108,7 @@ async def test_mcp_servers_prefer_local_node_bins(monkeypatch, tmp_path):
     fs_bin.write_text("", encoding="utf-8")
     bash_bin.write_text("", encoding="utf-8")
 
-    def fake_stdio_client(params):
+    def fake_stdio_client(params, errlog=None):
         captured_params.append(params)
         return FakeStdioContext()
 
@@ -134,7 +134,7 @@ async def test_isolated_mode_omits_bash_mcp_and_routes_run_to_sandbox(
     captured_params = []
     sandbox = FakeIsolatedSandbox()
 
-    def fake_stdio_client(params):
+    def fake_stdio_client(params, errlog=None):
         captured_params.append(params)
         return FakeStdioContext()
 

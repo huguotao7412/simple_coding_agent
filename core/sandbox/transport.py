@@ -6,6 +6,8 @@ import stat
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from .paths import REMOTE_ARCHIVE_IN, REMOTE_ARCHIVE_OUT, REMOTE_WORKSPACE_ROOT
+
 
 _IGNORED_PARTS = {
     ".git",
@@ -108,20 +110,20 @@ def apply_workspace_archive(
 
 REMOTE_UNPACK_COMMAND = """python3 - <<'PY'
 import pathlib, shutil, zipfile
-root = pathlib.Path('/workspace')
+root = pathlib.Path('%s')
 root.mkdir(parents=True, exist_ok=True)
 for child in root.iterdir():
     shutil.rmtree(child) if child.is_dir() else child.unlink()
-with zipfile.ZipFile('/tmp/sca-workspace-in.zip') as archive:
+with zipfile.ZipFile('%s') as archive:
     archive.extractall(root)
-PY"""
+PY""" % (REMOTE_WORKSPACE_ROOT.as_posix(), REMOTE_ARCHIVE_IN.as_posix())
 
 REMOTE_PACK_COMMAND = """python3 - <<'PY'
 import pathlib, zipfile
-root = pathlib.Path('/workspace')
+root = pathlib.Path('%s')
 ignored = {'.git', '.sca', '.venv', '.worktrees', '__pycache__', 'node_modules'}
 secrets = {'.env', '.npmrc', '.pypirc', 'credentials', 'credentials.json'}
-with zipfile.ZipFile('/tmp/sca-workspace-out.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+with zipfile.ZipFile('%s', 'w', zipfile.ZIP_DEFLATED) as z:
     for path in sorted(root.rglob('*')):
         rel = path.relative_to(root)
         name = rel.name.lower()
@@ -129,7 +131,7 @@ with zipfile.ZipFile('/tmp/sca-workspace-out.zip', 'w', zipfile.ZIP_DEFLATED) as
         forbidden = forbidden or name in secrets or (name.startswith('.env.') and name != '.env.example')
         if path.is_file() and not path.is_symlink() and not forbidden:
             z.write(path, rel.as_posix())
-PY"""
+PY""" % (REMOTE_WORKSPACE_ROOT.as_posix(), REMOTE_ARCHIVE_OUT.as_posix())
 
 
 __all__ = [

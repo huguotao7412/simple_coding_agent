@@ -92,6 +92,25 @@ async def test_gateway_injects_workspace_before_authorization_and_dispatches_cop
 
 
 @pytest.mark.asyncio
+async def test_gateway_preserves_fatal_tool_result() -> None:
+    async def dispatch(arguments: dict[str, Any]) -> ToolResult:
+        return ToolResult.fail("sandbox unavailable", fatal=True)
+
+    catalog = ToolCatalog()
+    catalog.register(registration(dispatch))
+    gateway = ToolGateway(
+        catalog,
+        workspace_dir="C:/workspace",
+        middleware=RecordingPolicy(),  # type: ignore[arg-type]
+    )
+
+    result = await gateway.execute(call({"path": "file.txt"}))
+
+    assert result.success is False
+    assert result.fatal is True
+
+
+@pytest.mark.asyncio
 async def test_gateway_denies_unknown_schema_and_policy_before_dispatch() -> None:
     dispatch_count = 0
 

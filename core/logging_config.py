@@ -1,7 +1,7 @@
 """Unified logging configuration for Simple Coding Agent.
 
 Controls:
-  SCA_LOG_LEVEL  — DEBUG, INFO, WARNING, ERROR (default: INFO)
+  SCA_LOG_LEVEL  — DEBUG, INFO, WARNING, ERROR (default: WARNING)
   SCA_LOG_JSON   — "1" / "true" / "yes" for JSON output (default: console)
 """
 
@@ -16,16 +16,16 @@ def setup_logging(level: str | None = None, json_format: bool | None = None) -> 
     """Configure root logger for the entire application.
 
     Args:
-        level: Log level string. Defaults to SCA_LOG_LEVEL env or "INFO".
+        level: Log level string. Defaults to SCA_LOG_LEVEL env or "WARNING".
         json_format: If True, output JSON lines. Defaults to SCA_LOG_JSON env or False.
     """
     if level is None:
-        level = os.getenv("SCA_LOG_LEVEL", "INFO")
+        level = os.getenv("SCA_LOG_LEVEL", "WARNING")
     if json_format is None:
         json_format = os.getenv("SCA_LOG_JSON", "").lower() in ("1", "true", "yes")
 
     root = logging.getLogger()
-    root.setLevel(getattr(logging, level.upper(), logging.INFO))
+    root.setLevel(getattr(logging, level.upper(), logging.WARNING))
 
     # Remove existing handlers to avoid duplication on re-config
     for h in root.handlers[:]:

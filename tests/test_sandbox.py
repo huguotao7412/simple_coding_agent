@@ -36,7 +36,7 @@ def test_resolve_sandbox_cwd_rejects_workspace_escape(tmp_path: Path):
     host, remote = resolve_sandbox_cwd(workspace, "src")
 
     assert host == (workspace / "src").resolve()
-    assert remote == "/workspace/src"
+    assert remote == "/home/user/sca-workspace/src"
     with pytest.raises(ValueError, match="outside workspace"):
         resolve_sandbox_cwd(workspace, "../outside")
 
@@ -120,11 +120,15 @@ async def test_e2b_backend_syncs_workspace_around_command(tmp_path: Path, monkey
 
     class Files:
         uploaded = b""
+        write_path = ""
+        read_path = ""
 
         async def write(self, path, data):
+            self.write_path = path
             self.uploaded = bytes(data)
 
         async def read(self, path, format):
+            self.read_path = path
             remote = tmp_path / "remote"
             remote.mkdir(exist_ok=True)
             (remote / "after.txt").write_text("after", encoding="utf-8")
@@ -160,3 +164,8 @@ async def test_e2b_backend_syncs_workspace_around_command(tmp_path: Path, monkey
     assert (workspace / "after.txt").read_text(encoding="utf-8") == "after"
     assert not (workspace / "before.txt").exists()
     assert Session.files.uploaded
+    assert Session.files.write_path == "/home/user/.sca-workspace-in.zip"
+    assert Session.files.read_path == "/home/user/.sca-workspace-out.zip"
+    assert "/home/user/sca-workspace" in Session.commands.calls[0][0]
+    assert Session.commands.calls[1][1]["cwd"] == "/home/user/sca-workspace"
+    assert "/home/user/sca-workspace" in Session.commands.calls[-1][0]

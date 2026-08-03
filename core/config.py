@@ -16,6 +16,8 @@ SCA_MAX_TOKENS=128000
 SCA_MAX_OUTPUT_TOKENS=8192
 SCA_LLM_READ_TIMEOUT=120
 SCA_MAX_ACTORS=4
+# WARNING keeps the terminal concise; use INFO or DEBUG for diagnostics.
+SCA_LOG_LEVEL=WARNING
 SCA_SANDBOX_BACKEND=local
 # Optional runtime state override (reports, checkpoints, patches, verification logs)
 # SCA_STATE_HOME=C:\\path\\to\\sca-state

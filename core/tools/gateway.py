@@ -153,6 +153,7 @@ class ToolGateway:
                 else ToolResult.fail(
                     result.error or "tool execution failed",
                     sanitized_content,
+                    fatal=result.fatal,
                 )
             )
 
@@ -194,6 +195,7 @@ class ToolGateway:
             else ToolResult.fail(
                 result.error or "tool execution failed",
                 sanitized_content,
+                fatal=result.fatal,
             )
         )
 

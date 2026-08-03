@@ -314,6 +314,17 @@ class ModelLoop:
                 tool_result=result,
                 actor_id=self.actor_id,
             ))
+            if result.fatal:
+                error_msg = result.error or "Fatal tool infrastructure failure"
+                self._terminal_budget_error = error_msg
+                self.last_result_success = False
+                self.ctx.add_assistant_message(content=error_msg)
+                yield await self._emit(AgentEvent(
+                    type="error",
+                    content=error_msg,
+                    actor_id=self.actor_id,
+                ))
+                return
             if result.policy_denied:
                 yield await self._emit(AgentEvent(
                     type="policy_denied",

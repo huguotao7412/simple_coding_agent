@@ -117,6 +117,16 @@ class FailingTool(BaseTool):
         raise RuntimeError("boom")
 
 
+class FatalTool(BaseTool):
+    name = "fatal"
+    description = "Report a fatal infrastructure failure."
+    parameters = {}
+    required_params = []
+
+    async def execute(self, **kwargs):
+        return ToolResult.fail("sandbox bootstrap failed", fatal=True)
+
+
 class FakeDelegateTool(BaseTool):
     name = "delegate"
     description = "Fake delegate for planner wrapper tests."
@@ -376,6 +386,31 @@ async def test_runtime_converts_tool_exception_to_tool_result():
     assert result == "finished"
     tool_messages = [m for m in ctx.messages if m["role"] == "tool"]
     assert "Internal Tool Error" in tool_messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_stops_immediately_after_fatal_tool_failure():
+    llm = FakeLLM([
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_named_tool_call("fatal", "{}")],
+        },
+        {"role": "assistant", "content": "must not be reached"},
+    ])
+    ctx = ContextManager(system_prompt="system")
+    runtime = AgentRuntime(
+        llm_client=llm,
+        context_manager=ctx,
+        tools=[FatalTool()],
+        workspace_dir=".",
+        max_steps=3,
+    )
+
+    result = await runtime.run("hello")
+
+    assert result == "sandbox bootstrap failed"
+    assert len(llm.responses) == 1
 
 
 @pytest.mark.asyncio

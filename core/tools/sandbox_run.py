@@ -83,7 +83,16 @@ class SandboxRunTool(BaseTool):
                 shell=True,
             ))
         except (OSError, ValueError, SandboxUnavailableError) as error:
-            return ToolResult.fail(f"Sandbox execution failed: {error}")
+            message = f"Sandbox infrastructure failed: {error}"
+            logger.debug(message, exc_info=True)
+            return ToolResult.fail(message, fatal=True)
+        except Exception as error:
+            message = (
+                "Sandbox infrastructure failed: "
+                f"{type(error).__name__}: {error}"
+            )
+            logger.debug(message, exc_info=True)
+            return ToolResult.fail(message, fatal=True)
         logger.info(
             "Sandbox command completed actor=%s backend=%s duration_ms=%d "
             "exit_code=%s timed_out=%s",

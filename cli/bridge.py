@@ -123,6 +123,41 @@ class Bridge:
                             except Exception:
                                 pass
 
+                        elif event.type == "actor_status":
+                            try:
+                                status = json.loads(event.content)
+                                actor_id = status.get("actor_id", "actor")
+                                if status.get("phase") == "start":
+                                    self.ui.render_info(
+                                        f"Actor {actor_id} started implementation."
+                                    )
+                                else:
+                                    outcome = (
+                                        status.get("status")
+                                        or event.route
+                                        or "finished"
+                                    )
+                                    self.ui.render_info(
+                                        f"Actor {actor_id} finished: {outcome}."
+                                    )
+                            except (json.JSONDecodeError, AttributeError):
+                                pass
+
+                        elif event.type == "graph_node_started":
+                            if event.node_name == "collect_actor_results":
+                                self.ui.render_info("Applying Actor changes...")
+                            elif event.node_name == "verify":
+                                self.ui.render_info("Verifying the run result...")
+
+                        elif (
+                            event.type == "graph_route_selected"
+                            and event.node_name == "repair_router"
+                        ):
+                            outcome = (
+                                "passed" if event.route == "success" else "failed"
+                            )
+                            self.ui.render_info(f"Verification {outcome}.")
+
                         elif event.type == "token_stats":
                             if stream:
                                 stream.__exit__(None, None, None)

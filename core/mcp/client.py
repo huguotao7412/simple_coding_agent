@@ -83,6 +83,7 @@ class MCPToolProvider:
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._sessions: dict[str, ClientSession] = {}
         self._stdio_ctxs: list[Any] = []
+        self._stderr_handles: list[Any] = []
         self._tool_routing: dict[str, str] = {}
         self._tool_schemas: list[dict[str, Any]] = []
         local_tools: list[BaseTool] = [
@@ -169,7 +170,12 @@ class MCPToolProvider:
             )
 
             try:
-                stdio_ctx = stdio_client(server_params)
+                if logger.isEnabledFor(logging.DEBUG):
+                    stdio_ctx = stdio_client(server_params)
+                else:
+                    errlog = open(os.devnull, "w", encoding="utf-8")
+                    self._stderr_handles.append(errlog)
+                    stdio_ctx = stdio_client(server_params, errlog=errlog)
                 read_stream, write_stream = await stdio_ctx.__aenter__()
                 self._stdio_ctxs.append(stdio_ctx)
 
@@ -305,7 +311,14 @@ class MCPToolProvider:
             except BaseException:
                 logger.debug("MCP stdio close: swallowed cleanup error", exc_info=True)
 
+        for handle in self._stderr_handles:
+            try:
+                handle.close()
+            except OSError:
+                pass
+
         self._stdio_ctxs.clear()
+        self._stderr_handles.clear()
         self._sessions.clear()
         self._tool_routing.clear()
         self._tool_schemas.clear()

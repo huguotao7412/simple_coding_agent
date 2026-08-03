@@ -4,6 +4,11 @@ import os
 from pathlib import Path, PurePosixPath
 
 
+REMOTE_WORKSPACE_ROOT = PurePosixPath("/home/user/sca-workspace")
+REMOTE_ARCHIVE_IN = PurePosixPath("/home/user/.sca-workspace-in.zip")
+REMOTE_ARCHIVE_OUT = PurePosixPath("/home/user/.sca-workspace-out.zip")
+
+
 def resolve_sandbox_cwd(workspace: Path, cwd: str) -> tuple[Path, str]:
     """Resolve a host cwd and matching container cwd without workspace escape."""
     root = workspace.resolve()
@@ -18,8 +23,13 @@ def resolve_sandbox_cwd(workspace: Path, cwd: str) -> tuple[Path, str]:
     if not contained:
         raise ValueError("sandbox cwd is outside workspace")
     relative = resolved.relative_to(root)
-    container = PurePosixPath("/workspace", *relative.parts).as_posix()
+    container = PurePosixPath(REMOTE_WORKSPACE_ROOT, *relative.parts).as_posix()
     return resolved, container
 
 
-__all__ = ["resolve_sandbox_cwd"]
+__all__ = [
+    "REMOTE_ARCHIVE_IN",
+    "REMOTE_ARCHIVE_OUT",
+    "REMOTE_WORKSPACE_ROOT",
+    "resolve_sandbox_cwd",
+]

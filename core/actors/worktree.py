@@ -200,7 +200,7 @@ def _failure_category_for_phase(phase: str, error: Exception | str) -> str:
     text = f"{phase}: {error}".lower()
     if "token budget" in text or "model-call budget" in text:
         return "model failure"
-    if "worktree" in text or "baseline" in text or "sandbox startup" in text:
+    if "worktree" in text or "baseline" in text or "sandbox" in text:
         return "environment/bootstrap failure"
     if "mcp" in text or "tool provider" in text or "baseline tools" in text:
         return "tool provider failure"

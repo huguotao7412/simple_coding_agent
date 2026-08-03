@@ -12,7 +12,7 @@ from .contracts import (
     SandboxExecutionResult,
     SandboxUnavailableError,
 )
-from .paths import resolve_sandbox_cwd
+from .paths import REMOTE_ARCHIVE_IN, REMOTE_ARCHIVE_OUT, resolve_sandbox_cwd
 from .transport import (
     REMOTE_PACK_COMMAND,
     REMOTE_UNPACK_COMMAND,
@@ -84,7 +84,7 @@ class E2BSandboxBackend:
             session = await self._session(root)
             limit = self._config.limits.max_transfer_bytes
             payload = await asyncio.to_thread(pack_workspace, root, max_bytes=limit)
-            await session.files.write("/tmp/sca-workspace-in.zip", payload)
+            await session.files.write(REMOTE_ARCHIVE_IN.as_posix(), payload)
             await session.commands.run(REMOTE_UNPACK_COMMAND, timeout=60)
             command = request.command[0] if request.shell else shlex.join(request.command)
             timeout = min(
@@ -111,7 +111,7 @@ class E2BSandboxBackend:
                 timed_out = "timeout" in type(error).__name__.lower()
             await session.commands.run(REMOTE_PACK_COMMAND, timeout=60)
             remote_payload = bytes(await session.files.read(
-                "/tmp/sca-workspace-out.zip",
+                REMOTE_ARCHIVE_OUT.as_posix(),
                 format="bytes",
             ))
             await asyncio.to_thread(
