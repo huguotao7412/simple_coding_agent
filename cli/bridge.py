@@ -144,19 +144,17 @@ class Bridge:
                                 pass
 
                         elif event.type == "graph_node_started":
-                            if event.node_name == "collect_actor_results":
-                                self.ui.render_info("Applying Actor changes...")
-                            elif event.node_name == "verify":
-                                self.ui.render_info("Verifying the run result...")
+                            # Collection and aggregation are internal stages. File
+                            # application and verification are reported only by
+                            # events proving that those actions actually ran.
+                            pass
 
                         elif (
                             event.type == "graph_route_selected"
                             and event.node_name == "repair_router"
                         ):
-                            outcome = (
-                                "passed" if event.route == "success" else "failed"
-                            )
-                            self.ui.render_info(f"Verification {outcome}.")
+                            outcome = "passed" if event.route == "success" else "failed"
+                            self.ui.render_info(f"Run result aggregation {outcome}.")
 
                         elif event.type == "token_stats":
                             if stream:

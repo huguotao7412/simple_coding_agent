@@ -222,6 +222,28 @@ def build_parser() -> argparse.ArgumentParser:
         "sandbox-check",
         help="Validate the configured command-execution sandbox",
     )
+    commands.add_parser(
+        "doctor",
+        help="Run read-only installation and optional-capability diagnostics",
+    )
+    mcp_parser = commands.add_parser(
+        "mcp",
+        help="Manage the optional per-user MCP server runtime",
+    )
+    mcp_commands = mcp_parser.add_subparsers(dest="mcp_command")
+    mcp_commands.add_parser("status", help="Show managed MCP runtime status")
+    mcp_commands.add_parser(
+        "install",
+        help="Install pinned MCP servers for the current OS user",
+    )
+    mcp_commands.add_parser(
+        "repair",
+        help="Replace and revalidate the current user's MCP runtime",
+    )
+    mcp_commands.add_parser(
+        "uninstall",
+        help="Remove the current user's managed MCP runtime",
+    )
     config_parser = commands.add_parser(
         "config",
         help="Manage user-level configuration",
@@ -387,6 +409,68 @@ async def _sandbox_check() -> int:
     return 0
 
 
+async def _smoke_test_managed_mcp(root: str) -> tuple[bool, str]:
+    import tempfile
+
+    from core.mcp.client import MCPToolProvider
+
+    with tempfile.TemporaryDirectory(prefix="health-", dir=root) as workspace:
+        provider = MCPToolProvider(mcp_mode="optional")
+        try:
+            await provider.start(workspace)
+            health = provider.health()
+            required = {"filesystem", "bash"}
+            connected = set(health.connected_servers)
+            if not required <= connected:
+                missing = ", ".join(sorted(required - connected))
+                return False, f"server handshake incomplete; missing: {missing}"
+            return True, f"healthy servers: {', '.join(sorted(connected))}"
+        finally:
+            await provider.shutdown()
+
+
+def _render_mcp_status(status: Any) -> None:
+    print(f"Managed root: {status.root}")
+    print(f"Active runtime: {status.active_dir or 'not installed'}")
+    print(f"Runtime ID: {status.runtime_id or 'unavailable'}")
+    print(f"Node: {status.node_command or 'unavailable'}")
+    print(f"npm: {status.npm_command or 'unavailable'}")
+    print(f"Status: {'healthy' if status.healthy else 'unavailable'}")
+    print(f"Detail: {status.detail}")
+    for name, path in sorted(status.binaries.items()):
+        print(f"Tool server {name}: {path}")
+
+
+def _mcp_command(args: argparse.Namespace) -> int:
+    from core.mcp.managed_runtime import (
+        MCPRuntimeError,
+        install_managed_runtime,
+        managed_runtime_status,
+        uninstall_managed_runtime,
+    )
+
+    command = args.mcp_command or "status"
+    try:
+        if command == "uninstall":
+            root = uninstall_managed_runtime()
+            print(f"Removed managed MCP runtime: {root}")
+            return 0
+        if command == "repair":
+            uninstall_managed_runtime()
+        if command in {"install", "repair"}:
+            status = install_managed_runtime()
+            healthy, detail = asyncio.run(_smoke_test_managed_mcp(str(status.root)))
+            _render_mcp_status(managed_runtime_status())
+            print(f"Handshake: {detail}")
+            return 0 if healthy else 1
+        status = managed_runtime_status()
+        _render_mcp_status(status)
+        return 0 if status.healthy else 1
+    except (MCPRuntimeError, OSError, ValueError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -396,12 +480,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "config":
         return _config_command(args)
 
+    if args.command == "mcp":
+        from core.config import load_runtime_environment
+
+        # A repository .env must never redirect or enable a per-user installer.
+        load_runtime_environment(workspace_dir, include_workspace=False)
+        return _mcp_command(args)
+
     from core.config import load_runtime_environment
 
     load_runtime_environment(workspace_dir)
 
     if args.command == "sandbox-check":
         return asyncio.run(_sandbox_check())
+
+    if args.command == "doctor":
+        from cli.doctor import run_doctor
+
+        return asyncio.run(run_doctor())
 
     if args.command == "gc":
         try:

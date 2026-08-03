@@ -152,6 +152,6 @@ async def test_cli_bridge_renders_only_important_progress_nodes(
 
     assert "Actor actor_1 started implementation." in ui.infos
     assert "Actor actor_1 finished: done." in ui.infos
-    assert "Applying Actor changes..." in ui.infos
-    assert "Verifying the run result..." in ui.infos
-    assert "Verification passed." in ui.infos
+    assert "Applying Actor changes..." not in ui.infos
+    assert "Verifying the run result..." not in ui.infos
+    assert "Run result aggregation passed." in ui.infos

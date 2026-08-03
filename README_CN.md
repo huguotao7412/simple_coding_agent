@@ -146,6 +146,16 @@ pipx uninstall simple-coding-agent
 
 Node.js 18+ 只在需要增强型 MCP Actor 工具时才需要。wheel 自带 Python 基础工具：`list_dir`、`search_codebase`、`read`、`edit_file`、`write_file` 和 `run`，因此基本编码能力不依赖 `npm`、`npx` 或 `node_modules`。
 
+安装 Node.js 后，可为当前操作系统用户显式安装锁定版本的 filesystem 与 bash MCP Server：
+
+```powershell
+sca mcp install
+sca mcp status
+sca doctor
+```
+
+安装器使用 wheel 内随附的 `package-lock.json`，安装到 SCA 用户级状态目录，并执行真实 MCP 握手。它不会运行全局 `npm install -g`，也不会隐式执行 `npx --yes`。安装损坏时使用 `sca mcp repair`，需要移除时使用 `sca mcp uninstall`；两者只操作 SCA 托管的 MCP 目录。集中部署或离线环境可通过 `SCA_MCP_HOME` 指定目录。
+
 ## 开发安装
 
 需要 Python 3.12+。只有在开发时使用可选 MCP Actor 工具服务，才需要 Node.js 18+。

@@ -7,6 +7,9 @@ from typing import Any
 
 from core.events import AgentEvent
 from core.paths import safe_state_component, touch_workspace_state
+from core.adapters.mcp import mcp_sdk_version
+from core.mcp.client import BASH_MCP_VERSION, MCP_SERVER_FILESYSTEM_VERSION
+from core.security.redaction import redact_text
 
 
 FILE_ARG_KEYS = ("path", "file_path", "filepath", "source", "destination")
@@ -47,6 +50,8 @@ class RunReport:
     sandbox_backends: set[str] = field(default_factory=set)
     isolated_execution_observed: bool = False
     first_edit_tool_call_index: int | None = None
+    report_run_id: str = ""
+    diagnostic_log_path: str = ""
     _has_token_stats: bool = field(default=False, init=False, repr=False)
 
     def observe(self, event: AgentEvent) -> None:
@@ -98,7 +103,7 @@ class RunReport:
 
         elif event.type == "error":
             if event.content:
-                self.errors.append(event.content)
+                self.errors.append(str(redact_text(event.content).value))
 
         elif event.type == "tool_provider_warning":
             if event.content:
@@ -179,6 +184,39 @@ class RunReport:
                 f"- Active wall-time budget: {budget.get('max_wall_time_seconds', 'unknown')}s",
                 "",
             ])
+
+        primary_failure = self._primary_failure()
+        if primary_failure:
+            primary = primary_failure
+            phase = primary.split(":", 1)[0] if ":" in primary else "runtime"
+            category = self._failure_category(primary)
+            provider = self._provider_name(primary)
+            exception_type = self._exception_type(primary)
+            actor_started = bool(self.actor_status_counts)
+            diff_produced = bool(self.files_referenced and self.first_edit_tool_call_index)
+            verification_executed = bool(self.observed_test_commands)
+            lines.extend([
+                "## Primary Failure",
+                "",
+                f"- Primary failure: {primary}",
+                f"- Failure phase: {phase}",
+                f"- Failure category: {category}",
+                f"- Exception type: {exception_type}",
+                f"- Provider/server: {provider}",
+                f"- MCP Python SDK version: {mcp_sdk_version()}",
+                "- Node server versions: "
+                f"filesystem={MCP_SERVER_FILESYSTEM_VERSION}; bash={BASH_MCP_VERSION}",
+                f"- Degraded capabilities: {'optional MCP' if self.tool_provider_warnings else 'none recorded'}",
+                f"- Actor started: {actor_started}",
+                f"- Diff produced: {diff_produced}",
+                f"- Verification executed: {verification_executed}",
+                f"- Recovery: {self._recovery_action(category)}",
+                f"- Run ID: {self.report_run_id or 'unknown'}",
+                f"- Diagnostic log: {self.diagnostic_log_path or 'not recorded'}",
+            ])
+            if len(self.errors) > 1:
+                lines.append(f"- Secondary errors: {len(self.errors) - 1}")
+            lines.append("")
 
         if self.sandbox_backends:
             lines.extend([
@@ -313,10 +351,61 @@ class RunReport:
         safe_run_id = safe_state_component(run_id, fallback="run")
         history_path = output_dir / "reports" / f"{safe_run_id}.md"
         history_path.parent.mkdir(parents=True, exist_ok=True)
+        self.report_run_id = safe_run_id
+        self.diagnostic_log_path = str(output_dir / "logs" / f"{safe_run_id}.log")
         content = self.to_markdown()
         history_path.write_text(content, encoding="utf-8")
         report_path.write_text(content, encoding="utf-8")
         return report_path
+
+    @staticmethod
+    def _failure_category(error: str) -> str:
+        lowered = error.lower()
+        if "mcp" in lowered or "tool provider" in lowered:
+            return "tool provider failure"
+        if "verification" in lowered or "pytest" in lowered:
+            return "verification failure"
+        if "sandbox" in lowered or "worktree" in lowered or "bootstrap" in lowered:
+            return "environment/bootstrap failure"
+        if "policy" in lowered or "denied" in lowered:
+            return "policy denial"
+        return "runtime failure"
+
+    def _primary_failure(self) -> str:
+        if self.errors:
+            return self.errors[0]
+        return next(
+            (
+                str(redact_text(call.detail).value)
+                for call in self.tool_calls
+                if call.success is False and call.detail
+            ),
+            "",
+        )
+
+    @staticmethod
+    def _provider_name(error: str) -> str:
+        import re
+
+        match = re.search(r"(?:server|provider)\s+['\"]?([\w.-]+)", error, re.I)
+        return match.group(1) if match else "not identified"
+
+    @staticmethod
+    def _exception_type(error: str) -> str:
+        import re
+
+        match = re.search(r"\b([A-Za-z]+(?:Error|Exception))\b", error)
+        return match.group(1) if match else "not recorded"
+
+    @staticmethod
+    def _recovery_action(category: str) -> str:
+        if category == "tool provider failure":
+            return "Use SCA_MCP_MODE=off or run `sca doctor`; require MCP only when explicitly needed."
+        if category == "environment/bootstrap failure":
+            return "Run `sca doctor` and repair the reported local sandbox or installation issue."
+        if category == "verification failure":
+            return "Inspect the verification artifact and fix the first failing quality gate."
+        return "Inspect the primary error and diagnostic log before retrying."
 
     def _record_file_args(self, args: dict[str, Any]) -> None:
         for key in FILE_ARG_KEYS:

@@ -282,3 +282,38 @@ def test_run_report_records_sandbox_backend_evidence():
     assert report.isolated_execution_observed is True
     assert "## Command Sandbox" in markdown
     assert "Isolated execution observed: True" in markdown
+
+
+def test_final_report_preserves_and_redacts_primary_failure(tmp_path):
+    report = RunReport()
+    report.observe(AgentEvent(
+        type="error",
+        content="MCP initialize: RuntimeError token=super-secret-value",
+    ))
+    report.observe(AgentEvent(type="error", content="later verification noise"))
+
+    path = report.write_final_report(tmp_path, "run_failure", state_dir=tmp_path / "state")
+    markdown = path.read_text(encoding="utf-8")
+
+    assert "## Primary Failure" in markdown
+    assert "MCP initialize" in markdown
+    assert "super-secret-value" not in markdown
+    assert "[REDACTED]" in markdown
+    assert "Secondary errors: 1" in markdown
+    assert "Run ID: run_failure" in markdown
+
+
+def test_failed_tool_becomes_primary_failure_without_later_error_event():
+    report = RunReport()
+    report.observe(AgentEvent(type="tool_call", tool_name="delegate", tool_args={}))
+    report.observe(AgentEvent(
+        type="tool_result",
+        tool_name="delegate",
+        tool_result=ToolResult.fail("MCP startup: RuntimeError provider failed"),
+    ))
+
+    markdown = report.to_markdown()
+
+    assert "## Primary Failure" in markdown
+    assert "MCP startup: RuntimeError provider failed" in markdown
+    assert "Failure category: tool provider failure" in markdown

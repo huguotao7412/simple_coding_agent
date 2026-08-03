@@ -20,6 +20,16 @@ from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from ..adapters.mcp import (
+    MCPMode,
+    ProviderDiagnostic,
+    ProviderHealth,
+    SchemaNormalizationError,
+    ToolDefinition,
+    mcp_sdk_version,
+    normalize_mcp_tool,
+    resolve_mcp_mode,
+)
 from ..tools import (
     EditFileTool,
     ListDirTool,
@@ -35,9 +45,8 @@ from ..runs.context import RunContext
 from ..sandbox.contracts import SandboxBackend
 from ..sandbox.factory import create_sandbox_backend
 from ..tools.sandbox_run import SandboxRunTool
-from ..security.tool_security import SecurityMiddleware
-from ..security.models import SecurityOutcome
-from ..security.redaction import sanitized_subprocess_environment
+from ..security.redaction import redact_text, sanitized_subprocess_environment
+from .managed_runtime import managed_binary
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +88,13 @@ class MCPToolProvider:
         run_context: RunContext | None = None,
         actor_id: str = "",
         sandbox_backend: SandboxBackend | None = None,
+        mcp_mode: MCPMode | str | None = None,
     ) -> None:
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._sessions: dict[str, ClientSession] = {}
-        self._stdio_ctxs: list[Any] = []
         self._stderr_handles: list[Any] = []
         self._tool_routing: dict[str, str] = {}
+        self._remote_tools: dict[str, ToolDefinition] = {}
         self._tool_schemas: list[dict[str, Any]] = []
         local_tools: list[BaseTool] = [
             SearchCodebaseTool(),
@@ -103,7 +113,10 @@ class MCPToolProvider:
         self._actor_id = actor_id
         self._sandbox_backend = sandbox_backend or create_sandbox_backend()
         self._install_run_tool()
-        self._security_middleware: SecurityMiddleware | None = None
+        self._mode = MCPMode.OPTIONAL
+        self._mode_override = mcp_mode
+        self._started = False
+        self._diagnostics: list[ProviderDiagnostic] = []
 
     def configure_sandbox(self, backend: SandboxBackend) -> None:
         if self._sessions:
@@ -130,25 +143,30 @@ class MCPToolProvider:
     ) -> None:
         """Launch MCP servers bound to the given worktree directory."""
         self._worktree_path = os.path.abspath(worktree_path)
-        self._security_middleware = SecurityMiddleware(self._worktree_path)
+        self._mode = resolve_mcp_mode(
+            self._mode_override.value
+            if isinstance(self._mode_override, MCPMode)
+            else self._mode_override
+        )
         self.set_policy(
             tool_policy or ToolPolicy.for_role("actor", tool_allowlist)
         )
 
         await self._sandbox_backend.ensure_available()
+        self._commit_local_catalog()
+        self._assert_baseline_tools_available()
+        self._started = True
+        if self._mode is MCPMode.OFF:
+            return
 
-        servers: list[tuple[str, list[str]]] = [
-            (
-                "filesystem",
-                [
-                    *_node_bin_command(
-                        "mcp-server-filesystem",
-                        f"@modelcontextprotocol/server-filesystem@{MCP_SERVER_FILESYSTEM_VERSION}",
-                    ),
-                    self._worktree_path,
-                ],
-            ),
-        ]
+        filesystem_command = _node_bin_command(
+            "mcp-server-filesystem",
+            f"@modelcontextprotocol/server-filesystem@{MCP_SERVER_FILESYSTEM_VERSION}",
+        )
+        servers: list[tuple[str, list[str]]] = [(
+            "filesystem",
+            [*filesystem_command, self._worktree_path] if filesystem_command else [],
+        )]
         if self._sandbox_backend is None or not self._sandbox_backend.isolated:
             servers.append((
                 "bash",
@@ -156,10 +174,11 @@ class MCPToolProvider:
             ))
 
         for server_name, cmd_and_args in servers:
-            if not _command_available(cmd_and_args[0]):
-                await self._record_provider_warning(
+            if not cmd_and_args or not _command_available(cmd_and_args[0]):
+                await self._record_provider_diagnostic(
                     server_name,
-                    f"command not found: {cmd_and_args[0]}",
+                    "spawn",
+                    FileNotFoundError("MCP command is not installed or runtime download is disabled"),
                 )
                 continue
             server_params = StdioServerParameters(
@@ -176,8 +195,9 @@ class MCPToolProvider:
                     errlog = open(os.devnull, "w", encoding="utf-8")
                     self._stderr_handles.append(errlog)
                     stdio_ctx = stdio_client(server_params, errlog=errlog)
-                read_stream, write_stream = await stdio_ctx.__aenter__()
-                self._stdio_ctxs.append(stdio_ctx)
+                read_stream, write_stream = await self._exit_stack.enter_async_context(
+                    stdio_ctx
+                )
 
                 session = await self._exit_stack.enter_async_context(
                     ClientSession(read_stream, write_stream)
@@ -191,10 +211,11 @@ class MCPToolProvider:
                     self._worktree_path,
                 )
             except Exception as error:
-                await self._record_provider_warning(server_name, str(error))
+                await self._record_provider_diagnostic(server_name, "initialize", error)
 
         await self._build_routing_table()
-        self._assert_baseline_tools_available()
+        if self._mode is MCPMode.REQUIRED and not self._sessions:
+            raise RuntimeError("MCP mode is required but no MCP server became healthy")
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """Return cached tool schemas in OpenAI function-calling format."""
@@ -209,53 +230,16 @@ class MCPToolProvider:
     async def call_tool(self, name: str, args: dict[str, Any]) -> ToolResult:
         """Route a tool call to the correct MCP server and return the result."""
         args = dict(args)
-        args["workspace_dir"] = self._worktree_path
-        if self._security_middleware is not None:
-            security = self._security_middleware.authorize_tool(
-                run_id=(self._run_context.run_id if self._run_context is not None else "local"),
-                actor_id=self._actor_id,
-                role=self._policy.role,
-                tool_name=name,
-                arguments=args,
-            )
-            if security.outcome is not SecurityOutcome.ALLOW:
-                return ToolResult.fail(
-                    "Tool execution denied by deterministic security middleware."
-                    if security.outcome is SecurityOutcome.DENY
-                    else "Tool execution requires approval for these exact arguments."
-                )
-        decision = self._policy.authorize(name)
-        if not decision.allowed:
-            if self._run_context is not None:
-                await self._run_context.emit(AgentEvent(
-                    type="policy_denied",
-                    content=decision.reason,
-                    tool_name=name,
-                    actor_id=self._actor_id,
-                    task_id=self._actor_id,
-                ))
-            return ToolResult.fail(decision.reason)
-
-        if self._circuit_open:
-            return ToolResult.fail(
-                "Tool service circuit breaker is open; report this to the Planner "
-                "(CRITICAL: MCP circuit breaker open)"
-            )
-
-        command = _extract_shell_command(args)
-        if name in {"run", "run_background"} and command:
-            if is_destructive_shell_command(command):
-                return ToolResult.fail(
-                    "Destructive shell command blocked by Actor safety policy. "
-                    "Ask the Planner/user for an explicit safer workflow instead."
-                )
-
         local_tool = self._local_tools.get(name)
         if local_tool is not None:
+            args["workspace_dir"] = self._worktree_path
             try:
                 return await local_tool.execute(**args)
             except Exception as e:
                 return ToolResult.fail(f"Internal local tool error: {e}")
+
+        if self._circuit_open:
+            return ToolResult.fail("Remote MCP circuit breaker is open")
 
         server_name = self._tool_routing.get(name)
         if server_name is None:
@@ -268,13 +252,10 @@ class MCPToolProvider:
         if session is None:
             return ToolResult.fail(f"Tool service '{server_name}' is not connected")
 
-        if server_name == "filesystem":
-            for key, value in args.items():
-                if key in ("path", "paths", "source", "destination") and isinstance(value, str):
-                    if not self._validate_path(value):
-                        return ToolResult.fail(
-                            f"Path access denied: '{value}' escapes the workspace"
-                        )
+        definition = self._remote_tools.get(name)
+        if definition is None:
+            return ToolResult.fail(f"Tool schema is unavailable: '{name}'")
+        args = self._filter_remote_arguments(definition, args)
 
         try:
             result = await asyncio.wait_for(
@@ -283,9 +264,13 @@ class MCPToolProvider:
             )
         except asyncio.TimeoutError:
             self._record_failure()
+            await self._record_provider_diagnostic(
+                server_name, "call", asyncio.TimeoutError("timed out")
+            )
             return ToolResult.fail(self._translate_error("timed out"))
         except Exception as e:
             self._record_failure()
+            await self._record_provider_diagnostic(server_name, "call", e)
             return ToolResult.fail(self._translate_error(str(e)))
 
         self._failure_count = 0
@@ -302,14 +287,11 @@ class MCPToolProvider:
 
         try:
             await asyncio.wait_for(self._exit_stack.aclose(), timeout=3.0)
-        except BaseException:
-            logger.debug("MCP session close: swallowed cleanup error", exc_info=True)
-
-        for stdio_ctx in reversed(self._stdio_ctxs):
-            try:
-                await asyncio.wait_for(stdio_ctx.__aexit__(None, None, None), timeout=3.0)
-            except BaseException:
-                logger.debug("MCP stdio close: swallowed cleanup error", exc_info=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            await self._record_provider_diagnostic("all", "shutdown", error)
+            logger.debug("MCP session close failed", exc_info=True)
 
         for handle in self._stderr_handles:
             try:
@@ -317,16 +299,17 @@ class MCPToolProvider:
             except OSError:
                 pass
 
-        self._stdio_ctxs.clear()
         self._stderr_handles.clear()
         self._sessions.clear()
         self._tool_routing.clear()
+        self._remote_tools.clear()
         self._tool_schemas.clear()
+        self._started = False
         logger.info("MCP shutdown complete for worktree %s", self._worktree_path)
 
     async def _build_routing_table(self) -> None:
         """Fetch tools from connected servers and build routing plus schema cache."""
-        all_schemas: list[dict[str, Any]] = [
+        all_schemas = list(self._tool_schemas) or [
             tool.schema for tool in self._local_tools.values()
         ]
 
@@ -334,35 +317,36 @@ class MCPToolProvider:
             try:
                 response = await session.list_tools()
             except Exception as e:
-                logger.error("Failed to list tools from '%s': %s", server_name, e)
+                await self._record_provider_diagnostic(server_name, "list_tools", e)
                 continue
 
             for tool in response.tools:
-                if tool.name in self._local_tools:
+                try:
+                    definition = normalize_mcp_tool(tool, source=server_name)
+                except SchemaNormalizationError as error:
+                    await self._record_provider_diagnostic(
+                        server_name, "normalize_schema", error
+                    )
+                    continue
+                if definition.name in self._local_tools:
                     logger.debug(
                         "MCP tool '%s' from '%s' skipped; local adapter owns the name",
-                        tool.name,
+                        definition.name,
                         server_name,
                     )
                     continue
-                if tool.name not in self._tool_routing:
-                    self._tool_routing[tool.name] = server_name
+                if definition.name not in self._tool_routing:
+                    self._tool_routing[definition.name] = server_name
+                    self._remote_tools[definition.name] = definition
                 else:
                     logger.debug(
                         "Tool '%s' from '%s' skipped; already registered by another server",
-                        tool.name,
+                        definition.name,
                         server_name,
                     )
                     continue
 
-                all_schemas.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description or "",
-                        "parameters": tool.inputSchema or {"type": "object", "properties": {}},
-                    },
-                })
+                all_schemas.append(definition.openai_schema())
 
         self._tool_schemas = all_schemas
         logger.info(
@@ -376,10 +360,29 @@ class MCPToolProvider:
         if self._failure_count >= MAX_CONSECUTIVE_FAILURES:
             self._circuit_open = True
 
-    async def _record_provider_warning(self, server_name: str, error: str) -> None:
+    def _commit_local_catalog(self) -> None:
+        self._tool_schemas = [tool.schema for tool in self._local_tools.values()]
+
+    async def _record_provider_diagnostic(
+        self,
+        server_name: str,
+        phase: str,
+        error: BaseException,
+    ) -> None:
+        summary = str(redact_text(str(error)).value)
+        diagnostic = ProviderDiagnostic(
+            provider=server_name,
+            phase=phase,  # type: ignore[arg-type]
+            exception_type=type(error).__name__,
+            error_summary=summary,
+            mcp_sdk_version=mcp_sdk_version(),
+            degraded_to_local=self._mode is not MCPMode.REQUIRED,
+            affects_core_capability=False,
+        )
+        self._diagnostics.append(diagnostic)
         message = (
             f"Optional MCP server '{server_name}' unavailable; continuing with "
-            f"local baseline tools. Cause: {error}"
+            f"local baseline tools. Phase={phase}; cause={summary}"
         )
         logger.warning(message)
         if self._run_context is not None:
@@ -390,15 +393,31 @@ class MCPToolProvider:
                 task_id=self._actor_id,
             ))
 
-    def _assert_baseline_tools_available(self) -> None:
-        required = {
-            "list_dir",
-            "search_codebase",
-            "read",
-            "edit_file",
-            "write_file",
-            "run",
+    def health(self) -> ProviderHealth:
+        local_ok = not self._started or self._baseline_tools_available()
+        if not self._started:
+            status = "not_started"
+        elif not local_ok:
+            status = "unhealthy"
+        elif self._diagnostics:
+            status = "healthy_degraded"
+        else:
+            status = "healthy"
+        return ProviderHealth(
+            status=status,  # type: ignore[arg-type]
+            local_tools_available=local_ok,
+            connected_servers=tuple(sorted(self._sessions)),
+            diagnostics=tuple(self._diagnostics),
+        )
+
+    def _baseline_tools_available(self) -> bool:
+        available = {
+            schema.get("function", {}).get("name") for schema in self._tool_schemas
         }
+        return self._required_baseline_tools() <= available
+
+    def _assert_baseline_tools_available(self) -> None:
+        required = self._required_baseline_tools()
         available = {schema["function"]["name"] for schema in self._tool_schemas}
         missing = sorted(required - available)
         if missing:
@@ -406,6 +425,28 @@ class MCPToolProvider:
                 "Critical local tool provider failure; missing baseline tools: "
                 + ", ".join(missing)
             )
+
+    @staticmethod
+    def _required_baseline_tools() -> set[str]:
+        return {
+            "list_dir",
+            "search_codebase",
+            "read",
+            "read_outline",
+            "edit_file",
+            "write_file",
+            "run",
+        }
+
+    @staticmethod
+    def _filter_remote_arguments(
+        definition: ToolDefinition,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        properties = definition.input_schema.value.get("properties", {})
+        if not isinstance(properties, dict):
+            return {}
+        return {key: value for key, value in arguments.items() if key in properties}
 
     def _translate_error(self, error_msg: str) -> str:
         for eng_key, readable_msg in MCP_ERROR_MAP.items():
@@ -426,14 +467,20 @@ class MCPToolProvider:
 
 
 def _node_bin_command(binary_name: str, package_spec: str) -> list[str]:
+    managed = managed_binary(binary_name)
+    if managed is not None:
+        return [str(managed)]
     extension = ".cmd" if sys.platform == "win32" else ""
     local_binary = PACKAGE_ROOT / "node_modules" / ".bin" / f"{binary_name}{extension}"
     if local_binary.exists():
         return [str(local_binary)]
-    # A pipx/PyPI install does not contain this repository's node_modules.
-    # The package spec is pinned above, so npx can fetch/cache that exact tool
-    # version on first use while development checkouts keep using local bins.
-    return ["npx", "--yes", package_spec]
+    # Wheel/pipx installs must not perform an implicit network install on every
+    # Actor start. A pinned runtime download is available only when opted in.
+    if os.getenv("SCA_MCP_ALLOW_RUNTIME_INSTALL", "").strip().lower() in {
+        "1", "true", "yes"
+    }:
+        return ["npx", "--yes", package_spec]
+    return []
 
 
 def _command_available(command: str) -> bool:

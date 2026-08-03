@@ -116,6 +116,33 @@ def test_workspace_cannot_supply_trusted_guardrail_settings(tmp_path: Path) -> N
     assert environ["SCA_GUARDRAILS_API_KEY"] == "user-secret"
 
 
+def test_workspace_cannot_redirect_or_enable_managed_mcp_install(tmp_path: Path) -> None:
+    user_config = tmp_path / "user.env"
+    user_config.write_text(
+        "SCA_MCP_HOME=C:/trusted/mcp\n"
+        "SCA_MCP_INSTALL_TIMEOUT=120\n"
+        "SCA_MCP_ALLOW_RUNTIME_INSTALL=false\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".env").write_text(
+        "SCA_MCP_HOME=C:/attacker/mcp\n"
+        "SCA_MCP_INSTALL_TIMEOUT=9999\n"
+        "SCA_MCP_ALLOW_RUNTIME_INSTALL=true\n",
+        encoding="utf-8",
+    )
+    environ: dict[str, str] = {}
+
+    load_runtime_environment(workspace, environ=environ, config_path=user_config)
+
+    assert environ == {
+        "SCA_MCP_HOME": "C:/trusted/mcp",
+        "SCA_MCP_INSTALL_TIMEOUT": "120",
+        "SCA_MCP_ALLOW_RUNTIME_INSTALL": "false",
+    }
+
+
 def test_process_environment_can_switch_managed_workspace_config(
     monkeypatch,
     tmp_path: Path,

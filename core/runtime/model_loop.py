@@ -95,7 +95,9 @@ class ModelLoop:
                         name=name,
                         schema=schema,
                         provider=self.tool_provider,
-                        workspace_aware=name in WORKSPACE_AWARE_TOOLS,
+                        # Provider-owned local adapters receive execution context
+                        # internally; remote MCP arguments must never inherit it.
+                        workspace_aware=False,
                     ))
         else:
             schemas = [t.schema for t in self.tools_by_name.values()]

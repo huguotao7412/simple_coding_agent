@@ -7,44 +7,97 @@ on:
 jobs:
   test:
     runs-on: windows-latest
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Install package
-        run: python -m pip install -e .[dev]
-
+          cache: pip
+      - name: Install tested development dependency graph
+        run: python -m pip install ".[dev]"
       - name: Verify test suite inventory
         run: >-
           python -c "from pathlib import Path;
-          root = Path('tests');
-          files = list(root.glob('test_*.py')) if root.is_dir() else [];
+          files = list(Path('tests').glob('test_*.py'));
           assert len(files) >= 8, f'expected at least 8 test modules, found {len(files)}'"
-
+      - name: Dependency consistency
+        run: python -m pip check
       - name: Run unit tests
         run: python -m pytest -q
-
-      - name: Type check trusted runtime modules
+      - name: Strict type check
         run: >-
           python -m mypy
-          core/execution core/sandbox
-          core/actors/contracts.py core/policy.py core/events.py
-          core/runs/models.py core/runs/store.py core/runs/sqlite_store.py
-          core/runs/context.py core/runtime/engine.py core/actors/worktree.py
-          core/verification
-          core/planner.py core/actors/agent.py core/mcp/client.py
-          core/tools/update_state.py core/tools/delegate.py
-          core/tools/sandbox_run.py
-          cli/report.py cli/runs.py cli/main.py evals/run_evals.py
-
-      - name: Compile Python sources
+          core/actors/contracts.py core/actors/worktree.py
+          core/verification core/sandbox core/tools/sandbox_run.py
+          core/adapters core/domain core/ports core/orchestration
+          core/mcp/client.py core/mcp/managed_runtime.py
+      - name: Compile sources
         run: python -m compileall -q core cli web evals tests
-
       - name: Validate eval fixture preparation
         run: python -m evals.cli prepare
+
+  wheel:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build clean wheel
+        run: |
+          python -m pip wheel . --no-deps --wheel-dir dist
+      - name: Install wheel into a fresh environment
+        shell: pwsh
+        run: |
+          python -m venv $env:RUNNER_TEMP\sca-wheel
+          & $env:RUNNER_TEMP\sca-wheel\Scripts\python -m pip install (Get-ChildItem dist\*.whl).FullName
+          & $env:RUNNER_TEMP\sca-wheel\Scripts\python -m pip check
+          Push-Location $env:RUNNER_TEMP
+          & $env:RUNNER_TEMP\sca-wheel\Scripts\sca --help
+          & $env:RUNNER_TEMP\sca-wheel\Scripts\sca doctor
+          $env:SCA_MCP_HOME = "$env:RUNNER_TEMP\sca-managed-mcp"
+          & $env:RUNNER_TEMP\sca-wheel\Scripts\sca mcp install
+          & $env:RUNNER_TEMP\sca-wheel\Scripts\sca mcp status
+          Pop-Location
+
+  mcp-compatibility:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mcp: "1.28.*"
+            expected_compatible: true
+          - mcp: "2.*"
+            expected_compatible: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ".[dev]"
+      - run: python -m pip install --upgrade --no-deps "mcp==${{ matrix.mcp }}"
+      - name: Real SDK Tool adapter contract
+        run: python -m pytest -q tests/test_mcp_provider.py -k "real_mcp_tool_normalizes"
+      - name: Enforce declared support boundary
+        shell: pwsh
+        run: |
+          python -m pip check
+          if ('${{ matrix.expected_compatible }}' -eq 'false') {
+            if ($LASTEXITCODE -eq 0) { throw 'MCP 2.x unexpectedly satisfies the <2 production boundary' }
+            exit 0
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  node-free-baseline:
+    runs-on: windows-latest
+    env:
+      SCA_MCP_MODE: off
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ".[dev]"
+      - run: python -m pytest -q tests/test_mcp_provider.py -k "node_free or off_mode"
+      - run: sca doctor

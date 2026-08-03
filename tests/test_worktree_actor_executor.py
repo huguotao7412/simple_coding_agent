@@ -32,6 +32,12 @@ class FakeProvider:
         self.events.append("provider:shutdown")
 
 
+class FailingProvider(FakeProvider):
+    async def start(self, workspace_dir: str, tool_policy: Any) -> None:
+        self.events.append("provider:start:failed")
+        raise RuntimeError("MCP initialize: provider bootstrap failed")
+
+
 class FakeActor:
     def __init__(self, events: list[str]) -> None:
         self.events = events
@@ -101,6 +107,42 @@ class RepairActor(FakeActor):
             key_findings=f"turn {len(self.prompts)}",
             suggested_next_steps="none",
         )
+
+
+@pytest.mark.asyncio
+async def test_provider_bootstrap_failure_skips_actor_diff_and_verification(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    worktree = tmp_path / "actor-worktree"
+    worktree.mkdir()
+
+    async def forbidden_diff(path: str) -> str:
+        pytest.fail("diff extraction must not run after provider bootstrap failure")
+
+    executor = WorktreeActorExecutor(
+        llm_client=FakeLLM(),
+        workspace_dir=str(tmp_path),
+        worktree_factory=lambda workspace, task: str(worktree),
+        worktree_cleanup=lambda path: events.append("worktree:cleanup"),
+        diff_extractor=forbidden_diff,
+        tool_provider_factory=lambda context, actor_id: FailingProvider(events),
+        actor_factory=lambda **kwargs: pytest.fail("Actor must not start"),
+        verification_config_loader=lambda workspace: pytest.fail(
+            "quality gates must not load after bootstrap failure"
+        ),
+    )
+
+    result = await executor.execute(
+        ActorTaskSpec(task_id="task_bootstrap", description="Create file", role="scout"),
+        RunContext.create(run_id="run_bootstrap"),
+    )
+
+    assert result.status == "failed"
+    assert result.failure_category == "tool provider failure"
+    assert result.diff == ""
+    assert result.verification_reports == ()
+    assert events == ["provider:start:failed", "provider:shutdown", "worktree:cleanup"]
 
 
 @pytest.mark.asyncio

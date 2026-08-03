@@ -20,7 +20,9 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.28",
-    "mcp>=1.0",
+    # MCP 2.x changed its public Python object model. Keep production installs
+    # on the compatibility line covered by the wheel/pipx contract tests.
+    "mcp>=1.28,<2",
     "rich>=13",
     "python-dotenv>=1.0",
     "e2b>=2.11,<3",
@@ -44,6 +46,7 @@ guardrails = [
     "openai-guardrails>=0.2.1,<0.3",
 ]
 dev = [
+    "build>=1.2",
     "mypy>=1.10",
     "pytest>=8",
     "pytest-asyncio>=0.25",
@@ -61,6 +64,11 @@ benchmark = [
 
 [tool.setuptools.packages.find]
 include = ["cli*", "core*", "evals*", "web*"]
+
+# The pinned Node dependency graph is installed explicitly by `sca mcp
+# install`; it is data, not an implicit Python post-install hook.
+[tool.setuptools.data-files]
+"share/simple-coding-agent/mcp" = ["package.json", "package-lock.json"]
 
 [tool.mypy]
 strict = true
@@ -102,6 +110,7 @@ files = [
     "core/git_utils.py",
     "core/verification",
     "core/mcp/client.py",
+    "core/mcp/managed_runtime.py",
     "core/tools/update_state.py",
     "core/tools/gateway.py",
     "core/tools/catalog.py",

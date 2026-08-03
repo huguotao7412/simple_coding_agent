@@ -342,6 +342,8 @@ class TaskAssessor:
             return ExecutionStrategy.SCOUT_THEN_DAG
         if has_quality_gates:
             return ExecutionStrategy.CODER_WITH_GATES
+        if complexity is TaskComplexity.SMALL and risk is TaskRisk.LOW:
+            return ExecutionStrategy.DIRECT_LOCAL
         return ExecutionStrategy.SINGLE_ACTOR
 
     @staticmethod

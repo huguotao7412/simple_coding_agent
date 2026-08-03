@@ -270,6 +270,7 @@ class DelegateTool(BaseTool):
                     )
                 consumed = await ledger.snapshot()
                 if policy.strategy in {
+                    ExecutionStrategy.DIRECT_LOCAL,
                     ExecutionStrategy.SINGLE_ACTOR,
                     ExecutionStrategy.CODER_WITH_GATES,
                 } and any(role != "coder" for role in roles):

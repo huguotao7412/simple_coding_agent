@@ -19,6 +19,13 @@ SCA_MAX_ACTORS=4
 # WARNING keeps the terminal concise; use INFO or DEBUG for diagnostics.
 SCA_LOG_LEVEL=WARNING
 SCA_SANDBOX_BACKEND=local
+# Optional MCP enhancement: off, optional, or required.
+SCA_MCP_MODE=optional
+# Runtime Node package downloads are disabled unless explicitly enabled.
+# SCA_MCP_ALLOW_RUNTIME_INSTALL=false
+# Optional per-user managed MCP runtime overrides.
+# SCA_MCP_HOME=C:\\path\\to\\mcp-runtime
+SCA_MCP_INSTALL_TIMEOUT=300
 # Optional runtime state override (reports, checkpoints, patches, verification logs)
 # SCA_STATE_HOME=C:\\path\\to\\sca-state
 SCA_RETENTION_DAYS=30
@@ -53,6 +60,9 @@ _TRUSTED_ONLY_SETTINGS = frozenset({
     "SCA_GUARDRAILS_MAX_CALLS",
     "SCA_GUARDRAILS_MAX_TOKENS",
     "SCA_GUARDRAILS_FAILURE_THRESHOLD",
+    "SCA_MCP_HOME",
+    "SCA_MCP_INSTALL_TIMEOUT",
+    "SCA_MCP_ALLOW_RUNTIME_INSTALL",
 })
 
 
@@ -114,6 +124,7 @@ def load_runtime_environment(
     *,
     environ: MutableMapping[str, str] | None = None,
     config_path: Path | None = None,
+    include_workspace: bool = True,
 ) -> tuple[Path, ...]:
     """Load user and workspace config with explicit precedence.
 
@@ -133,8 +144,17 @@ def load_runtime_environment(
     workspace_path = Path(workspace_dir).resolve() / ".env"
     loaded: list[Path] = []
 
-    for path, trusted in ((user_path, True), (workspace_path, False)):
-        if not path.is_file():
+    candidates = [(user_path, True)]
+    if include_workspace:
+        candidates.append((workspace_path, False))
+    for path, trusted in candidates:
+        try:
+            is_file = path.is_file()
+        except OSError:
+            # An optional user/workspace config must not make read-only CLI
+            # commands unusable when ACLs deny access.
+            continue
+        if not is_file:
             continue
         values = dotenv_values(path)
         for key, value in values.items():

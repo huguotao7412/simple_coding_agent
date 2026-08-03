@@ -1,24 +1,7 @@
-# --- LLM & API ---
-openai>=1.0.0      # 或 litellm，用于标准化调用各家大模型 API
-
-# --- Web UI ---
-streamlit>=1.30.0  # 提供 Web 端的双栏与聊天组件交互
-
-# --- CLI & 终端美化 ---
-rich>=13.0.0       # 提供终端下的 Markdown 渲染、语法高亮与工具调用动画
-click>=8.0.0       # 或 typer，用于构建规范的命令行入口
-
-# --- 核心工具支持 ---
-python-dotenv>=1.0.0 # 用于加载 .env 配置文件
-unidiff>=0.7.5       # 用于解析和生成文件变更的 Diff 数据，供前端展示
-
-# --- MCP (Model Context Protocol) ---
-mcp>=1.0.0
-langgraph>=1.0,<2
-langgraph-checkpoint-sqlite>=3.0,<4
-
-# --- Tokenization ---
-deepseek-tokenizer
-
-# --- 测试与开发 ---
-pytest>=8.0.0
+# Installation dependencies have one source of truth: pyproject.toml.
+#
+# Runtime:     python -m pip install .
+# Development: python -m pip install -e ".[dev]"
+# Wheel:       python -m build --wheel
+#
+# This file intentionally contains no second, drifting dependency graph.

@@ -57,3 +57,14 @@ def test_repository_dogfoods_deterministic_quality_gates() -> None:
     assert config.enabled
     assert [gate.name for gate in config.gates] == ["unit", "types"]
     assert all(gate.required for gate in config.gates)
+
+
+def test_wheel_declares_locked_mcp_runtime_data() -> None:
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    data_files = config["tool"]["setuptools"]["data-files"]
+
+    assert data_files["share/simple-coding-agent/mcp"] == [
+        "package.json",
+        "package-lock.json",
+    ]

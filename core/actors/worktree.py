@@ -173,9 +173,17 @@ def _write_diff_artifact(
 
 
 def _default_tool_provider_factory(run_context: RunContext, actor_id: str) -> Any:
+    from ..adapters.mcp import MCPMode
+    from ..execution.models import ExecutionStrategy
     from ..mcp import MCPToolProvider
 
-    return MCPToolProvider(run_context=run_context, actor_id=actor_id)
+    mode = (
+        MCPMode.OFF
+        if run_context.execution_policy is not None
+        and run_context.execution_policy.strategy is ExecutionStrategy.DIRECT_LOCAL
+        else None
+    )
+    return MCPToolProvider(run_context=run_context, actor_id=actor_id, mcp_mode=mode)
 
 
 def _default_actor_factory(**kwargs: Any) -> Any:

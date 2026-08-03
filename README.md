@@ -206,6 +206,22 @@ pipx uninstall simple-coding-agent
 
 Node.js 18+ is optional for enhanced MCP Actor tools. The wheel includes baseline Python tools for `list_dir`, `search_codebase`, `read`, `edit_file`, `write_file`, and `run`, so basic coding capability does not depend on `npm`, `npx`, or `node_modules`.
 
+To enable the pinned filesystem and bash MCP servers for the current OS user,
+run the explicit managed installer after installing Node.js:
+
+```powershell
+sca mcp install
+sca mcp status
+sca doctor
+```
+
+The installer uses the `package-lock.json` shipped in the wheel, installs into
+the user-level SCA state directory, and performs a real MCP handshake. It does
+not use `npm install -g` or an implicit `npx --yes` download. Use `sca mcp
+repair` after a damaged install and `sca mcp uninstall` to remove only this
+managed runtime. `SCA_MCP_HOME` overrides its location for managed or offline
+deployments.
+
 ## Development Installation
 
 Requires Python 3.12+. Install Node.js 18+ only if you want optional MCP Actor tool servers during development.

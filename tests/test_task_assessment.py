@@ -124,7 +124,7 @@ def test_bug_report_traceback_paths_do_not_force_large_scout_dag(tmp_path: Path)
 
     assert assessment.intent is TaskIntent.CODE_CHANGE
     assert assessment.complexity is not TaskComplexity.LARGE
-    assert assessment.strategy is ExecutionStrategy.SINGLE_ACTOR
+    assert assessment.strategy is ExecutionStrategy.DIRECT_LOCAL
     assert assessment.explicit_paths == ()
 
 
@@ -185,7 +185,7 @@ async def test_planner_emits_and_injects_durable_task_assessment(tmp_path: Path)
     assert events[0].type == "task_assessment"
     payload = json.loads(events[0].content)
     assert payload["schema_version"] == 1
-    assert payload["strategy"] == "single_actor"
+    assert payload["strategy"] == "direct_local"
     assessment_messages = [
         message for message in context.messages
         if message.get("role") == "system"

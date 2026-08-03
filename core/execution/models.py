@@ -31,6 +31,7 @@ class TaskRisk(StrEnum):
 
 class ExecutionStrategy(StrEnum):
     PLANNER_DIRECT = "planner_direct"
+    DIRECT_LOCAL = "direct_local"
     SINGLE_ACTOR = "single_actor"
     CODER_WITH_GATES = "coder_with_gates"
     SCOUT_THEN_CODER = "scout_then_coder"

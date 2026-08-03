@@ -243,7 +243,9 @@ async def test_interactive_planner_starts_fresh_policy_per_turn(tmp_path: Path) 
         next(event.content for event in second if event.type == "execution_policy")
     )
     assert first_policy["strategy"] == "planner_direct"
-    assert second_policy["strategy"] == "single_actor"
+    assert second_policy["strategy"] == "direct_local"
+    assert second_policy["budget"]["max_actor_steps"] <= 15
+    assert second_policy["budget"]["max_model_calls"] <= 20
     assert llm.calls == 2
 
 

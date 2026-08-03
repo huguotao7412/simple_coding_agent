@@ -65,6 +65,8 @@ class ExecutionBudget:
 
 _BUDGETS: dict[ExecutionStrategy, ExecutionBudget] = {
     ExecutionStrategy.PLANNER_DIRECT: ExecutionBudget(20, 0, 20, 80_000, 300, 5, 0, 0),
+    # Calibrated for one local Coder editing one or two files without MCP.
+    ExecutionStrategy.DIRECT_LOCAL: ExecutionBudget(12, 12, 20, 96_000, 600, 6, 1, 1),
     # A 30-step coding loop commonly needs 12-18 model turns. Because the ledger
     # counts provider-billed prompt tokens on every turn, 160k could terminate a
     # healthy run around turn 10 even with only a ~16k live context.
@@ -110,6 +112,7 @@ class ExecutionPolicy:
             roles = ()
             max_actors = 0
         elif strategy in {
+            ExecutionStrategy.DIRECT_LOCAL,
             ExecutionStrategy.SINGLE_ACTOR,
             ExecutionStrategy.CODER_WITH_GATES,
         }:
